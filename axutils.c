@@ -128,7 +128,7 @@ int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 	return sizeof(struct full_sockaddr_ax25);
 }
 
-int ax25_aton_arglist(char *call[], struct full_sockaddr_ax25 *sax)
+int ax25_aton_arglist(const char *call[], struct full_sockaddr_ax25 *sax)
 {
 	char *bp;
 	char *addrp;
@@ -195,7 +195,7 @@ int rose_aton(const char *addr, char *buf)
 /*
  *	ax25 -> ascii conversion
  */
-char *ax25_ntoa(ax25_address *a)
+char *ax25_ntoa(const ax25_address *a)
 {
 	static char buf[11];
 	char c, *s;
@@ -223,7 +223,7 @@ char *ax25_ntoa(ax25_address *a)
 /*
  *	rose -> ascii conversion
  */
-char *rose_ntoa(rose_address *a)
+char *rose_ntoa(const rose_address *a)
 {
 	static char buf[11];
 
@@ -239,7 +239,7 @@ char *rose_ntoa(rose_address *a)
 /*
  *	Compare two ax.25 addresses
  */
-int ax25_cmp(ax25_address *a, ax25_address *b)
+int ax25_cmp(const ax25_address *a, const ax25_address *b)
 {
 	if ((a->ax25_call[0] & 0xFE) != (b->ax25_call[0] & 0xFE))
 		return 1;
@@ -268,7 +268,7 @@ int ax25_cmp(ax25_address *a, ax25_address *b)
 /*
  *	Compare two Rose addresses
  */
-int rose_cmp(rose_address *a, rose_address *b)
+int rose_cmp(const rose_address *a, const rose_address *b)
 {
 	int i;
 
@@ -282,7 +282,7 @@ int rose_cmp(rose_address *a, rose_address *b)
 /*
  * Validate an AX.25 callsign.
  */
-int ax25_validate(char *call)
+int ax25_validate(const char *call)
 {
 	unsigned char s[7];
 	int n;
@@ -300,7 +300,7 @@ int ax25_validate(char *call)
 /*
  *	Convert a string to upper case
  */
-char *strupr(char *s)
+char *strupr(const char *s)
 {
 	char *p;
 
@@ -316,7 +316,7 @@ char *strupr(char *s)
 /*
  *	Convert a string to lower case
  */
-char *strlwr(char *s)
+char *strlwr(const char *s)
 {
 	char *p;
 

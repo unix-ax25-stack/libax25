@@ -1,3 +1,7 @@
+1999-04-30 Craig Small <csmall@small.dropbear.id.au>
+	* Made some more functions use const args
+	* Split the libaxio library out
+
 1999-04-20 Craig Small <csmall@small.dropbear.id.au>
 
 	* Added Jean-Pauls ROSE patches

@@ -53,5 +53,5 @@
 #define PACKAGE "ax25-lib"
 
 /* Version number of package */
-#define VERSION "0.0.2"
+#define VERSION "0.0.3"
 

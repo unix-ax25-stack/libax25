@@ -1,7 +1,8 @@
 
-lib_LTLIBRARIES = libax25.la
+lib_LTLIBRARIES = libax25.la libax25io.la
 
 libax25includedir = $(includedir)/netax25
+libax25ioincludedir = $(includedir)/netax25
 
 libax25include_HEADERS = 	\
 	axlib.h		\
@@ -11,7 +12,11 @@ libax25include_HEADERS = 	\
 	daemon.h	\
 	ttyutils.h	\
 	procutils.h	\
-	mheard.h	\
+	kernel_ax25.h	\
+	kernel_rose.h	\
+	mheard.h
+
+libax25ioinclude_HEADERS = 	\
 	ax25io.h
 
 libax25_la_SOURCES = \
@@ -32,12 +37,14 @@ libax25_la_SOURCES = \
 	rsconfig.h \
 	ttyutils.c \
 	ttyutils.h  \
-	ax25io.c \
-	ax25io.h \
 	kernel_ax25.h \
 	kernel_rose.h
 	
+libax25io_la_SOURCES = \
+	ax25io.c \
+	ax25io.h 
+
 man_MANS = ax25.3 rose.3
 
-EXTRA_DIST= $(man_MANS)
+EXTRA_DIST= $(man_MANS) glibc.patch
 

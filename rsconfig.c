@@ -10,6 +10,8 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 
+#include <config.h>
+
 #include <net/if.h>
 #include <net/if_arp.h>
 #ifdef HAVE_NETAX25_AX25_H

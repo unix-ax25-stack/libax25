@@ -3748,7 +3748,7 @@ is created, otherwise an executable program is created."
   ;;
 
 uninstall)
-  $echo
+  $echo \
 "Usage: $modename [OPTION]... --mode=uninstall RM [RM-OPTION]... FILE...
 
 Remove libraries from an installation directory.

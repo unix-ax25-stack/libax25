@@ -72,19 +72,26 @@ RANLIB = @RANLIB@
 USE_SYMBOL_UNDERSCORE = @USE_SYMBOL_UNDERSCORE@
 VERSION = @VERSION@
 
-lib_LTLIBRARIES = libax25.la
+lib_LTLIBRARIES = libax25.la libax25io.la
 
 libax25includedir = $(includedir)/netax25
+libax25ioincludedir = $(includedir)/netax25
 
-libax25include_HEADERS =  	axlib.h			axconfig.h		nrconfig.h		rsconfig.h		daemon.h		ttyutils.h		procutils.h		mheard.h		ax25io.h
+libax25include_HEADERS =  	axlib.h			axconfig.h		nrconfig.h		rsconfig.h		daemon.h		ttyutils.h		procutils.h		kernel_ax25.h		kernel_rose.h		mheard.h
 
 
-libax25_la_SOURCES =  	axconfig.c 	axconfig.h 	axlib.h 	axutils.c 	config.h 	daemon.c 	daemon.h 	mheard.h 	nrconfig.c 	nrconfig.h 	pathnames.h 	procutils.c 	procutils.h 	rsconfig.c 	rsconfig.h 	ttyutils.c 	ttyutils.h  	ax25io.c 	ax25io.h 	kernel_ax25.h 	kernel_rose.h
+libax25ioinclude_HEADERS =  	ax25io.h
+
+
+libax25_la_SOURCES =  	axconfig.c 	axconfig.h 	axlib.h 	axutils.c 	config.h 	daemon.c 	daemon.h 	mheard.h 	nrconfig.c 	nrconfig.h 	pathnames.h 	procutils.c 	procutils.h 	rsconfig.c 	rsconfig.h 	ttyutils.c 	ttyutils.h  	kernel_ax25.h 	kernel_rose.h
+
+
+libax25io_la_SOURCES =  	ax25io.c 	ax25io.h 
 
 
 man_MANS = ax25.3 rose.3
 
-EXTRA_DIST = $(man_MANS)
+EXTRA_DIST = $(man_MANS) glibc.patch
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
 CONFIG_HEADER = config.h
@@ -99,7 +106,10 @@ LIBS = @LIBS@
 libax25_la_LDFLAGS = 
 libax25_la_LIBADD = 
 libax25_la_OBJECTS =  axconfig.lo axutils.lo daemon.lo nrconfig.lo \
-procutils.lo rsconfig.lo ttyutils.lo ax25io.lo
+procutils.lo rsconfig.lo ttyutils.lo
+libax25io_la_LDFLAGS = 
+libax25io_la_LIBADD = 
+libax25io_la_OBJECTS =  ax25io.lo
 CFLAGS = @CFLAGS@
 COMPILE = $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 LTCOMPILE = $(LIBTOOL) --mode=compile $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
@@ -109,7 +119,7 @@ man3dir = $(mandir)/man3
 MANS = $(man_MANS)
 
 NROFF = nroff
-HEADERS =  $(libax25include_HEADERS)
+HEADERS =  $(libax25include_HEADERS) $(libax25ioinclude_HEADERS)
 
 DIST_COMMON =  README ./stamp-h.in AUTHORS COPYING ChangeLog INSTALL \
 Makefile.am Makefile.in NEWS aclocal.m4 config.guess config.h.in \
@@ -121,8 +131,8 @@ DISTFILES = $(DIST_COMMON) $(SOURCES) $(HEADERS) $(TEXINFOS) $(EXTRA_DIST)
 
 TAR = tar
 GZIP_ENV = --best
-SOURCES = $(libax25_la_SOURCES)
-OBJECTS = $(libax25_la_OBJECTS)
+SOURCES = $(libax25_la_SOURCES) $(libax25io_la_SOURCES)
+OBJECTS = $(libax25_la_OBJECTS) $(libax25io_la_OBJECTS)
 
 all: all-redirect
 .SUFFIXES:
@@ -236,6 +246,9 @@ maintainer-clean-libtool:
 libax25.la: $(libax25_la_OBJECTS) $(libax25_la_DEPENDENCIES)
 	$(LINK) -rpath $(libdir) $(libax25_la_LDFLAGS) $(libax25_la_OBJECTS) $(libax25_la_LIBADD) $(LIBS)
 
+libax25io.la: $(libax25io_la_OBJECTS) $(libax25io_la_DEPENDENCIES)
+	$(LINK) -rpath $(libdir) $(libax25io_la_LDFLAGS) $(libax25io_la_OBJECTS) $(libax25io_la_LIBADD) $(LIBS)
+
 install-man3:
 	$(mkinstalldirs) $(DESTDIR)$(man3dir)
 	@list='$(man3_MANS)'; \
@@ -288,6 +301,21 @@ uninstall-libax25includeHEADERS:
 	@$(NORMAL_UNINSTALL)
 	list='$(libax25include_HEADERS)'; for p in $$list; do \
 	  rm -f $(DESTDIR)$(libax25includedir)/$$p; \
+	done
+
+install-libax25ioincludeHEADERS: $(libax25ioinclude_HEADERS)
+	@$(NORMAL_INSTALL)
+	$(mkinstalldirs) $(DESTDIR)$(libax25ioincludedir)
+	@list='$(libax25ioinclude_HEADERS)'; for p in $$list; do \
+	  if test -f "$$p"; then d= ; else d="$(srcdir)/"; fi; \
+	  echo " $(INSTALL_DATA) $$d$$p $(DESTDIR)$(libax25ioincludedir)/$$p"; \
+	  $(INSTALL_DATA) $$d$$p $(DESTDIR)$(libax25ioincludedir)/$$p; \
+	done
+
+uninstall-libax25ioincludeHEADERS:
+	@$(NORMAL_UNINSTALL)
+	list='$(libax25ioinclude_HEADERS)'; for p in $$list; do \
+	  rm -f $(DESTDIR)$(libax25ioincludedir)/$$p; \
 	done
 
 tags: TAGS
@@ -367,7 +395,7 @@ distdir: $(DISTFILES)
 	    || cp -p $$d/$$file $(distdir)/$$file || :; \
 	  fi; \
 	done
-ax25io.lo ax25io.o : ax25io.c config.h ax25io.h telnet.h
+ax25io.lo ax25io.o : ax25io.c config.h ax25io.h
 axconfig.lo axconfig.o : axconfig.c config.h pathnames.h axlib.h \
 	axconfig.h
 axutils.lo axutils.o : axutils.c config.h axlib.h
@@ -376,8 +404,8 @@ nrconfig.lo nrconfig.o : nrconfig.c config.h pathnames.h axlib.h \
 	nrconfig.h
 procutils.lo procutils.o : procutils.c config.h pathnames.h nrconfig.h \
 	procutils.h
-rsconfig.lo rsconfig.o : rsconfig.c kernel_ax25.h kernel_rose.h \
-	pathnames.h axlib.h rsconfig.h
+rsconfig.lo rsconfig.o : rsconfig.c config.h pathnames.h axlib.h \
+	rsconfig.h
 ttyutils.lo ttyutils.o : ttyutils.c pathnames.h ttyutils.h
 
 info-am:
@@ -394,14 +422,16 @@ all-recursive-am: config.h
 install-exec-am: install-libLTLIBRARIES
 install-exec: install-exec-am
 
-install-data-am: install-man install-libax25includeHEADERS
+install-data-am: install-man install-libax25includeHEADERS \
+		install-libax25ioincludeHEADERS
 install-data: install-data-am
 
 install-am: all-am
 	@$(MAKE) $(AM_MAKEFLAGS) install-exec-am install-data-am
 install: install-am
 uninstall-am: uninstall-libLTLIBRARIES uninstall-man \
-		uninstall-libax25includeHEADERS
+		uninstall-libax25includeHEADERS \
+		uninstall-libax25ioincludeHEADERS
 uninstall: uninstall-am
 all-am: Makefile $(LTLIBRARIES) $(MANS) $(HEADERS) config.h
 all-redirect: all-am
@@ -409,7 +439,8 @@ install-strip:
 	$(MAKE) $(AM_MAKEFLAGS) AM_INSTALL_PROGRAM_FLAGS=-s install
 installdirs:
 	$(mkinstalldirs)  $(DESTDIR)$(libdir) $(DESTDIR)$(mandir)/man3 \
-		$(DESTDIR)$(libax25includedir)
+		$(DESTDIR)$(libax25includedir) \
+		$(DESTDIR)$(libax25ioincludedir)
 
 
 mostlyclean-generic:
@@ -459,7 +490,8 @@ distclean-compile clean-compile maintainer-clean-compile \
 mostlyclean-libtool distclean-libtool clean-libtool \
 maintainer-clean-libtool install-man3 uninstall-man3 install-man \
 uninstall-man uninstall-libax25includeHEADERS \
-install-libax25includeHEADERS tags mostlyclean-tags distclean-tags \
+install-libax25includeHEADERS uninstall-libax25ioincludeHEADERS \
+install-libax25ioincludeHEADERS tags mostlyclean-tags distclean-tags \
 clean-tags maintainer-clean-tags distdir info-am info dvi-am dvi check \
 check-am installcheck-am installcheck all-recursive-am install-exec-am \
 install-exec install-data-am install-data install-am install \

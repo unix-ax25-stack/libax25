@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <string.h>
+#include <arpa/telnet.h>
 
 #include "config.h"
 
@@ -12,7 +13,6 @@
 #endif
 
 #include "ax25io.h"
-#include "telnet.h"
 
 static ax25io *Iolist = NULL;
 
@@ -385,10 +385,10 @@ int axio_putc(int c, ax25io *p)
 {
 	char *cp;
 
-	if (p->telnetmode && c == TN_IAC) {
-		if (rsendchar(TN_IAC, p) == -1)
+	if (p->telnetmode && c == IAC) {
+		if (rsendchar(IAC, p) == -1)
 			return -1;
-		return rsendchar(TN_IAC, p);
+		return rsendchar(IAC, p);
 	}
 
 	if (c == INTERNAL_EOL) {
@@ -421,7 +421,7 @@ int axio_getc(ax25io *p)
 	if ((c = rrecvchar(p)) == -1)
 		return -1;
 
-	if (p->telnetmode && c == TN_IAC) {
+	if (p->telnetmode && c == IAC) {
 		if ((c = rrecvchar(p)) == -1)
 			return -1;
 
@@ -429,13 +429,13 @@ int axio_getc(ax25io *p)
 			return -1;
 
 		switch(c) {
-		case TN_IP:
-		case TN_ABORT:
-		case TN_EOF:
+		case IP:
+		case ABORT:
+		case xEOF:
 			return -1;
-		case TN_SUSP:
+		case SUSP:
 			break;
-		case TN_SB:
+		case SB:
 			/*
 			 * Start of sub-negotiation. Just ignore everything
 			 * until we see a IAC SE (some negotiation...).
@@ -444,13 +444,13 @@ int axio_getc(ax25io *p)
 				return -1;
 			if ((opt = rrecvchar(p)) == -1)
 				return -1;
-			while (!(c == TN_IAC && opt == TN_SE)) {
+			while (!(c == IAC && opt == SE)) {
 				c = opt;
 				if ((opt = rrecvchar(p)) == -1)
 					return -1;
 			}
 			break;
-		case TN_WILL:
+		case WILL:
 			/*
 			 * Client is willing to negotiate linemode and
 			 * we want it too. Tell the client to go to
@@ -459,31 +459,30 @@ int axio_getc(ax25io *p)
 			 * is ignored above (rfc1184 says client must obey
 			 * ECHO and TRAPSIG).
 			 */
-			if (opt == TN_LINEMODE && p->tn_linemode) {
-				rsendchar(TN_IAC,  p);
-				rsendchar(TN_SB,   p);
-				rsendchar(TN_LINEMODE, p);
-				rsendchar(TN_LINEMODE_MODE, p);
-				rsendchar(TN_LINEMODE_MODE_EDIT |
-					  TN_LINEMODE_MODE_TRAPSIG, p);
-				rsendchar(TN_IAC,  p);
-				rsendchar(TN_SE,   p);
+			if (opt == TELOPT_LINEMODE && p->tn_linemode) {
+				rsendchar(IAC,                      p);
+				rsendchar(SB,                       p);
+				rsendchar(TELOPT_LINEMODE,          p);
+				rsendchar(LM_MODE,                  p);
+				rsendchar(MODE_EDIT | MODE_TRAPSIG, p);
+				rsendchar(IAC,                      p);
+				rsendchar(SE,                       p);
 			} else {
-				rsendchar(TN_IAC,  p);
-				rsendchar(TN_DONT, p);
-				rsendchar(opt,     p);
+				rsendchar(IAC,  p);
+				rsendchar(DONT, p);
+				rsendchar(opt,  p);
 			}
 			axio_flush(p);
 			break;
-		case TN_DO:
+		case DO:
 			switch (opt) {
-			case TN_SUPPRESS_GA:
-				rsendchar(TN_IAC,  p);
-				rsendchar(TN_WILL, p);
-				rsendchar(opt,     p);
+			case TELOPT_SGA:
+				rsendchar(IAC,  p);
+				rsendchar(WILL, p);
+				rsendchar(opt,  p);
 				axio_flush(p);
 				break;
-			case TN_ECHO:
+			case TELOPT_ECHO:
 				/*
 				 * If we want echo then just silently
 				 * approve, otherwise deny.
@@ -492,18 +491,18 @@ int axio_getc(ax25io *p)
 					break;
 				/* Note fall-through */
 			default:
-				rsendchar(TN_IAC,  p);
-				rsendchar(TN_WONT, p);
-				rsendchar(opt,     p);
+				rsendchar(IAC,  p);
+				rsendchar(WONT, p);
+				rsendchar(opt,  p);
 				axio_flush(p);
 				break;
 			}
 			break;
-		case TN_IAC:	/* Escaped IAC */
-			return TN_IAC;
+		case IAC:	/* Escaped IAC */
+			return IAC;
 			break;
-		case TN_WONT:
-		case TN_DONT:
+		case WONT:
+		case DONT:
 		default:
 			break;
 		}
@@ -603,25 +602,25 @@ int axio_printf(ax25io *p, const char *fmt, ...)
 
 void axio_tn_do_linemode(ax25io *p)
 {
-	rsendchar(TN_IAC,      p);
-	rsendchar(TN_DO,       p);
-	rsendchar(TN_LINEMODE, p);
+	rsendchar(IAC,             p);
+	rsendchar(DO,              p);
+	rsendchar(TELOPT_LINEMODE, p);
 	p->tn_linemode = 1;
 }
 
 void axio_tn_will_echo(ax25io *p)
 {
-	rsendchar(TN_IAC,  p);
-	rsendchar(TN_WILL, p);
-	rsendchar(TN_ECHO, p);
+	rsendchar(IAC,         p);
+	rsendchar(WILL,        p);
+	rsendchar(TELOPT_ECHO, p);
 	p->tn_echo = 1;
 }
 
 void axio_tn_wont_echo(ax25io *p)
 {
-	rsendchar(TN_IAC,  p);
-	rsendchar(TN_WONT, p);
-	rsendchar(TN_ECHO, p);
+	rsendchar(IAC,         p);
+	rsendchar(WONT,        p);
+	rsendchar(TELOPT_ECHO, p);
 	p->tn_echo = 0;
 }
 

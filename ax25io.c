@@ -134,24 +134,39 @@ int axio_tnmode(ax25io *p, int newmode)
 static int flush_obuf(ax25io *p)
 {
 	int ret;
+	int count=0;
 
 	if (p->optr == 0)
 		return 0;
 
-	if ((ret = write(p->ofd, p->obuf, p->optr)) < 0)
-		return -1;
+	do {
+		if ((ret = write(p->ofd, p->obuf, p->optr < p->paclen ? p->optr : p->paclen)) < 0)
+			return -1;
 
-	if (ret < p->optr) {
-		memmove(p->obuf, &p->obuf[ret], p->optr - ret);
-		p->optr = ret;
-	} else
-		p->optr = 0;
+		if (ret < p->optr)
+			memmove(p->obuf, &p->obuf[ret], p->optr - ret);
+		p->optr -= ret;
+		count += ret;
 
-	return ret;
+		/* If buffer full block until there is room */
+		if (p->optr>=AXBUFLEN) {
+			fd_set fdset;
+
+			FD_ZERO(&fdset);
+			FD_SET(p->ofd, &fdset);
+			if (select(p->ofd+1, NULL, &fdset, NULL, NULL)<0)
+				return -1;
+		}
+	} while (p->optr>=AXBUFLEN);
+
+	return count;
 }
 
 int axio_flush(ax25io *p)
 {
+	int flushed=0;
+	fd_set fdset;
+
 #ifdef HAVE_ZLIB_H
 	if (p->zptr) {
 		struct compr_s *z = (struct compr_s *) p->zptr;
@@ -211,7 +226,15 @@ int axio_flush(ax25io *p)
 	}
 #endif
 
-	return flush_obuf(p);
+	while (p->optr) {
+		FD_ZERO(&fdset);
+		FD_SET(p->ofd, &fdset);
+		if (select(p->ofd+1, NULL, &fdset, NULL, NULL)<0)
+			return -1;
+		flushed+=flush_obuf(p);
+	}
+
+	return flushed;
 }
 
 static int rsendchar(unsigned char c, ax25io *p)

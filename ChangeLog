@@ -1,3 +1,11 @@
+libax25 0.0.10
+
+ 	* Fixed byte counting in flush_obuf() (PE1RXQ)
+ 	* Fixed buffer overflow in flush_obuf() (PE1RXQ)
+ 	* axio_flush() actually flushes the buffer (PE1RXQ)
+
+ -- Craig Small <csmall@small.dropbear.id.au>  Fri, 29 Mar 2002 08:54:20 +1100
+
 libax25 0.0.9
 
 	* Updated config.guess and config.sub for hppa

@@ -5,9 +5,18 @@
 #include <ctype.h>
 
 #include <sys/socket.h>
+#include <config.h>
 
+#ifdef HAVE_NETAX25_AX25_H
 #include <netax25/ax25.h>
+#else
+#include "kernel_ax25.h"
+#endif
+#ifdef HAVE_NETROSE_ROSE_H
 #include <netrose/rose.h>
+#else
+#include "kernel_rose.h"
+#endif
 
 #include "axlib.h"
 
@@ -17,7 +26,7 @@ ax25_address null_ax25_address = {{0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x00}};
  *	Library routine for callsign conversion.
  */
  
-int convert_call_entry(const char *name, char *buf)
+int ax25_aton_entry(const char *name, char *buf)
 {
 	int ct   = 0;
 	int ssid = 0;
@@ -60,7 +69,7 @@ int convert_call_entry(const char *name, char *buf)
 	return 0;
 }
 
-int convert_call(char *call, struct full_sockaddr_ax25 *sax)
+int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 {
 	char *bp, *np;
 	char *addrp;
@@ -94,7 +103,7 @@ int convert_call(char *call, struct full_sockaddr_ax25 *sax)
 		}
 		
 		/* Process the token */
-		if (convert_call_entry(bp, addrp) == -1) {
+		if (ax25_aton_entry(bp, addrp) == -1) {
 			free(tmp);
 			return -1;
 		}
@@ -119,7 +128,7 @@ int convert_call(char *call, struct full_sockaddr_ax25 *sax)
 	return sizeof(struct full_sockaddr_ax25);
 }
 
-int convert_call_arglist(char *call[], struct full_sockaddr_ax25 *sax)
+int ax25_aton_arglist(char *call[], struct full_sockaddr_ax25 *sax)
 {
 	char *bp;
 	char *addrp;
@@ -138,7 +147,7 @@ int convert_call_arglist(char *call[], struct full_sockaddr_ax25 *sax)
 			continue;
 		
 		/* Process the token */
-		if (convert_call_entry(bp, addrp) == -1)
+		if (ax25_aton_entry(bp, addrp) == -1)
 			return -1;
 			
 		n++;
@@ -161,7 +170,7 @@ int convert_call_arglist(char *call[], struct full_sockaddr_ax25 *sax)
  *	Library routine for Rose address conversion.
  */
  
-int convert_rose_address(const char *addr, char *buf)
+int rose_aton(const char *addr, char *buf)
 {
 	int i, n;
 
@@ -186,7 +195,7 @@ int convert_rose_address(const char *addr, char *buf)
 /*
  *	ax25 -> ascii conversion
  */
-char *ax2asc(ax25_address *a)
+char *ax25_ntoa(ax25_address *a)
 {
 	static char buf[11];
 	char c, *s;
@@ -214,7 +223,7 @@ char *ax2asc(ax25_address *a)
 /*
  *	rose -> ascii conversion
  */
-char *rose2asc(rose_address *a)
+char *rose_ntoa(rose_address *a)
 {
 	static char buf[11];
 
@@ -230,7 +239,7 @@ char *rose2asc(rose_address *a)
 /*
  *	Compare two ax.25 addresses
  */
-int ax25cmp(ax25_address *a, ax25_address *b)
+int ax25_cmp(ax25_address *a, ax25_address *b)
 {
 	if ((a->ax25_call[0] & 0xFE) != (b->ax25_call[0] & 0xFE))
 		return 1;
@@ -259,7 +268,7 @@ int ax25cmp(ax25_address *a, ax25_address *b)
 /*
  *	Compare two Rose addresses
  */
-int rosecmp(rose_address *a, rose_address *b)
+int rose_cmp(rose_address *a, rose_address *b)
 {
 	int i;
 
@@ -273,7 +282,7 @@ int rosecmp(rose_address *a, rose_address *b)
 /*
  * Validate an AX.25 callsign.
  */
-int ax25validate(char *call)
+int ax25_validate(char *call)
 {
 	unsigned char s[7];
 	int n;
@@ -319,3 +328,4 @@ char *strlwr(char *s)
 		
 	return s;
 }
+

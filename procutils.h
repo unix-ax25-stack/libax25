@@ -28,8 +28,12 @@ struct proc_ax25_route {
 };
 
 struct proc_ax25 {
-	char			dest_addr[10], src_addr[10];
+	unsigned long		magic;
 	char			dev[14];
+	char			src_addr[10];
+	char			dest_addr[10];
+	char			digi_addr[8][11];
+	int			ndigi;
 	unsigned char		st;
 	unsigned short		vs, vr, va;
 	unsigned short		t1, t1timer, t2, t2timer, t3, t3timer;
@@ -39,8 +43,25 @@ struct proc_ax25 {
 	unsigned char		window;
 	unsigned short		paclen;
 	unsigned long		sndq, rcvq;
+	unsigned long		inode;
 
 	struct proc_ax25	*next;
+};
+
+struct proc_nr {
+	char			user_addr[10], dest_node[10], src_node[10];
+	char			dev[14];
+	char			my_circuit[6], ur_circuit[6];
+	unsigned char		st;
+	unsigned short		vs, vr, va;
+	unsigned short		t1, t1timer, t2, t2timer, t4, t4timer;
+	unsigned short		idle, idletimer;
+	unsigned char		n2, n2count;
+	unsigned char		window;
+	unsigned long		sndq, rcvq;
+	unsigned long		inode;
+
+	struct proc_nr		*next;
 };
 
 struct proc_nr_neigh {
@@ -64,17 +85,79 @@ struct proc_nr_nodes {
 	struct proc_nr_nodes	*next;
 };
 
+struct proc_rs {
+	char			dest_addr[11], dest_call[10];
+	char			src_addr[11], src_call[10];
+	char			dev[14];
+	unsigned short		lci;
+	unsigned int		neigh;
+	unsigned char		st;
+	unsigned short		vs, vr, va;
+	unsigned short		t, t1, t2, t3;
+	unsigned short		hb;
+	unsigned long		sndq, rcvq;
+
+	struct proc_rs		*next;
+};
+
+struct proc_rs_route {
+	unsigned short	lci1;
+	char			address1[11], call1[10];
+	unsigned int	neigh1;
+	unsigned short	lci2;
+	char			address2[11], call2[10];
+	unsigned int	neigh2;
+
+	struct proc_rs_route	*next;
+};
+
+struct proc_rs_neigh {
+	int				addr;
+	char			call[10];
+	char			dev[14];
+	int				count;
+	char			mode[4];
+	char			restart[4];
+	unsigned short	t0, tf;
+
+	struct proc_rs_neigh	*next;
+};
+
+struct proc_rs_nodes {
+	char			address[11];
+	unsigned char	mask;
+	unsigned char	n;
+	unsigned int	neigh1, neigh2, neigh3;
+
+	struct proc_rs_nodes	*next;
+};
+
 extern struct proc_ax25 *read_proc_ax25(void);
 extern void free_proc_ax25(struct proc_ax25 *ap);
 
 extern struct proc_ax25_route *read_proc_ax25_route(void);
 extern void free_proc_ax25_route(struct proc_ax25_route *rp);
 
+extern struct proc_nr *read_proc_nr(void);
+extern void free_proc_nr(struct proc_nr *);
+ 
 extern struct proc_nr_neigh *read_proc_nr_neigh(void);
 extern void free_proc_nr_neigh(struct proc_nr_neigh *np);
 
 extern struct proc_nr_nodes *read_proc_nr_nodes(void);
 extern void free_proc_nr_nodes(struct proc_nr_nodes *np);
+
+extern struct proc_rs *read_proc_rs(void);
+extern void free_proc_rs(struct proc_rs *);
+
+extern struct proc_rs_neigh *read_proc_rs_neigh(void);
+extern void free_proc_rs_neigh(struct proc_rs_neigh *);
+
+extern struct proc_rs_nodes *read_proc_rs_nodes(void);
+extern void free_proc_rs_nodes(struct proc_rs_nodes *);
+
+extern struct proc_rs_route *read_proc_rs_routes(void);
+extern void free_proc_rs_routes(struct proc_rs_route *);
 
 extern char *get_call(int uid);
 

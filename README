@@ -9,5 +9,9 @@ and greatest and you don't understand how to diagnose bugs, then you
 should probably not run it and go back to the ax25-utils-2*
 packages.
 
+You are supposed to use glibc 2.1 (libc6 unstable libraries) for this
+package.  I have attempted to cater for glibc 2.0 users here.
+
   - Craig Small <csmall@small.dropbear.id.au>
+
 

@@ -12,8 +12,16 @@
 
 #include <net/if.h>
 #include <net/if_arp.h>
+#ifdef HAVE_NETAX25_AX25_H
 #include <netax25/ax25.h>
+#else
+#include "kernel_ax25.h"
+#endif
+#ifdef HAVE_NETROSE_ROSE_H
 #include <netrose/rose.h>
+#else
+#include "kernel_rose.h"
+#endif
 
 #include "pathnames.h"
 #include "axlib.h"
@@ -35,9 +43,9 @@ static int rose_hw_cmp(unsigned char *address, unsigned char *hw_addr)
 {
 	rose_address addr;
 
-	convert_rose_address(address, addr.rose_addr);
+	rose_aton(address, addr.rose_addr);
 
-	return rosecmp(&addr, (rose_address *)hw_addr) == 0;
+	return rose_cmp(&addr, (rose_address *)hw_addr) == 0;
 }
 
 static RS_Port *rs_port_ptr(char *name)
@@ -118,9 +126,9 @@ char *rs_config_get_port(rose_address *address)
 	rose_address addr;
 
 	while (p != NULL) {
-		convert_rose_address(p->Addr, addr.rose_addr);
+		rose_aton(p->Addr, addr.rose_addr);
 	
-		if (rosecmp(address, &addr) == 0)
+		if (rose_cmp(address, &addr) == 0)
 			return p->Name;
 
 		p = p->Next;

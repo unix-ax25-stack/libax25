@@ -69,17 +69,22 @@ MAKEINFO = @MAKEINFO@
 NM = @NM@
 PACKAGE = @PACKAGE@
 RANLIB = @RANLIB@
+USE_SYMBOL_UNDERSCORE = @USE_SYMBOL_UNDERSCORE@
 VERSION = @VERSION@
 
 lib_LTLIBRARIES = libax25.la
 
 libax25includedir = $(includedir)/netax25
 
-libax25include_HEADERS =  	axlib.h			axconfig.h		nrconfig.h		rsconfig.h		daemon.h		ttyutils.h		procutils.h		mheard.h
+libax25include_HEADERS =  	axlib.h			axconfig.h		nrconfig.h		rsconfig.h		daemon.h		ttyutils.h		procutils.h		mheard.h		ax25io.h
 
 
-libax25_la_SOURCES =  	axconfig.c 	axconfig.h 	axlib.h 	axutils.c 	config.h 	daemon.c 	daemon.h 	mheard.h 	nrconfig.c 	nrconfig.h 	pathnames.h 	procutils.c 	procutils.h 	rsconfig.c 	rsconfig.h 	ttyutils.c 	ttyutils.h 	version.c 	version.h 
+libax25_la_SOURCES =  	axconfig.c 	axconfig.h 	axlib.h 	axutils.c 	config.h 	daemon.c 	daemon.h 	mheard.h 	nrconfig.c 	nrconfig.h 	pathnames.h 	procutils.c 	procutils.h 	rsconfig.c 	rsconfig.h 	ttyutils.c 	ttyutils.h  	ax25io.c 	ax25io.h 	kernel_ax25.h 	kernel_rose.h
 
+
+man_MANS = ax25.3 rose.3
+
+EXTRA_DIST = $(man_MANS)
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
 CONFIG_HEADER = config.h
@@ -94,12 +99,16 @@ LIBS = @LIBS@
 libax25_la_LDFLAGS = 
 libax25_la_LIBADD = 
 libax25_la_OBJECTS =  axconfig.lo axutils.lo daemon.lo nrconfig.lo \
-procutils.lo rsconfig.lo ttyutils.lo version.lo
+procutils.lo rsconfig.lo ttyutils.lo ax25io.lo
 CFLAGS = @CFLAGS@
 COMPILE = $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 LTCOMPILE = $(LIBTOOL) --mode=compile $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 CCLD = $(CC)
 LINK = $(LIBTOOL) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@
+man3dir = $(mandir)/man3
+MANS = $(man_MANS)
+
+NROFF = nroff
 HEADERS =  $(libax25include_HEADERS)
 
 DIST_COMMON =  README ./stamp-h.in AUTHORS COPYING ChangeLog INSTALL \
@@ -227,6 +236,45 @@ maintainer-clean-libtool:
 libax25.la: $(libax25_la_OBJECTS) $(libax25_la_DEPENDENCIES)
 	$(LINK) -rpath $(libdir) $(libax25_la_LDFLAGS) $(libax25_la_OBJECTS) $(libax25_la_LIBADD) $(LIBS)
 
+install-man3:
+	$(mkinstalldirs) $(DESTDIR)$(man3dir)
+	@list='$(man3_MANS)'; \
+	l2='$(man_MANS)'; for i in $$l2; do \
+	  case "$$i" in \
+	    *.3*) list="$$list $$i" ;; \
+	  esac; \
+	done; \
+	for i in $$list; do \
+	  if test -f $(srcdir)/$$i; then file=$(srcdir)/$$i; \
+	  else file=$$i; fi; \
+	  ext=`echo $$i | sed -e 's/^.*\\.//'`; \
+	  inst=`echo $$i | sed -e 's/\\.[0-9a-z]*$$//'`; \
+	  inst=`echo $$inst | sed '$(transform)'`.$$ext; \
+	  echo " $(INSTALL_DATA) $$file $(DESTDIR)$(man3dir)/$$inst"; \
+	  $(INSTALL_DATA) $$file $(DESTDIR)$(man3dir)/$$inst; \
+	done
+
+uninstall-man3:
+	@list='$(man3_MANS)'; \
+	l2='$(man_MANS)'; for i in $$l2; do \
+	  case "$$i" in \
+	    *.3*) list="$$list $$i" ;; \
+	  esac; \
+	done; \
+	for i in $$list; do \
+	  ext=`echo $$i | sed -e 's/^.*\\.//'`; \
+	  inst=`echo $$i | sed -e 's/\\.[0-9a-z]*$$//'`; \
+	  inst=`echo $$inst | sed '$(transform)'`.$$ext; \
+	  echo " rm -f $(DESTDIR)$(man3dir)/$$inst"; \
+	  rm -f $(DESTDIR)$(man3dir)/$$inst; \
+	done
+install-man: $(MANS)
+	@$(NORMAL_INSTALL)
+	$(MAKE) $(AM_MAKEFLAGS) install-man3
+uninstall-man:
+	@$(NORMAL_UNINSTALL)
+	$(MAKE) $(AM_MAKEFLAGS) uninstall-man3
+
 install-libax25includeHEADERS: $(libax25include_HEADERS)
 	@$(NORMAL_INSTALL)
 	$(mkinstalldirs) $(DESTDIR)$(libax25includedir)
@@ -319,14 +367,18 @@ distdir: $(DISTFILES)
 	    || cp -p $$d/$$file $(distdir)/$$file || :; \
 	  fi; \
 	done
-axconfig.lo axconfig.o : axconfig.c pathnames.h axlib.h axconfig.h
-axutils.lo axutils.o : axutils.c axlib.h
+ax25io.lo ax25io.o : ax25io.c config.h ax25io.h telnet.h
+axconfig.lo axconfig.o : axconfig.c config.h pathnames.h axlib.h \
+	axconfig.h
+axutils.lo axutils.o : axutils.c config.h axlib.h
 daemon.lo daemon.o : daemon.c daemon.h
-nrconfig.lo nrconfig.o : nrconfig.c pathnames.h axlib.h nrconfig.h
-procutils.lo procutils.o : procutils.c pathnames.h procutils.h
-rsconfig.lo rsconfig.o : rsconfig.c pathnames.h axlib.h rsconfig.h
+nrconfig.lo nrconfig.o : nrconfig.c config.h pathnames.h axlib.h \
+	nrconfig.h
+procutils.lo procutils.o : procutils.c config.h pathnames.h nrconfig.h \
+	procutils.h
+rsconfig.lo rsconfig.o : rsconfig.c kernel_ax25.h kernel_rose.h \
+	pathnames.h axlib.h rsconfig.h
 ttyutils.lo ttyutils.o : ttyutils.c pathnames.h ttyutils.h
-version.lo version.o : version.c config.h
 
 info-am:
 info: info-am
@@ -342,20 +394,22 @@ all-recursive-am: config.h
 install-exec-am: install-libLTLIBRARIES
 install-exec: install-exec-am
 
-install-data-am: install-libax25includeHEADERS
+install-data-am: install-man install-libax25includeHEADERS
 install-data: install-data-am
 
 install-am: all-am
 	@$(MAKE) $(AM_MAKEFLAGS) install-exec-am install-data-am
 install: install-am
-uninstall-am: uninstall-libLTLIBRARIES uninstall-libax25includeHEADERS
+uninstall-am: uninstall-libLTLIBRARIES uninstall-man \
+		uninstall-libax25includeHEADERS
 uninstall: uninstall-am
-all-am: Makefile $(LTLIBRARIES) $(HEADERS) config.h
+all-am: Makefile $(LTLIBRARIES) $(MANS) $(HEADERS) config.h
 all-redirect: all-am
 install-strip:
 	$(MAKE) $(AM_MAKEFLAGS) AM_INSTALL_PROGRAM_FLAGS=-s install
 installdirs:
-	$(mkinstalldirs)  $(DESTDIR)$(libdir) $(DESTDIR)$(libax25includedir)
+	$(mkinstalldirs)  $(DESTDIR)$(libdir) $(DESTDIR)$(mandir)/man3 \
+		$(DESTDIR)$(libax25includedir)
 
 
 mostlyclean-generic:
@@ -403,7 +457,8 @@ clean-libLTLIBRARIES maintainer-clean-libLTLIBRARIES \
 uninstall-libLTLIBRARIES install-libLTLIBRARIES mostlyclean-compile \
 distclean-compile clean-compile maintainer-clean-compile \
 mostlyclean-libtool distclean-libtool clean-libtool \
-maintainer-clean-libtool uninstall-libax25includeHEADERS \
+maintainer-clean-libtool install-man3 uninstall-man3 install-man \
+uninstall-man uninstall-libax25includeHEADERS \
 install-libax25includeHEADERS tags mostlyclean-tags distclean-tags \
 clean-tags maintainer-clean-tags distdir info-am info dvi-am dvi check \
 check-am installcheck-am installcheck all-recursive-am install-exec-am \

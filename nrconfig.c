@@ -6,14 +6,23 @@
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
+#include <config.h>
 
 #include <sys/types.h>
 #include <sys/ioctl.h>
 
 #include <net/if.h>
 #include <net/if_arp.h>
+#ifdef HAVE_NETAX25_AX25_H
 #include <netax25/ax25.h>
+#else
+#include "kernel_ax25.h"
+#endif
+#ifdef HAVE_NETROSE_ROSE_H
 #include <netrose/rose.h>
+#else
+#include "kernel_rose.h"
+#endif
 
 #include "pathnames.h"
 #include "axlib.h"
@@ -37,9 +46,9 @@ static int ax25_hw_cmp(unsigned char *callsign, unsigned char *hw_addr)
 {
 	ax25_address call;
 
-	convert_call_entry(callsign, call.ax25_call);
+	ax25_aton_entry(callsign, call.ax25_call);
 	
-	return ax25cmp(&call, (ax25_address *)hw_addr) == 0;
+	return ax25_cmp(&call, (ax25_address *)hw_addr) == 0;
 }
 
 static NR_Port *nr_port_ptr(char *name)
@@ -120,9 +129,9 @@ char *nr_config_get_port(ax25_address *callsign)
 	ax25_address addr;
 
 	while (p != NULL) {
-		convert_call_entry(p->Call, (char *)&addr);
+		ax25_aton_entry(p->Call, (char *)&addr);
 	
-		if (ax25cmp(callsign, &addr) == 0)
+		if (ax25_cmp(callsign, &addr) == 0)
 			return p->Name;
 
 		p = p->Next;

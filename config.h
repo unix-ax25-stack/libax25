@@ -28,6 +28,15 @@
 /* Define if you have the <fcntl.h> header file.  */
 #define HAVE_FCNTL_H 1
 
+/* Define if you have the <netax25/ax25.h> header file.  */
+#define HAVE_NETAX25_AX25_H 1
+
+/* Define if you have the <netrom/netrom.h> header file.  */
+#define HAVE_NETROM_NETROM_H 1
+
+/* Define if you have the <netrose/rose.h> header file.  */
+#define HAVE_NETROSE_ROSE_H 1
+
 /* Define if you have the <sys/file.h> header file.  */
 #define HAVE_SYS_FILE_H 1
 
@@ -37,12 +46,12 @@
 /* Define if you have the <unistd.h> header file.  */
 #define HAVE_UNISTD_H 1
 
+/* Define if you have the <zlib.h> header file.  */
+#define HAVE_ZLIB_H 1
+
 /* Name of package */
 #define PACKAGE "ax25-lib"
 
 /* Version number of package */
-#define VERSION "0.0.1"
-
-/* define if compiled symbols have a leading underscore */
-/* #undef WITH_SYMBOL_UNDERSCORE */
+#define VERSION "0.0.2"
 

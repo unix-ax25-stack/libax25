@@ -1,3 +1,10 @@
+1999-04-20 Craig Small <csmall@small.dropbear.id.au>
+
+	* Added Jean-Pauls ROSE patches
+	* Changed all the convert names to ntoa type names
+	* Added Tomi's axio stuff
+	* Started writing ax25.3 and rose.3
+
 1999-04-02 Craig Small <csmall@small.dropbear.id.au>
 
 	* Initial version from Terry Dawson's code, split from the old

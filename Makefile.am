@@ -11,7 +11,8 @@ libax25include_HEADERS = 	\
 	daemon.h	\
 	ttyutils.h	\
 	procutils.h	\
-	mheard.h
+	mheard.h	\
+	ax25io.h
 
 libax25_la_SOURCES = \
 	axconfig.c \
@@ -30,7 +31,13 @@ libax25_la_SOURCES = \
 	rsconfig.c \
 	rsconfig.h \
 	ttyutils.c \
-	ttyutils.h \
-	version.c \
-	version.h 
+	ttyutils.h  \
+	ax25io.c \
+	ax25io.h \
+	kernel_ax25.h \
+	kernel_rose.h
 	
+man_MANS = ax25.3 rose.3
+
+EXTRA_DIST= $(man_MANS)
+

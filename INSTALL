@@ -12,7 +12,7 @@ To build it you type:
 	make install
 
 If you want to put the files in the "normal" places, type:
-	./configure --exec_prefix=/usr --prefix=
+	./configure --exec_prefix=/usr --sysconfdir=/etc --localstatedir=/var
 	make 
 	make install
 	

@@ -1,3 +1,9 @@
+libax25 0.0.6
+	* Fixed pathnames.h typo
+	* Fixed instructions
+
+1999-0719 Craig Small <csmall@small.dropbear.id.au>
+
 libax25 0.0.5
 	* More patches from Tomi for ax25io stuff
 	* Cleaner way of naming config files

@@ -1,3 +1,8 @@
+libax25 0.0.8
+	* Included ax25.h and rose.h for axlib.h Closes Debian bug #64102
+
+ -- Craig Small <csmall@small.dropbear.id.au>  Thu,  5 Apr 2001 08:48:00 +1000
+
 libax25 0.0.7
 	* Added Tomi's patch to fix glibc 2.0 includes
 

@@ -22,8 +22,11 @@
  * shifted format and vica versa.
  */
  
-#ifndef _AXUTILS_H
-#define	_AXUTILS_H
+#ifndef _AXLIB_H
+#define	_AXLIB_H
+
+#include <netax25/ax25.h>
+#include <netax25/rose.h>
 
 #ifndef	TRUE
 #define	TRUE	1

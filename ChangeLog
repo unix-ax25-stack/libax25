@@ -1,3 +1,8 @@
+libax25 0.0.9
+	* Updated config.guess and config.sub for hppa
+
+ -- Craig Small <csmall@small.dropbear.id.au>
+
 libax25 0.0.8
 	* Included ax25.h and rose.h for axlib.h Closes Debian bug #64102
 

@@ -7,6 +7,14 @@ general use.
 You are supposed to use glibc 2.1 (libc6 unstable libraries) for this
 package.  I have attempted to cater for glibc 2.0 users here.
 
+To compile this I used:
+  * A Debian GNU/Linux system
+  * autoconf 2.52
+  * automake 1.4-p4
+  * libtool 1.4b
+  * libc 2.2.3
+  * gcc 2.95.4
+
 This library is copyright by the respective authors (see AUTHORS for a list)
 and licensed under the GNU LGPL (see COPYING for more information).
 

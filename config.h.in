@@ -1,17 +1,4 @@
 /* config.h.in.  Generated automatically from configure.in by autoheader.  */
-
-/* Define to empty if the keyword does not work.  */
-#undef const
-
-/* Define as the return type of signal handlers (int or void).  */
-#undef RETSIGTYPE
-
-/* Define if the `setpgrp' function takes no argument.  */
-#undef SETPGRP_VOID
-
-/* Define if you have the ANSI C header files.  */
-#undef STDC_HEADERS
-
 /* Define if you have a proper netax25/ax25.h header file. */
 #undef HAVE_NETAX25_AX25_H 
 
@@ -21,36 +8,50 @@
 /* Define if you have a proper netrose/rose.h header file. */
 #undef HAVE_NETROSE_ROSE_H 
 
-/* Define if you have the socket function.  */
-#undef HAVE_SOCKET
+/* Define if you have the <dlfcn.h> header file. */
+#undef HAVE_DLFCN_H
 
-/* Define if you have the strdup function.  */
-#undef HAVE_STRDUP
-
-/* Define if you have the strerror function.  */
-#undef HAVE_STRERROR
-
-/* Define if you have the strspn function.  */
-#undef HAVE_STRSPN
-
-/* Define if you have the <fcntl.h> header file.  */
+/* Define if you have the <fcntl.h> header file. */
 #undef HAVE_FCNTL_H
 
-/* Define if you have the <sys/file.h> header file.  */
+/* Define if you have the `socket' function. */
+#undef HAVE_SOCKET
+
+/* Define if you have the `strdup' function. */
+#undef HAVE_STRDUP
+
+/* Define if you have the `strerror' function. */
+#undef HAVE_STRERROR
+
+/* Define if you have the `strspn' function. */
+#undef HAVE_STRSPN
+
+/* Define if you have the <sys/file.h> header file. */
 #undef HAVE_SYS_FILE_H
 
-/* Define if you have the <sys/ioctl.h> header file.  */
+/* Define if you have the <sys/ioctl.h> header file. */
 #undef HAVE_SYS_IOCTL_H
 
-/* Define if you have the <unistd.h> header file.  */
+/* Define if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
 
-/* Define if you have the <zlib.h> header file.  */
+/* Define if you have the <zlib.h> header file. */
 #undef HAVE_ZLIB_H
 
 /* Name of package */
 #undef PACKAGE
 
+/* Define as the return type of signal handlers (`int' or `void'). */
+#undef RETSIGTYPE
+
+/* Define if the `setpgrp' function takes no argument. */
+#undef SETPGRP_VOID
+
+/* Define if you have the ANSI C header files. */
+#undef STDC_HEADERS
+
 /* Version number of package */
 #undef VERSION
 
+/* Define to empty if `const' does not conform to ANSI C. */
+#undef const

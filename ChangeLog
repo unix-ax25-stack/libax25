@@ -1,12 +1,14 @@
 libax25 0.0.9
-	* Updated config.guess and config.sub for hppa
 
- -- Craig Small <csmall@small.dropbear.id.au>
+	* Updated config.guess and config.sub for hppa
+	* Updated stuff for new libtool
+
+ -- Craig Small <csmall@small.dropbear.id.au>  Tue, 28 Aug 2001 10:20:18 +1000
 
 libax25 0.0.8
 	* Included ax25.h and rose.h for axlib.h Closes Debian bug #64102
 
- -- Craig Small <csmall@small.dropbear.id.au>  Thu,  5 Apr 2001 08:48:00 +1000
+ -- Craig Small <csmall@small.dropbear.id.au>  NEVER RELEASED
 
 libax25 0.0.7
 	* Added Tomi's patch to fix glibc 2.0 includes

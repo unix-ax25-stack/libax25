@@ -1,8 +1,13 @@
+libax25 0.0.7
+	* Added Tomi's patch to fix glibc 2.0 includes
+
+ -- Craig Small <csmall@small.dropbear.id.au>  Mon, 23 Aug 1999 11:23:40 +1000
+
 libax25 0.0.6
 	* Fixed pathnames.h typo
 	* Fixed instructions
 
-1999-0719 Craig Small <csmall@small.dropbear.id.au>
+ -- Craig Small <csmall@small.dropbear.id.au>  , 19 Jul 1999
 
 libax25 0.0.5
 	* More patches from Tomi for ax25io stuff
@@ -10,22 +15,22 @@ libax25 0.0.5
 	* The licence use is now obvious
 	* Added axports, rsports and nrports plus their man pages
 
-1999-07-05 Craig Small <csmall@small.dropbear.id.au>
+ -- Craig Small <csmall@small.dropbear.id.au>  ,  5 Jul 1999
 
 libax25 0.0.4
 	* Made some more functions use const args
 	* Split the libaxio library out
-1999-04-30 Craig Small <csmall@small.dropbear.id.au>
+ -- Craig Small <csmall@small.dropbear.id.au>  , 30 Apr 1999
 
 libax25 0.0.3
 	* Added Jean-Pauls ROSE patches
 	* Changed all the convert names to ntoa type names
 	* Added Tomi's axio stuff
 	* Started writing ax25.3 and rose.3
-1999-04-20 Craig Small <csmall@small.dropbear.id.au>
+ -- Craig Small <csmall@small.dropbear.id.au>  , 20 Apr 1999
 
 libax25 0.0.2
 	* Initial version from Terry Dawson's code, split from the old
 	  ax25-utils package.
-1999-04-02 Craig Small <csmall@small.dropbear.id.au>
+ -- Craig Small <csmall@small.dropbear.id.au>  ,  2 Apr 1999
 

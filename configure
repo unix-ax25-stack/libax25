@@ -533,10 +533,9 @@ fi
 
 AXLIB_MAJOR_VERSION=0
 AXLIB_MINOR_VERSION=0
-AXLIB_MICRO_VERSION=6
+AXLIB_MICRO_VERSION=7
 AXLIB_VERSION=$AXLIB_MAJOR_VERSION.$AXLIB_MINOR_VERSION.$AXLIB_MICRO_VERSION
 
-# for automake
 VERSION=$AXLIB_VERSION
 PACKAGE=libax25
 
@@ -571,7 +570,7 @@ ac_configure=$ac_aux_dir/configure # This should be Cygnus configure.
 # SVR4 /usr/ucb/install, which tries to use the nonexistent group "staff"
 # ./install, which can be erroneously created by make from ./install.sh.
 echo $ac_n "checking for a BSD compatible install""... $ac_c" 1>&6
-echo "configure:575: checking for a BSD compatible install" >&5
+echo "configure:574: checking for a BSD compatible install" >&5
 if test -z "$INSTALL"; then
 if eval "test \"`echo '$''{'ac_cv_path_install'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
@@ -624,7 +623,7 @@ test -z "$INSTALL_SCRIPT" && INSTALL_SCRIPT='${INSTALL_PROGRAM}'
 test -z "$INSTALL_DATA" && INSTALL_DATA='${INSTALL} -m 644'
 
 echo $ac_n "checking whether build environment is sane""... $ac_c" 1>&6
-echo "configure:628: checking whether build environment is sane" >&5
+echo "configure:627: checking whether build environment is sane" >&5
 # Just in case
 sleep 1
 echo timestamp > conftestfile
@@ -681,7 +680,7 @@ test "$program_suffix" != NONE &&
 test "$program_transform_name" = "" && program_transform_name="s,x,x,"
 
 echo $ac_n "checking whether ${MAKE-make} sets \${MAKE}""... $ac_c" 1>&6
-echo "configure:685: checking whether ${MAKE-make} sets \${MAKE}" >&5
+echo "configure:684: checking whether ${MAKE-make} sets \${MAKE}" >&5
 set dummy ${MAKE-make}; ac_make=`echo "$2" | sed 'y%./+-%__p_%'`
 if eval "test \"`echo '$''{'ac_cv_prog_make_${ac_make}_set'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
@@ -727,7 +726,7 @@ EOF
 
 missing_dir=`cd $ac_aux_dir && pwd`
 echo $ac_n "checking for working aclocal""... $ac_c" 1>&6
-echo "configure:731: checking for working aclocal" >&5
+echo "configure:730: checking for working aclocal" >&5
 # Run test in a subshell; some versions of sh will print an error if
 # an executable is not found, even if stderr is redirected.
 # Redirect stdin to placate older versions of autoconf.  Sigh.
@@ -740,7 +739,7 @@ else
 fi
 
 echo $ac_n "checking for working autoconf""... $ac_c" 1>&6
-echo "configure:744: checking for working autoconf" >&5
+echo "configure:743: checking for working autoconf" >&5
 # Run test in a subshell; some versions of sh will print an error if
 # an executable is not found, even if stderr is redirected.
 # Redirect stdin to placate older versions of autoconf.  Sigh.
@@ -753,7 +752,7 @@ else
 fi
 
 echo $ac_n "checking for working automake""... $ac_c" 1>&6
-echo "configure:757: checking for working automake" >&5
+echo "configure:756: checking for working automake" >&5
 # Run test in a subshell; some versions of sh will print an error if
 # an executable is not found, even if stderr is redirected.
 # Redirect stdin to placate older versions of autoconf.  Sigh.
@@ -766,7 +765,7 @@ else
 fi
 
 echo $ac_n "checking for working autoheader""... $ac_c" 1>&6
-echo "configure:770: checking for working autoheader" >&5
+echo "configure:769: checking for working autoheader" >&5
 # Run test in a subshell; some versions of sh will print an error if
 # an executable is not found, even if stderr is redirected.
 # Redirect stdin to placate older versions of autoconf.  Sigh.
@@ -779,7 +778,7 @@ else
 fi
 
 echo $ac_n "checking for working makeinfo""... $ac_c" 1>&6
-echo "configure:783: checking for working makeinfo" >&5
+echo "configure:782: checking for working makeinfo" >&5
 # Run test in a subshell; some versions of sh will print an error if
 # an executable is not found, even if stderr is redirected.
 # Redirect stdin to placate older versions of autoconf.  Sigh.
@@ -790,6 +789,7 @@ else
    MAKEINFO="$missing_dir/missing makeinfo"
    echo "$ac_t""missing" 1>&6
 fi
+
 
 
 
@@ -1891,54 +1891,93 @@ else
 fi
 done
 
-for ac_hdr in netax25/ax25.h netrom/netrom.h netrose/rose.h
-do
-ac_safe=`echo "$ac_hdr" | sed 'y%./+-%__p_%'`
-echo $ac_n "checking for $ac_hdr""... $ac_c" 1>&6
-echo "configure:1899: checking for $ac_hdr" >&5
-if eval "test \"`echo '$''{'ac_cv_header_$ac_safe'+set}'`\" = set"; then
-  echo $ac_n "(cached) $ac_c" 1>&6
-else
-  cat > conftest.$ac_ext <<EOF
-#line 1904 "configure"
+
+echo $ac_n "checking for working netax25/ax25.h header file""... $ac_c" 1>&6
+echo "configure:1897: checking for working netax25/ax25.h header file" >&5
+cat > conftest.$ac_ext <<EOF
+#line 1899 "configure"
 #include "confdefs.h"
-#include <$ac_hdr>
+#include <netax25/ax25.h>
 EOF
-ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
-{ (eval echo configure:1909: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
-ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
-if test -z "$ac_err"; then
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  egrep "ax25_fwd_struct" >/dev/null 2>&1; then
   rm -rf conftest*
-  eval "ac_cv_header_$ac_safe=yes"
+  has_ax25=yes
 else
-  echo "$ac_err" >&5
-  echo "configure: failed program was:" >&5
-  cat conftest.$ac_ext >&5
   rm -rf conftest*
-  eval "ac_cv_header_$ac_safe=no"
+  has_ax25=no
 fi
 rm -f conftest*
-fi
-if eval "test \"`echo '$ac_cv_header_'$ac_safe`\" = yes"; then
-  echo "$ac_t""yes" 1>&6
-    ac_tr_hdr=HAVE_`echo $ac_hdr | sed 'y%abcdefghijklmnopqrstuvwxyz./-%ABCDEFGHIJKLMNOPQRSTUVWXYZ___%'`
-  cat >> confdefs.h <<EOF
-#define $ac_tr_hdr 1
+
+if test "$has_ax25" = "yes" ; then
+  cat >> confdefs.h <<\EOF
+#define HAVE_NETAX25_AX25_H 1
 EOF
- 
+
+  echo "$ac_t""yes" 1>&6
 else
   echo "$ac_t""no" 1>&6
 fi
-done
+echo $ac_n "checking for working netrom/netrom.h header file""... $ac_c" 1>&6
+echo "configure:1923: checking for working netrom/netrom.h header file" >&5
+cat > conftest.$ac_ext <<EOF
+#line 1925 "configure"
+#include "confdefs.h"
+#include <netrom/netrom.h>
+EOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  egrep "unsigned int ndigis" >/dev/null 2>&1; then
+  rm -rf conftest*
+  has_netrom=yes
+else
+  rm -rf conftest*
+  has_netrom=no
+fi
+rm -f conftest*
 
+if test "$has_netrom" = "yes" ; then
+  cat >> confdefs.h <<\EOF
+#define HAVE_NETROM_NETROM_H 1
+EOF
+
+  echo "$ac_t""yes" 1>&6
+else
+  echo "$ac_t""no" 1>&6
+fi
+echo $ac_n "checking for working netrose/rose.h header file""... $ac_c" 1>&6
+echo "configure:1949: checking for working netrose/rose.h header file" >&5
+cat > conftest.$ac_ext <<EOF
+#line 1951 "configure"
+#include "confdefs.h"
+#include <netrose/rose.h>
+EOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  egrep "rose_facilities_struct" >/dev/null 2>&1; then
+  rm -rf conftest*
+  has_rose=yes
+else
+  rm -rf conftest*
+  has_rose=no
+fi
+rm -f conftest*
+
+if test "$has_rose" = "yes" ; then
+  cat >> confdefs.h <<\EOF
+#define HAVE_NETROSE_ROSE_H 1
+EOF
+
+  echo "$ac_t""yes" 1>&6
+else
+  echo "$ac_t""no" 1>&6
+fi
 
 echo $ac_n "checking for working const""... $ac_c" 1>&6
-echo "configure:1937: checking for working const" >&5
+echo "configure:1976: checking for working const" >&5
 if eval "test \"`echo '$''{'ac_cv_c_const'+set}'`\" = set"; then
   echo $ac_n "(cached) $ac_c" 1>&6
 else
   cat > conftest.$ac_ext <<EOF
-#line 1942 "configure"
+#line 1981 "configure"
 #include "confdefs.h"
 
 int main() {
@@ -1987,7 +2026,7 @@ ccp = (char const *const *) p;
 
 ; return 0; }
 EOF
-if { (eval echo configure:1991: \"$ac_compile\") 1>&5; (eval $ac_compile) 2>&5; }; then
+if { (eval echo configure:2030: \"$ac_compile\") 1>&5; (eval $ac_compile) 2>&5; }; then
   rm -rf conftest*
   ac_cv_c_const=yes
 else

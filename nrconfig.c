@@ -194,21 +194,21 @@ static int nr_config_init_port(int fd, int lineno, char *line)
 
 	for (p = nr_ports; p != NULL; p = p->Next) {
 		if (strcasecmp(name, p->Name) == 0) {
-			fprintf(stderr, "nrconfig: duplicate port name in line %d of config file\n", lineno);
+			fprintf(stderr, "nrconfig: duplicate port name %s in line %d of config file\n", name, lineno);
 			return FALSE;
 		}
 		if (strcasecmp(call, p->Call) == 0) {
-			fprintf(stderr, "nrconfig: duplicate callsign in line %d of config file\n", lineno);
+			fprintf(stderr, "nrconfig: duplicate callsign %s in line %d of config file\n", call, lineno);
 			return FALSE;
 		}
 		if (strcasecmp(alias, p->Alias) == 0) {
-			fprintf(stderr, "nrconfig: duplicate alias in line %d of config file\n", lineno);
+			fprintf(stderr, "nrconfig: duplicate alias %s in line %d of config file\n", alias, lineno);
 			return FALSE;
 		}
 	}
 
 	if (atoi(paclen) <= 0) {
-		fprintf(stderr, "nrconfig: invalid packet size in line %d of config file\n", lineno);
+		fprintf(stderr, "nrconfig: invalid packet size %s in line %d of config file\n", paclen, lineno);
 		return FALSE;
 	}
 
@@ -285,12 +285,12 @@ int nr_config_load_ports(void)
 	int fd, lineno = 1, n = 0;
 
 	if ((fp = fopen(CONF_NRPORTS_FILE, "r")) == NULL) {
-		fprintf(stderr, "nrconfig: unable to open nrports file\n");
+		fprintf(stderr, "nrconfig: unable to open nrports file %s (%s)\n", CONF_NRPORTS_FILE, strerror(errno));
 		return 0;
 	}
 
 	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		fprintf(stderr, "nrconfig: unable to open socket\n");
+		fprintf(stderr, "nrconfig: unable to open socket (%s)\n", strerror(errno));
 		fclose(fp);
 		return 0;
 	}

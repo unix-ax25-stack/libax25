@@ -175,11 +175,11 @@ static int rs_config_init_port(int fd, int lineno, char *line)
 
 	for (p = rs_ports; p != NULL; p = p->Next) {
 		if (strcasecmp(name, p->Name) == 0) {
-			fprintf(stderr, "rsconfig: duplicate port name in line %d of config file\n", lineno);
+			fprintf(stderr, "rsconfig: duplicate port name %s in line %d of config file\n", name, lineno);
 			return FALSE;
 		}
 		if (strcasecmp(addr, p->Addr) == 0) {
-			fprintf(stderr, "rsconfig: duplicate address in line %d of config file\n", lineno);
+			fprintf(stderr, "rsconfig: duplicate address %s in line %d of config file\n", addr, lineno);
 			return FALSE;
 		}
 	}
@@ -252,12 +252,12 @@ int rs_config_load_ports(void)
 	int fd, lineno = 1, n = 0;
 
 	if ((fp = fopen(CONF_RSPORTS_FILE, "r")) == NULL) {
-		fprintf(stderr, "rsconfig: unable to open rsports file\n");
+		fprintf(stderr, "rsconfig: unable to open rsports file %s (%s)\n", CONF_RSPORTS_FILE, strerror(errno));
 		return 0;
 	}
 
 	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		fprintf(stderr, "rsconfig: unable to open socket\n");
+		fprintf(stderr, "rsconfig: unable to open socket (%s)\n", strerror(errno));
 		fclose(fp);
 		return 0;
 	}

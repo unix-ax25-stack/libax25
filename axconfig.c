@@ -208,27 +208,27 @@ static int ax25_config_init_port(int fd, int lineno, char *line)
 
 	for (p = ax25_ports; p != NULL; p = p->Next) {
 		if (strcasecmp(name, p->Name) == 0) {
-			fprintf(stderr, "axconfig: duplicate port name in line %d of axports file\n", lineno);
+			fprintf(stderr, "axconfig: duplicate port name %s in line %d of axports file\n", name, lineno);
 			return FALSE;
 		}
 		if (strcasecmp(call, p->Call) == 0) {
-			fprintf(stderr, "axconfig: duplicate callsign in line %d of axports file\n", lineno);
+			fprintf(stderr, "axconfig: duplicate callsign %s in line %d of axports file\n", call, lineno);
 			return FALSE;
 		}
 	}
 
 	if (atoi(baud) < 0) {
-		fprintf(stderr, "axconfig: invalid baud rate setting in line %d of axports file\n", lineno);
+		fprintf(stderr, "axconfig: invalid baud rate setting %s in line %d of axports file\n", baud, lineno);
 		return FALSE;
 	}
 
 	if (atoi(paclen) <= 0) {
-		fprintf(stderr, "axconfig: invalid packet size setting in line %d of axports file\n", lineno);
+		fprintf(stderr, "axconfig: invalid packet size setting %s in line %d of axports file\n", paclen, lineno);
 		return FALSE;
 	}
 
 	if (atoi(window) <= 0) {
-		fprintf(stderr, "axconfig: invalid window size setting in line %d of axports file\n", lineno);
+		fprintf(stderr, "axconfig: invalid window size setting %s in line %d of axports file\n", window, lineno);
 		return FALSE;
 	}
 
@@ -305,12 +305,12 @@ int ax25_config_load_ports(void)
 	int fd, lineno = 1, n = 0;
 
 	if ((fp = fopen(CONF_AXPORTS_FILE, "r")) == NULL) {
-		fprintf(stderr, "axconfig: unable to open axports file\n");
+		fprintf(stderr, "axconfig: unable to open axports file %s (%s)\n", CONF_AXPORTS_FILE, strerror(errno));
 		return 0;
 	}
 
 	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		fprintf(stderr, "axconfig: unable to open socket\n");
+		fprintf(stderr, "axconfig: unable to open socket (%s)\n", strerror(errno));
 		fclose(fp);
 		return 0;
 	}

@@ -50,8 +50,8 @@
 #define HAVE_ZLIB_H 1
 
 /* Name of package */
-#define PACKAGE "ax25-lib"
+#define PACKAGE "libax25"
 
 /* Version number of package */
-#define VERSION "0.0.3"
+#define VERSION "0.0.4"
 

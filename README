@@ -1,13 +1,8 @@
 AX25 Library
 ============
 
-THIS LIBRARY IS ALPHA CODE AND IS ONLY BEEN RELEASE FOR DEVELOPERS FOR
-DEBUGGING.
-
-This means if you are only installing this because it is the latest
-and greatest and you don't understand how to diagnose bugs, then you
-should probably not run it and go back to the ax25-utils-2*
-packages.
+This library set is still really under test but is now release for
+general use.
 
 You are supposed to use glibc 2.1 (libc6 unstable libraries) for this
 package.  I have attempted to cater for glibc 2.0 users here.

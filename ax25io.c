@@ -9,6 +9,10 @@
 #include "config.h"
 #include "ax25io.h"
 
+static inline int send_iac_iac(ax25io *p);
+static inline int send_iac_cmd(ax25io *p, char cmd, char opt);
+static inline int send_linemode(ax25io *p);
+
 static ax25io *Iolist = NULL;
 
 /* --------------------------------------------------------------------- */
@@ -17,10 +21,10 @@ static ax25io *Iolist = NULL;
 #include <zlib.h>
 
 struct compr_s {
-	int z_error;		/* "(de)compression error" flag		*/
-	unsigned char char_buf;	/* temporary character buffer		*/
-	z_stream zin;		/* decompressor structure		*/
-	z_stream zout;		/* compressor structure			*/
+	int z_error;		/* "(de)compression error" flag         */
+	unsigned char char_buf;	/* temporary character buffer           */
+	z_stream zin;		/* decompressor structure               */
+	z_stream zout;		/* compressor structure                 */
 };
 #endif
 
@@ -33,10 +37,14 @@ ax25io *axio_init(int in, int out, int paclen, char *eol)
 	if ((new = calloc(1, sizeof(ax25io))) == NULL)
 		return NULL;
 
-	new->ifd	= in;
-	new->ofd	= out;
-	new->eolmode	= EOLMODE_TEXT;
-	new->paclen	= paclen;
+	if (paclen > AXBUFLEN)
+		paclen = AXBUFLEN;
+
+	new->ifd = in;
+	new->ofd = out;
+	new->eolmode = EOLMODE_TEXT;
+	new->paclen = paclen;
+	new->gbuf_usage = 0;
 
 	strncpy(new->eol, eol, 3);
 	new->eol[3] = 0;
@@ -94,7 +102,7 @@ int axio_compr(ax25io *p, int flag)
 	}
 	return 0;
 #endif
-	/*ax25_errno = AX25IO_NO_Z_SUPPORT;*/
+	/* ax25_errno = AX25IO_NO_Z_SUPPORT; */
 	return -1;
 }
 
@@ -133,39 +141,28 @@ int axio_tnmode(ax25io *p, int newmode)
 
 static int flush_obuf(ax25io *p)
 {
-	int ret;
-	int count=0;
+	int ret, len;
 
 	if (p->optr == 0)
 		return 0;
 
-	do {
-		if ((ret = write(p->ofd, p->obuf, p->optr < p->paclen ? p->optr : p->paclen)) < 0)
-			return -1;
+	len = p->optr < p->paclen ? p->optr : p->paclen;
 
-		if (ret < p->optr)
-			memmove(p->obuf, &p->obuf[ret], p->optr - ret);
-		p->optr -= ret;
-		count += ret;
+	if ((ret = write(p->ofd, p->obuf, len)) < 0)
+		return -1;
 
-		/* If buffer full block until there is room */
-		if (p->optr>=AXBUFLEN) {
-			fd_set fdset;
+	if (ret && ret < p->optr)
+		memmove(p->obuf, &p->obuf[ret], p->optr - ret);
 
-			FD_ZERO(&fdset);
-			FD_SET(p->ofd, &fdset);
-			if (select(p->ofd+1, NULL, &fdset, NULL, NULL)<0)
-				return -1;
-		}
-	} while (p->optr>=AXBUFLEN);
+	p->optr -= ret;
 
-	return count;
+	return ret;
 }
 
 int axio_flush(ax25io *p)
 {
-	int flushed=0;
-	fd_set fdset;
+	int flushed = 0;
+	int ret;
 
 #ifdef HAVE_ZLIB_H
 	if (p->zptr) {
@@ -227,18 +224,23 @@ int axio_flush(ax25io *p)
 #endif
 
 	while (p->optr) {
-		FD_ZERO(&fdset);
-		FD_SET(p->ofd, &fdset);
-		if (select(p->ofd+1, NULL, &fdset, NULL, NULL)<0)
+		/* Return on error or if zero bytes written */
+		if ((ret = flush_obuf(p)) <= 0)
 			return -1;
-		flushed+=flush_obuf(p);
+		flushed += ret;
 	}
 
 	return flushed;
 }
 
-static int rsendchar(unsigned char c, ax25io *p)
+static int rsend(unsigned char *c, int len, ax25io *p)
 {
+	/* Don't go further until there is space */
+	if (p->paclen <= p->optr) {
+		if (flush_obuf(p) <= 0)
+			return -1;
+	}
+
 #ifdef HAVE_ZLIB_H
 	if (p->zptr) {
 		struct compr_s *z = (struct compr_s *) p->zptr;
@@ -255,9 +257,8 @@ static int rsendchar(unsigned char c, ax25io *p)
 		/*
 		 * One new character to input.
 		 */
-		z->char_buf = c;
-		z->zout.next_in = &z->char_buf;
-		z->zout.avail_in = 1;
+		z->zout.next_in = c;
+		z->zout.avail_in = len;
 		/*
 		 * Now loop until deflate returns with avail_out != 0
 		 */
@@ -298,17 +299,24 @@ static int rsendchar(unsigned char c, ax25io *p)
 
 		} while (z->zout.avail_out == 0);
 
-		return c;
+		return len;
 	}
 #endif
 
-	p->obuf[p->optr++] = c;
+	if (p->optr + len < AXBUFLEN) {
+		memcpy(p->obuf + p->optr, c, len);
+		p->optr += len;
+	} else {
+		errno = EAGAIN;
+		return -1;
+	}
 
 	if (p->optr >= p->paclen && flush_obuf(p) < 0)
 		return -1;
 
-	return c;
+	return len;
 }
+
 
 /* --------------------------------------------------------------------- */
 
@@ -423,32 +431,23 @@ static int rrecvchar(ax25io *p)
 
 int axio_putc(int c, ax25io *p)
 {
-	char *cp;
+	char cp;
 
-	if (p->telnetmode && c == IAC) {
-		if (rsendchar(IAC, p) == -1)
-			return -1;
-		return rsendchar(IAC, p);
-	}
+	if (p->telnetmode && c == IAC)
+		return send_iac_iac(p);
 
 	if (c == INTERNAL_EOL) {
 		if (p->eolmode == EOLMODE_BINARY)
-			return rsendchar('\n', p);
+			return rsend("\n", 1, p);
 		else
-			for (cp = p->eol; *cp; cp++)
-				if (rsendchar(*cp, p) == -1)
-					return -1;
-		return 1;
+			return rsend(p->eol, strlen(p->eol), p);
 	}
 
-	if (p->eolmode == EOLMODE_TEXT && c == '\n') {
-		for (cp = p->eol; *cp; cp++)
-			if (rsendchar(*cp, p) == -1)
-				return -1;
-		return 1;
-	}
+	if (p->eolmode == EOLMODE_TEXT && c == '\n')
+		return rsend(p->eol, strlen(p->eol), p);
 
-	return rsendchar(c & 0xff, p);
+	cp = c & 0xff;
+	return rsend(&cp, 1, p);
 }
 
 int axio_getc(ax25io *p)
@@ -456,7 +455,7 @@ int axio_getc(ax25io *p)
 	int c, opt;
 	char *cp;
 
-	opt = 0; /* silence warning */
+	opt = 0;		/* silence warning */
 
 	if ((c = rrecvchar(p)) == -1)
 		return -1;
@@ -468,7 +467,7 @@ int axio_getc(ax25io *p)
 		if (c > 249 && c < 255 && (opt = rrecvchar(p)) == -1)
 			return -1;
 
-		switch(c) {
+		switch (c) {
 		case IP:
 		case ABORT:
 		case xEOF:
@@ -500,26 +499,19 @@ int axio_getc(ax25io *p)
 			 * ECHO and TRAPSIG).
 			 */
 			if (opt == TELOPT_LINEMODE && p->tn_linemode) {
-				rsendchar(IAC,                      p);
-				rsendchar(SB,                       p);
-				rsendchar(TELOPT_LINEMODE,          p);
-				rsendchar(LM_MODE,                  p);
-				rsendchar(MODE_EDIT | MODE_TRAPSIG, p);
-				rsendchar(IAC,                      p);
-				rsendchar(SE,                       p);
+				if (send_linemode(p) < 0)
+					return -1;
 			} else {
-				rsendchar(IAC,  p);
-				rsendchar(DONT, p);
-				rsendchar(opt,  p);
+				if (send_iac_cmd(p, DONT, opt) < 0)
+					return -1;
 			}
 			axio_flush(p);
 			break;
 		case DO:
 			switch (opt) {
 			case TELOPT_SGA:
-				rsendchar(IAC,  p);
-				rsendchar(WILL, p);
-				rsendchar(opt,  p);
+				if (send_iac_cmd(p, WILL, opt) < 0)
+					return -1;
 				axio_flush(p);
 				break;
 			case TELOPT_ECHO:
@@ -531,9 +523,8 @@ int axio_getc(ax25io *p)
 					break;
 				/* Note fall-through */
 			default:
-				rsendchar(IAC,  p);
-				rsendchar(WONT, p);
-				rsendchar(opt,  p);
+				if (send_iac_cmd(p, WONT, opt) < 0)
+					return -1;
 				axio_flush(p);
 				break;
 			}
@@ -574,43 +565,55 @@ int axio_getc(ax25io *p)
 
 /* --------------------------------------------------------------------- */
 
-char *axio_gets(char *buf, int buflen, ax25io *p)
+int axio_gets(char *buf, int buflen, ax25io *p)
 {
 	int c, len = 0;
 
 	while (len < (buflen - 1)) {
 		c = axio_getc(p);
 		if (c == -1) {
-			if (len > 0) {
-				buf[len] = 0;
-				return buf;
-			} else
-				return NULL;
+			return -len;
 		}
 		/* NUL also interpreted as EOL */
 		if (c == '\n' || c == '\r' || c == 0) {
 			buf[len] = 0;
-			return buf;
+			errno = 0;
+			return len;
 		}
 		buf[len++] = c;
 	}
 	buf[buflen - 1] = 0;
-	return buf;
+	errno = 0;
+	return len;
 }
 
 char *axio_getline(ax25io *p)
 {
-	static char buf[AXBUFLEN];
+	int ret;
 
-	return axio_gets(buf, AXBUFLEN, p);
+	ret = axio_gets(p->gbuf + p->gbuf_usage, AXBUFLEN - p->gbuf_usage, p);
+	if (ret > 0 || (ret == 0 && errno == 0)) {
+		p->gbuf_usage = 0;
+		return p->gbuf;
+	}
+	p->gbuf_usage += ret;
+	return NULL;
 }
 
 int axio_puts(const char *s, ax25io *p)
 {
+	int count=0;
+
 	while (*s)
-		if (axio_putc(*s++, p) == -1)
-			return -1;
-	return 0;
+		if (axio_putc(*s++, p) == -1) {
+			if (errno != EAGAIN)
+				return -1;
+			else
+				break;
+		} else {
+			count++;
+		}
+	return count;
 }
 
 /* --------------------------------------------------------------------- */
@@ -640,29 +643,57 @@ int axio_printf(ax25io *p, const char *fmt, ...)
 
 /* --------------------------------------------------------------------- */
 
-void axio_tn_do_linemode(ax25io *p)
+int axio_tn_do_linemode(ax25io *p)
 {
-	rsendchar(IAC,             p);
-	rsendchar(DO,              p);
-	rsendchar(TELOPT_LINEMODE, p);
+	if (send_iac_cmd(p, DO, TELOPT_LINEMODE) < 0)
+		return -1;
 	p->tn_linemode = 1;
+	return 0;
 }
 
-void axio_tn_will_echo(ax25io *p)
+int axio_tn_will_echo(ax25io *p)
 {
-	rsendchar(IAC,         p);
-	rsendchar(WILL,        p);
-	rsendchar(TELOPT_ECHO, p);
+	if (send_iac_cmd(p, WILL, TELOPT_ECHO) < 0)
+		return -1;
 	p->tn_echo = 1;
+	return 0;
 }
 
-void axio_tn_wont_echo(ax25io *p)
+int axio_tn_wont_echo(ax25io *p)
 {
-	rsendchar(IAC,         p);
-	rsendchar(WONT,        p);
-	rsendchar(TELOPT_ECHO, p);
+	if (send_iac_cmd(p, WONT, TELOPT_ECHO) < 0)
+		return -1;
 	p->tn_echo = 0;
+	return 0;
 }
 
 /* --------------------------------------------------------------------- */
+
+static inline int send_iac_iac(ax25io *p)
+{
+	char buf[2] = { IAC, IAC };
+
+	return rsend(buf, 2, p);
+}
+
+static inline int send_iac_cmd(ax25io *p, char cmd, char opt)
+{
+	char buf[3];
+
+	buf[0] = IAC;
+	buf[1] = cmd;
+	buf[2] = opt;
+
+	return rsend(buf, 3, p);
+}
+
+static inline int send_linemode(ax25io *p)
+{
+	char buf[7] = { IAC, SB, TELOPT_LINEMODE, LM_MODE, MODE_EDIT | MODE_TRAPSIG, IAC, SE };
+
+	return rsend(buf, 7, p);
+}
+
+/* --------------------------------------------------------------------- */
+
 

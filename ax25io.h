@@ -33,6 +33,8 @@ typedef struct ax25io_s {
 	int paclen;		/* paclen                               */
 	unsigned char ibuf[AXBUFLEN];	/* input buffer			*/
 	unsigned char obuf[AXBUFLEN];	/* output buffer		*/
+	unsigned char gbuf[AXBUFLEN];	/* getline buffer		*/
+	int gbuf_usage;		/* getline buffer usage			*/
 	int iptr;		/* input pointer                        */
 	int optr;		/* output pointer                       */
 	void *zptr;		/* pointer to the compression struct	*/
@@ -73,13 +75,13 @@ extern int axio_getc(ax25io *);
 extern int axio_putc(int, ax25io *);
 
 extern char *axio_getline(ax25io *);
-extern char *axio_gets(char *, int, ax25io *);
+extern int axio_gets(char *, int, ax25io *);
 extern int axio_puts(const char *, ax25io *);
 
 extern int axio_printf(ax25io *, const char *, ...);
 
-extern void axio_tn_do_linemode(ax25io *);
-extern void axio_tn_will_echo(ax25io *);
-extern void axio_tn_wont_echo(ax25io *);
+extern int axio_tn_do_linemode(ax25io *);
+extern int axio_tn_will_echo(ax25io *);
+extern int axio_tn_wont_echo(ax25io *);
 
-#endif _AX25IO_H
+#endif		/* _AX25IO_H */

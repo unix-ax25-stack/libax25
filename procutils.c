@@ -89,7 +89,6 @@ struct proc_ax25 *read_proc_ax25(void)
 	char buffer[256], *cp;
 	struct proc_ax25 *p;
 	struct proc_ax25 *list = NULL;
-	int i;
 
 	errno = 0;
 
@@ -669,7 +668,6 @@ struct proc_nr_nodes *find_node(char *addr, struct proc_nr_nodes *nodes)
 {
 	static struct proc_nr_nodes n;
 	struct proc_nr_nodes *p, *list;
-        char *cp;
 
 	strip_zero_ssid(addr);
 	list = nodes ? nodes : read_proc_nr_nodes();

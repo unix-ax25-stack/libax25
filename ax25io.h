@@ -1,9 +1,23 @@
+/* AX25IO - Library for io manuipulation for AX.25 programs
+ * Copyright (C) 1998 Tomi Manninen
+ * 
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 02111-1307, USA.
+ */
 #ifndef _AX25IO_H
 #define _AX25IO_H
-
-#ifdef HAVE_ZLIB_H
-#include <zlib.h>
-#endif
 
 #define AXBUFLEN	4096
 
@@ -21,15 +35,8 @@ typedef struct ax25io_s {
 	unsigned char obuf[AXBUFLEN];	/* output buffer		*/
 	int iptr;		/* input pointer                        */
 	int optr;		/* output pointer                       */
- 
-#ifdef HAVE_ZLIB_H
-	int compr;		/* compression on/off                   */
-	int z_error;		/* "(de)compression error" flag         */
-	unsigned char char_buf;	/* temporary character buffer           */
-	z_stream zin;		/* decompressor structure               */
-	z_stream zout;		/* compressor structure                 */
-#endif
- 
+	void *zptr;		/* pointer to the compression struct	*/
+
         struct ax25io_s *next;	/* linked list pointer			*/
 } ax25io;
 

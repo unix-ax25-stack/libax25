@@ -23,8 +23,8 @@
 #else
 #include "kernel_rose.h"
 #endif
-#include "pathnames.h"
 #include "axlib.h"
+#include "pathnames.h"
 #include "axconfig.h"
 
 typedef struct _axport

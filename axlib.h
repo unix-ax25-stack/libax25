@@ -1,3 +1,22 @@
+/* LIBAX25 - Library for AX.25 programs
+ * Copyright (C) 1997-1999 Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat
+ * and Alan Cox.
+ * 
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 02111-1307, USA.
+ */
 /*
  * Callsign conversion functions, converts callsigns into network bit
  * shifted format and vica versa.
@@ -21,7 +40,7 @@ extern "C" {
 /*
  * Libax25 version.
  */
-extern char version[];
+extern char libax25_version[];
 
 /*
  * The special "null" address, used as the default callsign in routing and
@@ -97,13 +116,14 @@ extern int ax25_validate(const char *);
  * Converts the giver string to upper case. It returns a pointer to the
  * original string.
  */
-extern char *strupr(const char *);
+extern char *strupr(char *);
 
 /*
  * Converts the giver string to lower case. It returns a pointer to the
  * original string.
  */
-extern char *strlwr(const char *);
+extern char *strlwr(char *);
+
 
 #ifdef __cplusplus
 }

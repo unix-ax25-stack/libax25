@@ -533,7 +533,7 @@ fi
 
 AXLIB_MAJOR_VERSION=0
 AXLIB_MINOR_VERSION=0
-AXLIB_MICRO_VERSION=4
+AXLIB_MICRO_VERSION=5
 AXLIB_VERSION=$AXLIB_MAJOR_VERSION.$AXLIB_MINOR_VERSION.$AXLIB_MICRO_VERSION
 
 # for automake
@@ -2007,6 +2007,12 @@ EOF
 
 fi
 
+
+if test "x$GCC" = "xyes"; then
+  if test -z "`echo "$CFLAGS" | grep "\-Wall" 2> /dev/null`" ; then
+    CFLAGS="$CFLAGS -Wall"
+  fi
+fi
 
 trap '' 1 2 15
 cat > confcache <<\EOF

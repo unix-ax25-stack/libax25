@@ -1,16 +1,25 @@
-1999-04-30 Craig Small <csmall@small.dropbear.id.au>
+libax25 0.0.5
+	* More patches from Tomi for ax25io stuff
+	* Cleaner way of naming config files
+	* The licence use is now obvious
+	* Added axports, rsports and nrports plus their man pages
+
+1999-07-05 Craig Small <csmall@small.dropbear.id.au>
+
+libax25 0.0.4
 	* Made some more functions use const args
 	* Split the libaxio library out
+1999-04-30 Craig Small <csmall@small.dropbear.id.au>
 
-1999-04-20 Craig Small <csmall@small.dropbear.id.au>
-
+libax25 0.0.3
 	* Added Jean-Pauls ROSE patches
 	* Changed all the convert names to ntoa type names
 	* Added Tomi's axio stuff
 	* Started writing ax25.3 and rose.3
+1999-04-20 Craig Small <csmall@small.dropbear.id.au>
 
-1999-04-02 Craig Small <csmall@small.dropbear.id.au>
-
+libax25 0.0.2
 	* Initial version from Terry Dawson's code, split from the old
 	  ax25-utils package.
+1999-04-02 Craig Small <csmall@small.dropbear.id.au>
 

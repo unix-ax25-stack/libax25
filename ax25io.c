@@ -7,14 +7,22 @@
 #include <arpa/telnet.h>
 
 #include "config.h"
-
-#ifdef HAVE_ZLIB_H
-#include <zlib.h>
-#endif
-
 #include "ax25io.h"
 
 static ax25io *Iolist = NULL;
+
+/* --------------------------------------------------------------------- */
+
+#ifdef HAVE_ZLIB_H
+#include <zlib.h>
+
+struct compr_s {
+	int z_error;		/* "(de)compression error" flag		*/
+	unsigned char char_buf;	/* temporary character buffer		*/
+	z_stream zin;		/* decompressor structure		*/
+	z_stream zout;		/* compressor structure			*/
+};
+#endif
 
 /* --------------------------------------------------------------------- */
 
@@ -44,9 +52,10 @@ void axio_end(ax25io *p)
 	axio_flush(p);
 
 #ifdef HAVE_ZLIB_H
-	if (p->compr) {
-		deflateEnd(&p->zout);
-		inflateEnd(&p->zin);
+	if (p->zptr) {
+		struct compr_s *z = (struct compr_s *) p->zptr;
+		deflateEnd(&z->zout);
+		inflateEnd(&z->zin);
 	}
 #endif
 	close(p->ifd);
@@ -73,14 +82,19 @@ int axio_compr(ax25io *p, int flag)
 {
 #ifdef HAVE_ZLIB_H
 	if (flag) {
-		if (inflateInit(&p->zin) != Z_OK)
+		struct compr_s *z = calloc(1, sizeof(struct compr_s));
+
+		if (!z)
 			return -1;
-		if (deflateInit(&p->zout, Z_BEST_COMPRESSION) != Z_OK)
+		p->zptr = z;
+		if (inflateInit(&z->zin) != Z_OK)
 			return -1;
-		p->compr = 1;
+		if (deflateInit(&z->zout, Z_BEST_COMPRESSION) != Z_OK)
+			return -1;
 	}
 	return 0;
 #endif
+	/*ax25_errno = AX25IO_NO_Z_SUPPORT;*/
 	return -1;
 }
 
@@ -139,29 +153,30 @@ static int flush_obuf(ax25io *p)
 int axio_flush(ax25io *p)
 {
 #ifdef HAVE_ZLIB_H
-	if (p->compr) {
+	if (p->zptr) {
+		struct compr_s *z = (struct compr_s *) p->zptr;
 		int ret;
 
 		/*
 		 * Fail immediately if there has been an error in
 		 * compression or decompression.
 		 */
-		if (p->z_error) {
-			errno = p->z_error;
+		if (z->z_error) {
+			errno = z->z_error;
 			return -1;
 		}
 		/*
 		 * No new input, just flush the compression block.
 		 */
-		p->zout.next_in = NULL;
-		p->zout.avail_in = 0;
+		z->zout.next_in = NULL;
+		z->zout.avail_in = 0;
 		do {
 			/* Adjust the output pointers */
-			p->zout.next_out = p->obuf + p->optr;
-			p->zout.avail_out = p->paclen - p->optr;
+			z->zout.next_out = p->obuf + p->optr;
+			z->zout.avail_out = p->paclen - p->optr;
 
-			ret = deflate(&p->zout, Z_PARTIAL_FLUSH);
-			p->optr = p->paclen - p->zout.avail_out;
+			ret = deflate(&z->zout, Z_PARTIAL_FLUSH);
+			p->optr = p->paclen - z->zout.avail_out;
 
 			switch (ret) {
 			case Z_OK:
@@ -175,24 +190,24 @@ int axio_flush(ax25io *p)
 				break;
 			case Z_STREAM_END:
 				/* What ??? */
-				errno = p->z_error = ZERR_STREAM_END;
+				errno = z->z_error = ZERR_STREAM_END;
 				return -1;
 			case Z_STREAM_ERROR:
 				/* Something strange */
-				errno = p->z_error = ZERR_STREAM_ERROR;
+				errno = z->z_error = ZERR_STREAM_ERROR;
 				return -1;
 			default:
-				errno = p->z_error = ZERR_UNKNOWN;
+				errno = z->z_error = ZERR_UNKNOWN;
 				return -1;
 			}
 			/*
 			 * If output buffer is full, flush it to make room
 			 * for more compressed data.
 			 */
-			if (p->zout.avail_out == 0 && flush_obuf(p) < 0)
+			if (z->zout.avail_out == 0 && flush_obuf(p) < 0)
 				return -1;
 
-		} while (p->zout.avail_out == 0);
+		} while (z->zout.avail_out == 0);
 	}
 #endif
 
@@ -202,33 +217,34 @@ int axio_flush(ax25io *p)
 static int rsendchar(unsigned char c, ax25io *p)
 {
 #ifdef HAVE_ZLIB_H
-	if (p->compr) {
+	if (p->zptr) {
+		struct compr_s *z = (struct compr_s *) p->zptr;
 		int ret;
 
 		/*
 		 * Fail immediately if there has been an error in
 		 * compression or decompression.
 		 */
-		if (p->z_error) {
-			errno = p->z_error;
+		if (z->z_error) {
+			errno = z->z_error;
 			return -1;
 		}
 		/*
 		 * One new character to input.
 		 */
-		p->char_buf = c;
-		p->zout.next_in = &p->char_buf;
-		p->zout.avail_in = 1;
+		z->char_buf = c;
+		z->zout.next_in = &z->char_buf;
+		z->zout.avail_in = 1;
 		/*
 		 * Now loop until deflate returns with avail_out != 0
 		 */
 		do {
 			/* Adjust the output pointers */
-			p->zout.next_out = p->obuf + p->optr;
-			p->zout.avail_out = p->paclen - p->optr;
+			z->zout.next_out = p->obuf + p->optr;
+			z->zout.avail_out = p->paclen - p->optr;
 
-			ret = deflate(&p->zout, Z_NO_FLUSH);
-			p->optr = p->paclen - p->zout.avail_out;
+			ret = deflate(&z->zout, Z_NO_FLUSH);
+			p->optr = p->paclen - z->zout.avail_out;
 
 			switch (ret) {
 			case Z_OK:
@@ -236,28 +252,28 @@ static int rsendchar(unsigned char c, ax25io *p)
 				break;
 			case Z_STREAM_END:
 				/* What ??? */
-				errno = p->z_error = ZERR_STREAM_END;
+				errno = z->z_error = ZERR_STREAM_END;
 				return -1;
 			case Z_STREAM_ERROR:
 				/* Something strange */
-				errno = p->z_error = ZERR_STREAM_ERROR;
+				errno = z->z_error = ZERR_STREAM_ERROR;
 				return -1;
 			case Z_BUF_ERROR:
 				/* Progress not possible (should be) */
-				errno = p->z_error = ZERR_BUF_ERROR;
+				errno = z->z_error = ZERR_BUF_ERROR;
 				return -1;
 			default:
-				errno = p->z_error = ZERR_UNKNOWN;
+				errno = z->z_error = ZERR_UNKNOWN;
 				return -1;
 			}
 			/*
 			 * If the output buffer is full, flush it to make
 			 * room for more compressed data.
 			 */
-			if (p->zout.avail_out == 0 && flush_obuf(p) < 0)
+			if (z->zout.avail_out == 0 && flush_obuf(p) < 0)
 				return -1;
 
-		} while (p->zout.avail_out == 0);
+		} while (z->zout.avail_out == 0);
 
 		return c;
 	}
@@ -294,28 +310,29 @@ static int recv_ibuf(ax25io *p)
 static int rrecvchar(ax25io *p)
 {
 #ifdef HAVE_ZLIB_H
-	if (p->compr) {
+	if (p->zptr) {
+		struct compr_s *z = (struct compr_s *) p->zptr;
 		int ret;
 
 		/*
 		 * Fail immediately if there has been an error in
 		 * compression or decompression.
 		 */
-		if (p->z_error) {
-			errno = p->z_error;
+		if (z->z_error) {
+			errno = z->z_error;
 			return -1;
 		}
 		for (;;) {
 			/* Adjust the input pointers */
-			p->zin.next_in = p->ibuf + p->iptr;
-			p->zin.avail_in = p->size - p->iptr;
+			z->zin.next_in = p->ibuf + p->iptr;
+			z->zin.avail_in = p->size - p->iptr;
 
 			/* Room for one output character */
-			p->zin.next_out = &p->char_buf;
-			p->zin.avail_out = 1;
+			z->zin.next_out = &z->char_buf;
+			z->zin.avail_out = 1;
 
-			ret = inflate(&p->zin, Z_PARTIAL_FLUSH);
-			p->iptr = p->size - p->zin.avail_in;
+			ret = inflate(&z->zin, Z_PARTIAL_FLUSH);
+			p->iptr = p->size - z->zin.avail_in;
 
 			switch (ret) {
 			case Z_OK:
@@ -323,8 +340,8 @@ static int rrecvchar(ax25io *p)
 				 * Progress made! Return if there is
 				 * something to be returned.
 				 */
-				if (p->zin.avail_out == 0)
-					return p->char_buf;
+				if (z->zin.avail_out == 0)
+					return z->char_buf;
 				break;
 			case Z_BUF_ERROR:
 				/*
@@ -334,41 +351,41 @@ static int rrecvchar(ax25io *p)
 				break;
 			case Z_STREAM_END:
 				/* What ??? */
-				errno = p->z_error = ZERR_STREAM_END;
+				errno = z->z_error = ZERR_STREAM_END;
 				return -1;
 			case Z_STREAM_ERROR:
 				/* Something weird */
-				errno = p->z_error = ZERR_STREAM_ERROR;
+				errno = z->z_error = ZERR_STREAM_ERROR;
 				return -1;
 			case Z_DATA_ERROR:
 				/* Compression protocol error */
-				errno = p->z_error = ZERR_DATA_ERROR;
+				errno = z->z_error = ZERR_DATA_ERROR;
 				return -1;
 			case Z_MEM_ERROR:
 				/* Not enough memory */
-				errno = p->z_error = ZERR_MEM_ERROR;
+				errno = z->z_error = ZERR_MEM_ERROR;
 				return -1;
 			default:
-				errno = p->z_error = ZERR_UNKNOWN;
+				errno = z->z_error = ZERR_UNKNOWN;
 				return -1;
 			}
 			/*
 			 * Our only hope is that inflate has consumed all
 			 * input and we can get some more.
 			 */
-			if (p->zin.avail_in == 0) {
+			if (z->zin.avail_in == 0) {
 				if (recv_ibuf(p) < 0)
 					return -1;
 			} else {
 				/* inflate didn't consume all input ??? */
-				errno = p->z_error = ZERR_UNKNOWN;
+				errno = z->z_error = ZERR_UNKNOWN;
 				return -1;
 			}
 		}
 		/*
 		 * We should never fall through here ???
 		 */
-		errno = p->z_error = ZERR_UNKNOWN;
+		errno = z->z_error = ZERR_UNKNOWN;
 		return -1;
 	}
 #endif

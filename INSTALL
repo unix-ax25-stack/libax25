@@ -11,7 +11,14 @@ To build it you type:
 	make
 	make install
 
-By default, it will install the files in /usr/local.  To change this
-so that binaries go in  /usr and the conf files go in /etc 
-type 'make install prefix=/usr sysconfdir=/etc' 
+If you want to put the files in the "normal" places, type:
+	./configure --exec_prefix=/usr --prefix=
+	make 
+	make install
+	
+That will put the binaries in /usr/{s}bin and the config files in
+/etc/ax25
+
+If you want to install the example config files
+	make installconf
 

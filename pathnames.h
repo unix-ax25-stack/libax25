@@ -1,6 +1,13 @@
-#define	CONF_AXPORTS_FILE	"/etc/ax25/axports"
-#define	CONF_NRPORTS_FILE	"/etc/ax25/nrports"
-#define	CONF_RSPORTS_FILE	"/etc/ax25/rsports"
+/*
+ * pathnames.h : Paths that are used by the library
+ */
+
+/*
+ * AX25_SYSCONFDIR is defined in the Makefile!!
+ */
+#define	CONF_AXPORTS_FILE	AX25_SYSCONFDIR"axports"
+#define	CONF_NRPORTS_FILE	AX25_SYSCONFDIR"rports"
+#define	CONF_RSPORTS_FILE	AX25_SYSCONFDIR"rsports"
 
 #define	PROC_AX25_FILE		"/proc/net/ax25"
 #define	PROC_AX25_ROUTE_FILE	"/proc/net/ax25_route"

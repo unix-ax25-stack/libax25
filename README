@@ -7,6 +7,9 @@ general use.
 You are supposed to use glibc 2.1 (libc6 unstable libraries) for this
 package.  I have attempted to cater for glibc 2.0 users here.
 
+This library is copyright by the respective authors (see AUTHORS for a list)
+and licensed under the GNU LGPL (see COPYING for more information).
+
   - Craig Small <csmall@small.dropbear.id.au>
 
 

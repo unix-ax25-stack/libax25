@@ -77,7 +77,10 @@ lib_LTLIBRARIES = libax25.la libax25io.la
 libax25includedir = $(includedir)/netax25
 libax25ioincludedir = $(includedir)/netax25
 
-libax25include_HEADERS =  	axlib.h			axconfig.h		nrconfig.h		rsconfig.h		daemon.h		ttyutils.h		procutils.h		kernel_ax25.h		kernel_rose.h		mheard.h
+INCLUDES = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" 	   -DAX25_LOCALSTATEDIR=\""$(localstatedir)/ax25/"\" 
+
+
+libax25include_HEADERS =  	axlib.h			axconfig.h		nrconfig.h		rsconfig.h		daemon.h		ttyutils.h		procutils.h		kernel_ax25.h		kernel_rose.h		kernel_netrom.h		mheard.h	
 
 
 libax25ioinclude_HEADERS =  	ax25io.h
@@ -89,9 +92,16 @@ libax25_la_SOURCES =  	axconfig.c 	axconfig.h 	axlib.h 	axutils.c 	config.h 	dae
 libax25io_la_SOURCES =  	ax25io.c 	ax25io.h 
 
 
-man_MANS = ax25.3 rose.3
+man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
 
-EXTRA_DIST = $(man_MANS) glibc.patch
+EXTRA_DIST = $(man_MANS) glibc.patch $(etcfiles)
+
+AX25_SYSCONFDIR = @sysconfdir@/ax25/
+AX25_LOCALSTATEDIR = @localstatedir@/ax25/
+
+# Needed so that the install is optional
+etcdir = $(AX25_SYSCONFDIR)
+etcfiles = axports rsports nrports
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
 CONFIG_HEADER = config.h
@@ -116,6 +126,7 @@ LTCOMPILE = $(LIBTOOL) --mode=compile $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $
 CCLD = $(CC)
 LINK = $(LIBTOOL) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@
 man3dir = $(mandir)/man3
+man5dir = $(mandir)/man5
 MANS = $(man_MANS)
 
 NROFF = nroff
@@ -281,12 +292,45 @@ uninstall-man3:
 	  echo " rm -f $(DESTDIR)$(man3dir)/$$inst"; \
 	  rm -f $(DESTDIR)$(man3dir)/$$inst; \
 	done
+
+install-man5:
+	$(mkinstalldirs) $(DESTDIR)$(man5dir)
+	@list='$(man5_MANS)'; \
+	l2='$(man_MANS)'; for i in $$l2; do \
+	  case "$$i" in \
+	    *.5*) list="$$list $$i" ;; \
+	  esac; \
+	done; \
+	for i in $$list; do \
+	  if test -f $(srcdir)/$$i; then file=$(srcdir)/$$i; \
+	  else file=$$i; fi; \
+	  ext=`echo $$i | sed -e 's/^.*\\.//'`; \
+	  inst=`echo $$i | sed -e 's/\\.[0-9a-z]*$$//'`; \
+	  inst=`echo $$inst | sed '$(transform)'`.$$ext; \
+	  echo " $(INSTALL_DATA) $$file $(DESTDIR)$(man5dir)/$$inst"; \
+	  $(INSTALL_DATA) $$file $(DESTDIR)$(man5dir)/$$inst; \
+	done
+
+uninstall-man5:
+	@list='$(man5_MANS)'; \
+	l2='$(man_MANS)'; for i in $$l2; do \
+	  case "$$i" in \
+	    *.5*) list="$$list $$i" ;; \
+	  esac; \
+	done; \
+	for i in $$list; do \
+	  ext=`echo $$i | sed -e 's/^.*\\.//'`; \
+	  inst=`echo $$i | sed -e 's/\\.[0-9a-z]*$$//'`; \
+	  inst=`echo $$inst | sed '$(transform)'`.$$ext; \
+	  echo " rm -f $(DESTDIR)$(man5dir)/$$inst"; \
+	  rm -f $(DESTDIR)$(man5dir)/$$inst; \
+	done
 install-man: $(MANS)
 	@$(NORMAL_INSTALL)
-	$(MAKE) $(AM_MAKEFLAGS) install-man3
+	$(MAKE) $(AM_MAKEFLAGS) install-man3 install-man5
 uninstall-man:
 	@$(NORMAL_UNINSTALL)
-	$(MAKE) $(AM_MAKEFLAGS) uninstall-man3
+	$(MAKE) $(AM_MAKEFLAGS) uninstall-man3 uninstall-man5
 
 install-libax25includeHEADERS: $(libax25include_HEADERS)
 	@$(NORMAL_INSTALL)
@@ -395,18 +439,6 @@ distdir: $(DISTFILES)
 	    || cp -p $$d/$$file $(distdir)/$$file || :; \
 	  fi; \
 	done
-ax25io.lo ax25io.o : ax25io.c config.h ax25io.h
-axconfig.lo axconfig.o : axconfig.c config.h pathnames.h axlib.h \
-	axconfig.h
-axutils.lo axutils.o : axutils.c config.h axlib.h
-daemon.lo daemon.o : daemon.c daemon.h
-nrconfig.lo nrconfig.o : nrconfig.c config.h pathnames.h axlib.h \
-	nrconfig.h
-procutils.lo procutils.o : procutils.c config.h pathnames.h nrconfig.h \
-	procutils.h
-rsconfig.lo rsconfig.o : rsconfig.c config.h pathnames.h axlib.h \
-	rsconfig.h
-ttyutils.lo ttyutils.o : ttyutils.c pathnames.h ttyutils.h
 
 info-am:
 info: info-am
@@ -439,7 +471,7 @@ install-strip:
 	$(MAKE) $(AM_MAKEFLAGS) AM_INSTALL_PROGRAM_FLAGS=-s install
 installdirs:
 	$(mkinstalldirs)  $(DESTDIR)$(libdir) $(DESTDIR)$(mandir)/man3 \
-		$(DESTDIR)$(libax25includedir) \
+		$(DESTDIR)$(mandir)/man5 $(DESTDIR)$(libax25includedir) \
 		$(DESTDIR)$(libax25ioincludedir)
 
 
@@ -488,17 +520,24 @@ clean-libLTLIBRARIES maintainer-clean-libLTLIBRARIES \
 uninstall-libLTLIBRARIES install-libLTLIBRARIES mostlyclean-compile \
 distclean-compile clean-compile maintainer-clean-compile \
 mostlyclean-libtool distclean-libtool clean-libtool \
-maintainer-clean-libtool install-man3 uninstall-man3 install-man \
-uninstall-man uninstall-libax25includeHEADERS \
-install-libax25includeHEADERS uninstall-libax25ioincludeHEADERS \
-install-libax25ioincludeHEADERS tags mostlyclean-tags distclean-tags \
-clean-tags maintainer-clean-tags distdir info-am info dvi-am dvi check \
-check-am installcheck-am installcheck all-recursive-am install-exec-am \
-install-exec install-data-am install-data install-am install \
-uninstall-am uninstall all-redirect all-am all installdirs \
-mostlyclean-generic distclean-generic clean-generic \
-maintainer-clean-generic clean mostlyclean distclean maintainer-clean
+maintainer-clean-libtool install-man3 uninstall-man3 install-man5 \
+uninstall-man5 install-man uninstall-man \
+uninstall-libax25includeHEADERS install-libax25includeHEADERS \
+uninstall-libax25ioincludeHEADERS install-libax25ioincludeHEADERS tags \
+mostlyclean-tags distclean-tags clean-tags maintainer-clean-tags \
+distdir info-am info dvi-am dvi check check-am installcheck-am \
+installcheck all-recursive-am install-exec-am install-exec \
+install-data-am install-data install-am install uninstall-am uninstall \
+all-redirect all-am all installdirs mostlyclean-generic \
+distclean-generic clean-generic maintainer-clean-generic clean \
+mostlyclean distclean maintainer-clean
 
+installconf:
+	$(mkinstalldirs) $(DESTDIR)$(etcdir)
+	@list='$(etcfiles)'; for p in $$list; do \
+	  echo " $(INSTALL_DATA) $$p $(DESTDIR)$(etcdir)/$$p"; \
+	  $(INSTALL_DATA) $$p $(DESTDIR)$(etcdir)/$$p; \
+	done
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

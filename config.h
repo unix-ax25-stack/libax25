@@ -53,5 +53,5 @@
 #define PACKAGE "libax25"
 
 /* Version number of package */
-#define VERSION "0.0.4"
+#define VERSION "0.0.5"
 

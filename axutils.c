@@ -300,7 +300,7 @@ int ax25_validate(const char *call)
 /*
  *	Convert a string to upper case
  */
-char *strupr(const char *s)
+char *strupr(char *s)
 {
 	char *p;
 
@@ -316,7 +316,7 @@ char *strupr(const char *s)
 /*
  *	Convert a string to lower case
  */
-char *strlwr(const char *s)
+char *strlwr(char *s)
 {
 	char *p;
 

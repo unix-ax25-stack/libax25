@@ -9,11 +9,11 @@ package.  I have attempted to cater for glibc 2.0 users here.
 
 To compile this I used:
   * A Debian GNU/Linux system
-  * autoconf 2.52
-  * automake 1.4-p4
-  * libtool 1.4b
-  * libc 2.2.3
-  * gcc 2.95.4
+  * autoconf 2.57
+  * automake 1.5
+  * libtool 1.4.3
+  * libc 2.3.1
+  * gcc 3.2.3
 
 This library is copyright by the respective authors (see AUTHORS for a list)
 and licensed under the GNU LGPL (see COPYING for more information).

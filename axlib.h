@@ -26,7 +26,7 @@
 #define	_AXLIB_H
 
 #include <netax25/ax25.h>
-#include <netax25/rose.h>
+#include <netrose/rose.h>
 
 #ifndef	TRUE
 #define	TRUE	1

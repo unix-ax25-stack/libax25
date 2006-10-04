@@ -1,3 +1,7 @@
+# libtool creates libax25 without .so extension?
+# update libtool: see http://people.debian.org/~keybuk/libtool-missing_so.html
+# we temporary force it
+libtoolize --copy --force
 aclocal
 autoconf
 automake --add-missing

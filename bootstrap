@@ -1,4 +1,5 @@
 aclocal
 autoconf
 automake --add-missing
-./configure
+#./configure
+./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --mandir=/usr/share/man

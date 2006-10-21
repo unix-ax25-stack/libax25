@@ -225,6 +225,8 @@ static void free_ax25_ifaces() {
 static int test_and_add_ax25_iface(int fd, char *name, struct ifreq *ifr) {
 	AX_Iface *axif;
 
+	if (fd == -1)
+		return 0;
 	if (!name)
 		return 0;
 	if (!strcmp(name, "lo")) return 0;
@@ -276,6 +278,7 @@ static int test_and_add_ax25_iface(int fd, char *name, struct ifreq *ifr) {
 	return 1;
 }
 
+#ifdef	FIND_ALL_INTERFACES
 static char *proc_get_iface_name(char *line) {
 	char *p;
 
@@ -288,11 +291,14 @@ static char *proc_get_iface_name(char *line) {
 		return 0; // should never hapen
 	return line;
 }
+#endif
 
 static int get_ax25_ifaces(void) {
+#ifdef	FIND_ALL_INTERFACES
 	FILE *fp;
+#endif
 	struct ifreq ifr;
-	int fd;
+	int fd = -1;
 	int ret = -1;
 
 	free_ax25_ifaces();
@@ -343,7 +349,8 @@ static int get_ax25_ifaces(void) {
 	}
 
 out:
-	close(fd);
+	if (fd != -1)
+		close(fd);
 	return ret;
 }
 
@@ -397,17 +404,22 @@ static int ax25_config_init_port(int lineno, char *line)
 	strupr(call);
 
 	for (axif = ax25_ifaces; axif; axif = axif->Next) {
-		if (!strcmp(axif->Name, name)) {
-			found = 1;
+		if (ax25_hw_cmp(call, axif->Call)) {
+			/* associate list of ifaces with the name from axports we just found */
+			if (!strcmp(axif->Name, name)) {
+				free(axif->Name);
+				if (!(axif->Name = strdup(name))) {
+					fprintf(stderr, "axconfig: out of memory!\n");
+					return -1;
+				}
+			}
 			dev = axif->Device;
-			/* exact match */
-			if (ax25_hw_cmp(call, axif->Call))
-				found = 2;
+			found = 1;
 			break;
 		}
 	}
 
-	if (found < 2) {
+	if (!found) {
 		fprintf(stderr, "axconfig: port %s not active\n", name);
 		return -1;
 	}

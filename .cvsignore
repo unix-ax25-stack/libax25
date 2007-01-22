@@ -1,4 +1,6 @@
+autom4te.cache
 *.o
+*.lo
 Makefile
 config.log
 config.status
@@ -10,4 +12,4 @@ libtool
 libax25.la
 libax25io.la
 libax25-*.tar.gz
-
+stamp-h1

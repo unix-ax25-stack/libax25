@@ -1,15 +1,7 @@
-dnl Process this file with autoconf to produce a configure script.
-AC_INIT(axlib.h)
-AXLIB_MAJOR_VERSION=0
-AXLIB_MINOR_VERSION=0
-AXLIB_MICRO_VERSION=11
-AXLIB_VERSION=$AXLIB_MAJOR_VERSION.$AXLIB_MINOR_VERSION.$AXLIB_MICRO_VERSION
-
-dnl For automake
-VERSION=$AXLIB_VERSION
-PACKAGE=libax25
-
-AM_INIT_AUTOMAKE($PACKAGE, $VERSION)
+AC_PREREQ(2.59)
+AC_INIT(libax25, 0.0.11, linux-hams@vger.kernel.org)
+AC_CONFIG_SRCDIR(axlib.h)
+AM_INIT_AUTOMAKE([foreign no-define])
 
 AM_CONFIG_HEADER(config.h)
 

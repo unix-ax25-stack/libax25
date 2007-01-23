@@ -283,12 +283,12 @@ static char *proc_get_iface_name(char *line) {
 	char *p;
 
 	if (!(p = strchr(line, ':')))
-		return 0; // should never hapen
+		return 0;
 	*p = 0;
 	while (*line && isspace(*line & 0xff))
 		line++;
 	if (!*line)
-		return 0; // should never hapen
+		return 0;
 	return line;
 }
 #endif

@@ -42,7 +42,7 @@ typedef struct _nrport
 static NR_Port *nr_ports       = NULL;
 static NR_Port *nr_port_tail   = NULL;
 
-static int ax25_hw_cmp(unsigned char *callsign, unsigned char *hw_addr)
+static int ax25_hw_cmp(char *callsign, char *hw_addr)
 {
 	ax25_address call;
 

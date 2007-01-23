@@ -41,7 +41,7 @@ typedef struct _rsport
 static RS_Port *rs_ports       = NULL;
 static RS_Port *rs_port_tail   = NULL;
 
-static int rose_hw_cmp(unsigned char *address, unsigned char *hw_addr)
+static int rose_hw_cmp(char *address, char *hw_addr)
 {
 	rose_address addr;
 

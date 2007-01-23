@@ -54,7 +54,7 @@ typedef struct _axiface
 
 static AX_Iface *ax25_ifaces     = NULL;
 
-static int ax25_hw_cmp(unsigned char *callsign, unsigned char *hw_addr)
+static int ax25_hw_cmp(char *callsign, char *hw_addr)
 {
 	ax25_address call;
 

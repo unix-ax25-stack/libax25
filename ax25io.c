@@ -10,7 +10,7 @@
 #include "ax25io.h"
 
 static inline int send_iac_iac(ax25io *p);
-static inline int send_iac_cmd(ax25io *p, char cmd, char opt);
+static inline int send_iac_cmd(ax25io *p, unsigned char cmd, unsigned char opt);
 static inline int send_linemode(ax25io *p);
 
 static ax25io *Iolist = NULL;
@@ -233,7 +233,7 @@ int axio_flush(ax25io *p)
 	return flushed;
 }
 
-static int rsend(unsigned char *c, int len, ax25io *p)
+static int rsend(char *c, int len, ax25io *p)
 {
 	/* Don't go further until there is space */
 	if (p->paclen <= p->optr) {
@@ -257,7 +257,7 @@ static int rsend(unsigned char *c, int len, ax25io *p)
 		/*
 		 * One new character to input.
 		 */
-		z->zout.next_in = c;
+		z->zout.next_in = (unsigned char *) c;
 		z->zout.avail_in = len;
 		/*
 		 * Now loop until deflate returns with avail_out != 0
@@ -591,10 +591,11 @@ char *axio_getline(ax25io *p)
 {
 	int ret;
 
-	ret = axio_gets(p->gbuf + p->gbuf_usage, AXBUFLEN - p->gbuf_usage, p);
+	ret = axio_gets((char *) p->gbuf + p->gbuf_usage,
+	                AXBUFLEN - p->gbuf_usage, p);
 	if (ret > 0 || (ret == 0 && errno == 0)) {
 		p->gbuf_usage = 0;
-		return p->gbuf;
+		return (char *) p->gbuf;
 	}
 	p->gbuf_usage += ret;
 	return NULL;
@@ -671,27 +672,35 @@ int axio_tn_wont_echo(ax25io *p)
 
 static inline int send_iac_iac(ax25io *p)
 {
-	char buf[2] = { IAC, IAC };
+	unsigned char buf[2] = { IAC, IAC };
 
-	return rsend(buf, 2, p);
+	return rsend((char *) buf, 2, p);
 }
 
-static inline int send_iac_cmd(ax25io *p, char cmd, char opt)
+static inline int send_iac_cmd(ax25io *p, unsigned char cmd, unsigned char opt)
 {
-	char buf[3];
+	unsigned char buf[3];
 
 	buf[0] = IAC;
 	buf[1] = cmd;
 	buf[2] = opt;
 
-	return rsend(buf, 3, p);
+	return rsend((char *)buf, 3, p);
 }
 
 static inline int send_linemode(ax25io *p)
 {
-	char buf[7] = { IAC, SB, TELOPT_LINEMODE, LM_MODE, MODE_EDIT | MODE_TRAPSIG, IAC, SE };
+	unsigned char buf[7] = {
+		IAC,
+		SB,
+		TELOPT_LINEMODE,
+		LM_MODE,
+		MODE_EDIT | MODE_TRAPSIG,
+		IAC,
+		SE
+	};
 
-	return rsend(buf, 7, p);
+	return rsend((char *) buf, 7, p);
 }
 
 /* --------------------------------------------------------------------- */

@@ -284,11 +284,14 @@ int rose_cmp(const rose_address *a, const rose_address *b)
  */
 int ax25_validate(const char *call)
 {
-	unsigned char s[7];
+	unsigned char c;
+	char s[7];
 	int n;
 
-	for (n = 0; n < 6; n++)
-		s[n] = (call[n] >> 1) & 0x7F;
+	for (n = 0; n < 6; n++) {
+		c = call[n];
+		s[n] = (c >> 1) & 0x7F;
+	}
 	s[6] = '\0';
 
 	if (strspn(s, "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ ") == 6)

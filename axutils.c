@@ -130,7 +130,7 @@ int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 
 int ax25_aton_arglist(const char *call[], struct full_sockaddr_ax25 *sax)
 {
-	char *bp;
+	const char *bp;
 	char *addrp;
 	int n = 0;
 	int argp = 0;

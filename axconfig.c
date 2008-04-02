@@ -27,8 +27,6 @@
 #include "pathnames.h"
 #include "axconfig.h"
 
-#define _PATH_PROCNET_DEV           "/proc/net/dev"
-
 typedef struct _axport
 {
 	struct _axport *Next;
@@ -44,24 +42,6 @@ typedef struct _axport
 static AX_Port *ax25_ports     = NULL;
 static AX_Port *ax25_port_tail = NULL;
 
-typedef struct _axiface
-{
-	struct _axiface *Next;
-	char *Name;
-	char *Call;
-	char *Device;
-} AX_Iface;
-
-static AX_Iface *ax25_ifaces     = NULL;
-
-static int ax25_hw_cmp(char *callsign, char *hw_addr)
-{
-	ax25_address call;
-
-	ax25_aton_entry(callsign, call.ax25_call);
-	
-	return ax25_cmp(&call, (ax25_address *)hw_addr) == 0;
-}
 
 static AX_Port *ax25_port_ptr(char *name)
 {
@@ -72,6 +52,8 @@ static AX_Port *ax25_port_ptr(char *name)
 
 	while (p != NULL) {
 		if (strcasecmp(p->Name, name) == 0)
+			return p;
+		if (strcasecmp(p->Call, name) == 0)
 			return p;
 
 		p = p->Next;
@@ -195,171 +177,12 @@ char *ax25_config_get_desc(char *name)
 	return p->Description;
 }
 
-static void free_ax25_ports() {
-	AX_Port *axp;
-	for (axp = ax25_ports; axp; ) {
-		AX_Port *q = axp->Next;
-		if (axp->Name) free(axp->Name);
-		if (axp->Call) free(axp->Call);
-		if (axp->Device) free(axp->Device);
-		if (axp->Description) free(axp->Description);
-		free(axp);
-		axp = q;
-	}
-	ax25_ports = ax25_port_tail = NULL;
-}
-
-static void free_ax25_ifaces() {
-	AX_Iface *axif;
-	for (axif = ax25_ifaces; axif; ) {
-		AX_Iface *q = axif->Next;
-		if (axif->Name) free(axif->Name);
-		if (axif->Device) free(axif->Device);
-		if (axif->Call) free(axif->Call);
-		free(axif);
-		axif = q;
-	}
-	ax25_ifaces = NULL;
-}
-
-static int test_and_add_ax25_iface(int fd, char *name, struct ifreq *ifr) {
-	AX_Iface *axif;
-
-	if (fd == -1)
-		return 0;
-	if (!name)
-		return 0;
-	if (!strcmp(name, "lo")) return 0;
-	if (!ifr)
-		return 0;
-
-	strncpy(ifr->ifr_name, name, IFNAMSIZ-1);
-	ifr->ifr_name[IFNAMSIZ-1] = 0;
-
-	if (ioctl(fd, SIOCGIFFLAGS, ifr) < 0) {
-		fprintf(stderr, "axconfig: SIOCGIFFLAGS: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (!(ifr->ifr_flags & IFF_UP)) return 0;
-
-	if (ioctl(fd, SIOCGIFHWADDR, ifr) < 0) {
-		fprintf(stderr, "axconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
-		return -1;
-	}
-
-	if (ifr->ifr_hwaddr.sa_family != ARPHRD_AX25) return 0;
-
-	if ((axif = (AX_Iface *)malloc(sizeof(AX_Iface))) == NULL) {
-		fprintf(stderr, "axconfig: out of memory!\n");
-		return -1;
-	}
-	if (!(axif->Name = strdup(name))) {
-		fprintf(stderr, "axconfig: out of memory!\n");
-		free(axif);
-		return -1;
-	}
-	if (!(axif->Device = strdup(ifr->ifr_name))) {
-		fprintf(stderr, "axconfig: out of memory!\n");
-		free(axif->Name);
-		free(axif);
-		return -1;
-	}
-	if (!(axif->Call = strdup(ifr->ifr_hwaddr.sa_data))) {
-		free(axif->Name);
-		free(axif->Device);
-		free(axif);
-		fprintf(stderr, "axconfig: out of memory!\n");
-		return -1;
-	}
-	axif->Next = ax25_ifaces;
-	ax25_ifaces = axif;
-
-	return 1;
-}
-
-#ifdef	FIND_ALL_INTERFACES
-static char *proc_get_iface_name(char *line) {
-	char *p;
-
-	if (!(p = strchr(line, ':')))
-		return 0;
-	*p = 0;
-	while (*line && isspace(*line & 0xff))
-		line++;
-	if (!*line)
-		return 0;
-	return line;
-}
-#endif
-
-static int get_ax25_ifaces(void) {
-#ifdef	FIND_ALL_INTERFACES
-	FILE *fp;
-#endif
-	struct ifreq ifr;
-	int fd = -1;
-	int ret = -1;
-
-	free_ax25_ifaces();
-	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		fprintf(stderr, "axconfig: unable to open socket (%s)\n", strerror(errno));
-		goto out;
-	}
-
-#ifdef	FIND_ALL_INTERFACES /* will be default soon, after tracing a kernel error */
-	if ((fp = fopen(_PATH_PROCNET_DEV, "r"))) {
-		/* Because ifc.ifc_req does not show interfaces without
-		 * IP-Address assigned, we use the device list via /proc.
-		 * This concept was inspired by net-tools / ifconfig
-		 */
-		char buf[512];
-		int i = 0;
-		ret = 0;
-		while (fgets(buf, sizeof(buf), fp)) {
-			/* skip proc header */
-			if (i < 2) {
-				i++;
-				continue;
-			}
-			if (test_and_add_ax25_iface(fd, proc_get_iface_name(buf), &ifr) > 0)
-				ret++;
-		}
-		fclose(fp);
-	} else {
-#else
-	{
-#endif
-		struct ifconf ifc;
-		struct ifreq *ifrp;
-		char buffer[1024];
-		int n = 0;
-		ifc.ifc_len = sizeof(buffer);
-		ifc.ifc_buf = buffer;
-	
-		if (ioctl(fd, SIOCGIFCONF, &ifc) < 0) {
-			fprintf(stderr, "axconfig: SIOCGIFCONF: %s\n", strerror(errno));
-			goto out;
-		}
-		ret = 0;
-
-		for (ifrp = ifc.ifc_req, n = ifc.ifc_len / sizeof(struct ifreq); --n >= 0; ifrp++)
-			if (test_and_add_ax25_iface(fd, ifrp->ifr_name, &ifr) > 0)
-				ret++;
-	}
-
-out:
-	if (fd != -1)
-		close(fd);
-	return ret;
-}
-
-static int ax25_config_init_port(int lineno, char *line)
+static int ax25_config_init_port(int fd, int lineno, char *line, const char **ifcalls, const char **ifdevs)
 {
 	AX_Port *p;
-	AX_Iface *axif = NULL;
-	char *name, *call, *baud, *paclen, *window, *desc, *dev = NULL;
-	int found = 0;
+	char *name, *call, *baud, *paclen, *window, *desc;
+	const char *dev = NULL;
+	int found;
 
 	name   = strtok(line, " \t");
 	call   = strtok(NULL, " \t");
@@ -371,93 +194,66 @@ static int ax25_config_init_port(int lineno, char *line)
 	if (name == NULL   || call == NULL   || baud == NULL ||
 	    paclen == NULL || window == NULL || desc == NULL) {
 		fprintf(stderr, "axconfig: unable to parse line %d of axports file\n", lineno);
-		return -1;
+		return FALSE;
 	}
 
 	for (p = ax25_ports; p != NULL; p = p->Next) {
 		if (strcasecmp(name, p->Name) == 0) {
 			fprintf(stderr, "axconfig: duplicate port name %s in line %d of axports file\n", name, lineno);
-			return -1;
+			return FALSE;
 		}
-		/* dl9sau: why? */
 		if (strcasecmp(call, p->Call) == 0) {
 			fprintf(stderr, "axconfig: duplicate callsign %s in line %d of axports file\n", call, lineno);
-			return -1;
+			return FALSE;
 		}
 	}
 
 	if (atoi(baud) < 0) {
 		fprintf(stderr, "axconfig: invalid baud rate setting %s in line %d of axports file\n", baud, lineno);
-		return -1;
+		return FALSE;
 	}
 
 	if (atoi(paclen) <= 0) {
 		fprintf(stderr, "axconfig: invalid packet size setting %s in line %d of axports file\n", paclen, lineno);
-		return -1;
+		return FALSE;
 	}
 
 	if (atoi(window) <= 0) {
 		fprintf(stderr, "axconfig: invalid window size setting %s in line %d of axports file\n", window, lineno);
-		return -1;
+		return FALSE;
 	}
 
 	strupr(call);
 
-	for (axif = ax25_ifaces; axif; axif = axif->Next) {
-		if (ax25_hw_cmp(call, axif->Call)) {
-			/* associate list of ifaces with the name from axports we just found */
-			if (!strcmp(axif->Name, name)) {
-				free(axif->Name);
-				if (!(axif->Name = strdup(name))) {
-					fprintf(stderr, "axconfig: out of memory!\n");
-					return -1;
-				}
-			}
-			dev = axif->Device;
-			found = 1;
-			break;
-		}
+	found = 0;
+	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
+	  if (strcmp(call,*ifcalls) == 0) {
+	    found = 1;
+	    dev = *ifdevs;
+	    break;
+	  }
 	}
 
+
 	if (!found) {
-		fprintf(stderr, "axconfig: port %s not active\n", name);
-		return -1;
+#if 0 /* None of your business to complain about some port being down... */
+		fprintf(stderr, "axconfig: port with call '%s' is not active\n", call);
+#endif
+		return FALSE;
 	}
 
 	if ((p = (AX_Port *)malloc(sizeof(AX_Port))) == NULL) {
 		fprintf(stderr, "axconfig: out of memory!\n");
-		return -1;
+		return FALSE;
 	}
 
-	if (!(p->Name        = strdup(name))) {
-		fprintf(stderr, "axconfig: out of memory!\n");
-		free(p);
-		return -1;
-	}
-	if (!(p->Call        = strdup(call))) {
-		fprintf(stderr, "axconfig: out of memory!\n");
-		free(p->Name);
-		free(p);
-		return -1;
-	}
-	if (!(p->Device      = strdup(dev))) {
-		fprintf(stderr, "axconfig: out of memory!\n");
-		free(p->Name);
-		free(p->Call);
-		free(p);
-		return -1;
-	}
-	if (!(p->Description = strdup(desc))) {
-		fprintf(stderr, "axconfig: out of memory!\n");
-		free(p->Name);
-		free(p->Call);
-		free(p->Description);
-		free(p);
-		return -1;
-	}
+	p->Name        = strdup(name);
+	p->Call        = strdup(call);
+	p->Device      = strdup(dev);
 	p->Baud        = atoi(baud);
 	p->Window      = atoi(window);
 	p->Paclen      = atoi(paclen);
+	p->Description = strdup(desc);
 
 	if (ax25_ports == NULL)
 		ax25_ports = p;
@@ -468,44 +264,107 @@ static int ax25_config_init_port(int lineno, char *line)
 
 	p->Next = NULL;
 
-	return 0;
+	return TRUE;
 }
 
 int ax25_config_load_ports(void)
 {
-	FILE *fp;
+	FILE *fp = NULL;
 	char buffer[256], *s;
-	int lineno = 1;
-	int n = 0;
+	int fd = -1, lineno = 1, n = 0, i;
+	const char **calllist = NULL;
+	const char **devlist  = NULL;
+	int callcount = 0;
+	struct ifreq ifr;
 
-	/* in case of a "reload" */
-	free_ax25_ports();
+	/* Reliable listing of all network ports on Linux
+	   is only available via reading  /proc/net/dev ...  */
 
-	if (get_ax25_ifaces() <= 0)
-		goto out;
+
+	if ((fd = socket(PF_FILE, SOCK_DGRAM, 0)) < 0) {
+	  fprintf(stderr, "axconfig: unable to open socket (%s)\n", strerror(errno));
+	  goto cleanup;
+	}
+
+	if ((fp = fopen("/proc/net/dev", "r"))) {
+	  /* Two header lines.. */
+	  s = fgets(buffer, sizeof(buffer), fp);
+	  s = fgets(buffer, sizeof(buffer), fp);
+	  /* .. then network interface names */
+	  while (!feof(fp)) {
+	    if (!fgets(buffer, sizeof(buffer), fp))
+	      break;
+	    s = strchr(buffer, ':');
+	    if (s) *s = 0;
+	    s = buffer;
+	    while (*s == ' ') ++s;
+
+	    memset(&ifr, 0, sizeof(ifr));
+	    strcpy(ifr.ifr_name, s);
+
+	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
+	      fprintf(stderr, "axconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
+	      return FALSE;
+	    }
+
+	    if (ifr.ifr_hwaddr.sa_family != ARPHRD_AX25)
+	      continue;
+
+	    /* store found interface callsigns */
+	    /* ax25_ntoa() returns pointer to static buffer */
+	    s = ax25_ntoa((void*)ifr.ifr_hwaddr.sa_data);
+
+	    if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
+	      fprintf(stderr, "axconfig: SIOCGIFFLAGS: %s\n", strerror(errno));
+	      return FALSE;
+	    }
+
+	    if (!(ifr.ifr_flags & IFF_UP))
+	      continue;
+
+
+	    calllist = realloc(calllist, sizeof(char *) * (callcount+2));
+	    devlist  = realloc(devlist,  sizeof(char *) * (callcount+2));
+	    calllist[callcount] = strdup(s);
+	    devlist [callcount] = strdup(ifr.ifr_name);
+	    ++callcount;
+	    calllist[callcount] = NULL;
+	    devlist [callcount] = NULL;
+	  }
+	  fclose(fp);
+	  fp = NULL;
+	}
+
 
 	if ((fp = fopen(CONF_AXPORTS_FILE, "r")) == NULL) {
-		fprintf(stderr, "axconfig: unable to open axports file %s (%s)\n", CONF_AXPORTS_FILE, strerror(errno));
-		goto out;
+	  fprintf(stderr, "axconfig: unable to open axports file %s (%s)\n", CONF_AXPORTS_FILE, strerror(errno));
+	  goto cleanup;
 	}
 
-	while (fgets(buffer, 255, fp) != NULL) {
-		if ((s = strchr(buffer, '\n')) != NULL)
-			*s = '\0';
+	while (fp && fgets(buffer, 255, fp)) {
+	  if ((s = strchr(buffer, '\n')))
+	    *s = '\0';
 
-		if (strlen(buffer) > 0 && *buffer != '#')
-			if (!ax25_config_init_port(lineno, buffer))
-				n++;
+	  if (strlen(buffer) > 0 && *buffer != '#')
+	    if (ax25_config_init_port(fd, lineno, buffer, calllist, devlist))
+	      n++;
 
-		lineno++;
+	  lineno++;
 	}
 
-	fclose(fp);
+ cleanup:;
+	if (fd >= 0) close(fd);
+	if (fp) fclose(fp);
+
+	for(i = 0; calllist && calllist[i]; ++i) {
+	  free((void*)calllist[i]);
+	  free((void*)devlist[i]);
+	}
+	if (calllist) free(calllist);
+	if (devlist) free(devlist);
 
 	if (ax25_ports == NULL)
-		n = 0;
+		return 0;
 
-out:
-	free_ax25_ifaces();
 	return n;
 }

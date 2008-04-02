@@ -41,15 +41,6 @@ typedef struct _rsport
 static RS_Port *rs_ports       = NULL;
 static RS_Port *rs_port_tail   = NULL;
 
-static int rose_hw_cmp(char *address, char *hw_addr)
-{
-	rose_address addr;
-
-	rose_aton(address, addr.rose_addr);
-
-	return rose_cmp(&addr, (rose_address *)hw_addr) == 0;
-}
-
 static RS_Port *rs_port_ptr(char *name)
 {
 	RS_Port *p = rs_ports;
@@ -154,15 +145,12 @@ int rs_config_get_paclen(char *name)
 	return 128;
 }
 
-static int rs_config_init_port(int fd, int lineno, char *line)
+static int rs_config_init_port(int fd, int lineno, char *line, const char **ifcalls, const char **ifdevs)
 {
 	RS_Port *p;
-	char buffer[1024];
-	char *name, *addr, *desc, *dev = NULL;
-	struct ifconf ifc;
-	struct ifreq *ifrp;
-	struct ifreq ifr;
-	int n, found = 0;
+	char *name, *addr, *desc;
+	const char *dev = NULL;
+	int found = 0;
 	
 	name   = strtok(line, " \t");
 	addr   = strtok(NULL, " \t");
@@ -184,42 +172,19 @@ static int rs_config_init_port(int fd, int lineno, char *line)
 		}
 	}
 
-	ifc.ifc_len = sizeof(buffer);
-	ifc.ifc_buf = buffer;
-	
-	if (ioctl(fd, SIOCGIFCONF, &ifc) < 0) {
-		fprintf(stderr, "rsconfig: SIOCGIFCONF: %s\n", strerror(errno));
-		return FALSE;
-	}
-
-	for (ifrp = ifc.ifc_req, n = ifc.ifc_len / sizeof(struct ifreq); --n >= 0; ifrp++) {
-		strcpy(ifr.ifr_name, ifrp->ifr_name);
-
-		if (strcmp(ifr.ifr_name, "lo") == 0) continue;
-
-		if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
-			fprintf(stderr, "rsconfig: SIOCGIFFLAGS: %s\n", strerror(errno));
-			return FALSE;
-		}
-
-		if (!(ifr.ifr_flags & IFF_UP)) continue;
-
-		if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
-			fprintf(stderr, "rsconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
-			return FALSE;
-		}
-
-		if (ifr.ifr_hwaddr.sa_family != ARPHRD_ROSE) continue;
-
-		if (rose_hw_cmp(addr, ifr.ifr_hwaddr.sa_data)) {
-			dev = ifr.ifr_name;
-			found = 1;
-			break;
-		}
+	found = 0;
+	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
+	  if (strcmp(addr,*ifcalls) == 0) {
+	    found = 1;
+	    dev = *ifdevs;
+	    break;
+	  }
 	}
 
 	if (!found) {
+#if 0 /* None of your business to complain about some port being down... */
 		fprintf(stderr, "rsconfig: port %s not active\n", name);
+#endif
 		return FALSE;
 	}
 
@@ -247,34 +212,99 @@ static int rs_config_init_port(int fd, int lineno, char *line)
 
 int rs_config_load_ports(void)
 {
-	FILE *fp;
+	FILE *fp = NULL;
 	char buffer[256], *s;
-	int fd, lineno = 1, n = 0;
+	int fd, lineno = 1, n = 0, i;
+	const char **calllist = NULL;
+	const char **devlist  = NULL;
+	int callcount = 0;
+	struct ifreq ifr;
+
+	/* Reliable listing of all network ports on Linux
+	   is only available via reading  /proc/net/dev ...  */
+
+
+	if ((fd = socket(PF_FILE, SOCK_DGRAM, 0)) < 0) {
+	  fprintf(stderr, "rsconfig: unable to open socket (%s)\n", strerror(errno));
+	  goto cleanup;
+	}
+
+	if ((fp = fopen("/proc/net/dev", "r"))) {
+	  /* Two header lines.. */
+	  s = fgets(buffer, sizeof(buffer), fp);
+	  s = fgets(buffer, sizeof(buffer), fp);
+	  /* .. then network interface names */
+	  while (!feof(fp)) {
+	    if (!fgets(buffer, sizeof(buffer), fp))
+	      break;
+	    s = strchr(buffer, ':');
+	    if (s) *s = 0;
+	    s = buffer;
+	    while (*s == ' ') ++s;
+
+	    memset(&ifr, 0, sizeof(ifr));
+	    strcpy(ifr.ifr_name, s);
+
+	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
+	      fprintf(stderr, "rsconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
+	      return FALSE;
+	    }
+
+	    if (ifr.ifr_hwaddr.sa_family != ARPHRD_ROSE)
+	      continue;
+
+	    /* store found interface callsigns */
+	    /* rose_ntoa() returns pointer to static buffer */
+	    s = rose_ntoa((void*)ifr.ifr_hwaddr.sa_data);
+
+	    if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
+	      fprintf(stderr, "rsconfig: SIOCGIFFLAGS: %s\n", strerror(errno));
+	      return FALSE;
+	    }
+
+	    if (!(ifr.ifr_flags & IFF_UP))
+	      continue;
+
+
+	    calllist = realloc(calllist, sizeof(char *) * (callcount+2));
+	    devlist  = realloc(devlist,  sizeof(char *) * (callcount+2));
+	    calllist[callcount] = strdup(s);
+	    devlist [callcount] = strdup(ifr.ifr_name);
+	    ++callcount;
+	    calllist[callcount] = NULL;
+	    devlist [callcount] = NULL;
+	  }
+	  fclose(fp);
+	  fp = NULL;
+	}
+
 
 	if ((fp = fopen(CONF_RSPORTS_FILE, "r")) == NULL) {
-		fprintf(stderr, "rsconfig: unable to open rsports file %s (%s)\n", CONF_RSPORTS_FILE, strerror(errno));
-		return 0;
+	  fprintf(stderr, "rsconfig: unable to open axports file %s (%s)\n", CONF_RSPORTS_FILE, strerror(errno));
+	  goto cleanup;
 	}
 
-	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		fprintf(stderr, "rsconfig: unable to open socket (%s)\n", strerror(errno));
-		fclose(fp);
-		return 0;
+	while (fp && fgets(buffer, 255, fp)) {
+	  if ((s = strchr(buffer, '\n')))
+	    *s = '\0';
+
+	  if (strlen(buffer) > 0 && *buffer != '#')
+	    if (rs_config_init_port(fd, lineno, buffer, calllist, devlist))
+	      n++;
+
+	  lineno++;
 	}
 
-	while (fgets(buffer, 255, fp) != NULL) {
-		if ((s = strchr(buffer, '\n')) != NULL)
-			*s = '\0';
+ cleanup:;
+	if (fd >= 0) close(fd);
+	if (fp) fclose(fp);
 
-		if (strlen(buffer) > 0 && buffer[0] != '#')
-			if (rs_config_init_port(fd, lineno, buffer))
-				n++;
-
-		lineno++;
+	for(i = 0; calllist && calllist[i]; ++i) {
+	  free((void*)calllist[i]);
+	  free((void*)devlist[i]);
 	}
-
-	fclose(fp);
-	close(fd);
+	if (calllist) free(calllist);
+	if (devlist) free(devlist);
 
 	if (rs_ports == NULL)
 		return 0;

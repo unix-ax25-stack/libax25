@@ -4,4 +4,5 @@
 #
 # name callsign alias paclen description
 #
-netrom	OH2BNS-10 #LNODE	235	Switch Port
+
+#netrom	OH2BNS-10 #LNODE	235	Switch Port

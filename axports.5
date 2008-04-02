@@ -1,27 +1,30 @@
-.TH AXPORTS 5 "15 October 1996" Linux "Linux Programmer's Manual"
+.TH AXPORTS 5 "2008-Feb-04" Linux "Linux Programmer's Manual"
 .SH NAME
-axports \- AX.25 port configuration file.
+.I /etc/ax25/axports
+\- AX.25 port configuration file.
 .SH DESCRIPTION
 .LP
-.B Axports
+.I axports
 is an ASCII file that contains information about each of the physical AX.25
-ports that are to be used. When dealing with an AX.25 utility such as
-.B call,
-it takes an optional argument that is the port name. This port name is a
-reference to the line within
+ports that are to be used.
+When dealing with an AX.25 utility such as
+.BR call ,
+it takes an argument that is the port name.
+This port name is a reference to the line within
 .B axports,
-which has that name as its first argument. The information on each line
-contains enough information to bind the command to a particular physical AX.25
-interface, this binding is done by matching the callsign on the line in
+which has that name as its first argument.
+The information on each line contains enough information to bind
+the command to a particular physical AX.25 interface, this binding
+is done by matching the callsign on the line in
 .B axports
 with the callsign of the port set by
 .B kissattach.
 .LP
 The lines within
-.B axports
-must either be a comment line, which starts with a # in the first column, or
-a port description in the following format, each field being delimited by
-white space:
+.I axports
+must either be a comment line, which starts with a # in the first column,
+or a port description in the following format, each field being delimited
+by white space:
 .sp
 .RS
 name callsign speed paclen window description
@@ -32,8 +35,12 @@ The field descriptions are:
 .RS
 .TP 14
 .B name
-is the unique identifier of the port. This is the name given as the port
-argument of many of the AX.25 support programs.
+is the unique identifier of the port.
+This is the name given as the port argument of many of the AX.25 support
+programs.
+This is
+.I not
+in any way related to actual device identities, just unique
 .TP 14
 .B callsign
 the callsign of the physical interface to bind to.

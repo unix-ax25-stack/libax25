@@ -1,4 +1,4 @@
-.TH INET 3  "20 April 1999" "Linux" "Linux Programmer's Manual"
+.TH INET 3  "2008-Feb-04" "Linux" "Linux Programmer's Manual"
 .SH NAME
 rose_aton, rose_ntoa, rose_cmp \- ROSE Address manipulation routines
 .SH SYNOPSIS
@@ -12,20 +12,39 @@ rose_aton, rose_ntoa, rose_cmp \- ROSE Address manipulation routines
 .BI "int rose_cmp(rose_address *" a1 ", rose_address *" a2 ");"
 .fi
 .SH DESCRIPTION
-\fBrose_aton()\fP converts the ROSE address \fIcp\fP from an ASCII
-representation into network format.
+The
+.BR rose_aton ()
+converts the ROSE address
+.I cp
+from an ASCII representation into network format.
 .PP
-\fBrose_ntoa()\fP converts the ROSE address \fIcp\fP that is 
-network format to a string that is the ASCII
-representation of the address.
+The
+.BR rose_ntoa ()
+converts the ROSE address
+.I cp
+that is network format to a string that is the ASCII representation
+of the address.
 .PP
-\fBrose_cmp()\fP compares the two ROSE address \fIa1\fP and \fIa2\fP
+The
+.BR rose_cmp ()
+compares the two ROSE address
+.I a1
+and
+.I a2
 that are in network format.
 .SH "RETURN VALUE"
-The \fBrose_ntoa()\fP and \fBrose_aton()\fP functions return zero if all
-went ok, -1 if not.
+The
+.BR rose_ntoa ()
+and
+.BR rose_aton ()
+functions return zero if all went OK, -1 if not.
 .PP
-The \fBrose_cmp()\fP returns 0 if address \fIa1\fP and \fIa2\fP are identical,
-1 otherwise.
+The
+.BR rose_cmp ()
+returns 0 if addresses pointer by
+.I a1
+and
+.I a2
+are identical, 1 otherwise.
 .SH "SEE ALSO"
 .BR ax25 "(4), " netrom "(4), " rose "(4)"

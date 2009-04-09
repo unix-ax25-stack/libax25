@@ -42,6 +42,25 @@ typedef struct _nrport
 static NR_Port *nr_ports       = NULL;
 static NR_Port *nr_port_tail   = NULL;
 
+static int is_same_call(char *call1, char *call2)
+{
+        if (!call1 || !call2)
+                return 0;
+        for (; *call1 && *call2; call1++, call2++) {
+                if (*call1 == '-' || *call2 == '-')
+                        break;
+                if (tolower(*call1 & 0xff) != tolower(*call2 & 0xff))
+                        return 0;
+        }
+        if (!*call1 && !*call2)
+                return 1;
+        if (!*call1 && !strcmp(call2, "-0"))
+                return 1;
+        if (!*call2 && !strcmp(call1, "-0"))
+                return 1;
+        return (!strcmp(call1, call2) ? 1 : 0);
+}
+
 static NR_Port *nr_port_ptr(char *name)
 {
 	NR_Port *p = nr_ports;
@@ -50,9 +69,8 @@ static NR_Port *nr_port_ptr(char *name)
 		return p;
 
 	while (p != NULL) {
-		if (strcasecmp(name, p->Name) == 0)
+		if (p->Name != NULL && strcasecmp(name, p->Name) == 0)
 			return p;
-
 		p = p->Next;
 	}
 
@@ -85,7 +103,7 @@ char *nr_config_get_name(char *device)
 	NR_Port *p = nr_ports;
 
 	while (p != NULL) {
-		if (strcmp(device, p->Device) == 0)
+		if (p->Device != NULL && strcmp(device, p->Device) == 0)
 			return p->Name;
 
 		p = p->Next;
@@ -120,11 +138,13 @@ char *nr_config_get_port(ax25_address *callsign)
 	ax25_address addr;
 
 	while (p != NULL) {
-		ax25_aton_entry(p->Call, (char *)&addr);
+		if (p->Call != NULL) {
+			ax25_aton_entry(p->Call, (char *)&addr);
 	
-		if (ax25_cmp(callsign, &addr) == 0)
-			return p->Name;
+			if (ax25_cmp(callsign, &addr) == 0)
+				return p->Name;
 
+		}
 		p = p->Next;
 	}
 
@@ -167,6 +187,7 @@ static int nr_config_init_port(int fd, int lineno, char *line, const char **ifca
 	char *name, *call, *alias, *paclen, *desc;
 	const char *dev = NULL;
 	int found = 0;
+	char call_beautified[10];
 	
 	name   = strtok(line, " \t");
 	call   = strtok(NULL, " \t");
@@ -181,15 +202,15 @@ static int nr_config_init_port(int fd, int lineno, char *line, const char **ifca
 	}
 
 	for (p = nr_ports; p != NULL; p = p->Next) {
-		if (strcasecmp(name, p->Name) == 0) {
+		if (p->Name != NULL && strcasecmp(name, p->Name) == 0) {
 			fprintf(stderr, "nrconfig: duplicate port name %s in line %d of config file\n", name, lineno);
 			return FALSE;
 		}
-		if (strcasecmp(call, p->Call) == 0) {
+		if (p->Call != NULL && is_same_call(call, p->Call)) {
 			fprintf(stderr, "nrconfig: duplicate callsign %s in line %d of config file\n", call, lineno);
 			return FALSE;
 		}
-		if (strcasecmp(alias, p->Alias) == 0) {
+		if (p->Alias != NULL && strcasecmp(alias, p->Alias) == 0) {
 			fprintf(stderr, "nrconfig: duplicate alias %s in line %d of config file\n", alias, lineno);
 			return FALSE;
 		}
@@ -203,9 +224,14 @@ static int nr_config_init_port(int fd, int lineno, char *line, const char **ifca
 	strupr(call);
 	strupr(alias);
 
+	strncpy(call_beautified, call, sizeof(call_beautified)-1);
+        call_beautified[sizeof(call_beautified)-1] = 0;
+	if (strchr(call_beautified, '-') == NULL && strlen(call_beautified) < 7)
+		strcat(call_beautified, "-0");
+
 	found = 0;
 	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
-	  if (strcmp(call,*ifcalls) == 0) {
+	  if (strcmp(call_beautified, *ifcalls) == 0) {
 	    found = 1;
 	    dev = *ifdevs;
 	    break;
@@ -250,6 +276,7 @@ int nr_config_load_ports(void)
 	int fd = -1, lineno = 1, n = 0, i;
 	const char **calllist = NULL;
 	const char **devlist  = NULL;
+	const char **pp;
 	int callcount = 0;
 	struct ifreq ifr;
 
@@ -273,10 +300,11 @@ int nr_config_load_ports(void)
 	    s = strchr(buffer, ':');
 	    if (s) *s = 0;
 	    s = buffer;
-	    while (*s == ' ') ++s;
+	    while (isspace(*s & 0xff)) ++s;
 
 	    memset(&ifr, 0, sizeof(ifr));
-	    strcpy(ifr.ifr_name, s);
+	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1);        
+	    ifr.ifr_name[IFNAMSIZ-1] = 0;
 
 	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
 	      fprintf(stderr, "nrconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
@@ -299,13 +327,23 @@ int nr_config_load_ports(void)
 	      continue;
 
 
-	    calllist = realloc(calllist, sizeof(char *) * (callcount+2));
-	    devlist  = realloc(devlist,  sizeof(char *) * (callcount+2));
-	    calllist[callcount] = strdup(s);
-	    devlist [callcount] = strdup(ifr.ifr_name);
-	    ++callcount;
-	    calllist[callcount] = NULL;
-	    devlist [callcount] = NULL;
+            if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
+              break;
+            calllist = pp;
+            if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
+              break;
+            devlist  = pp;
+            if ((calllist[callcount] = strdup(s)) != NULL) {
+              if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
+                ++callcount;
+                calllist[callcount] = NULL;
+                devlist [callcount] = NULL;
+              } else {
+                free((void*)calllist[callcount]);
+                calllist[callcount] = NULL;
+		devlist[callcount] = NULL;
+              }
+            }
 	  }
 	  fclose(fp);
 	  fp = NULL;
@@ -334,7 +372,8 @@ int nr_config_load_ports(void)
 
 	for(i = 0; calllist && calllist[i]; ++i) {
 	  free((void*)calllist[i]);
-	  free((void*)devlist[i]);
+	  if (devlist[i] != NULL)
+	    free((void*)devlist[i]);
 	}
 	if (calllist) free(calllist);
 	if (devlist) free(devlist);

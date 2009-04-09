@@ -49,9 +49,10 @@ static RS_Port *rs_port_ptr(char *name)
 		return p;
 
 	while (p != NULL) {
-		if (strcasecmp(name, p->Name) == 0)
-			return p;
-
+		if (p->Name != NULL) {
+			if (strcasecmp(name, p->Name) == 0)
+				return p;
+		}
 		p = p->Next;
 	}
 
@@ -84,9 +85,10 @@ char *rs_config_get_name(char *device)
 	RS_Port *p = rs_ports;
 
 	while (p != NULL) {
-		if (strcmp(device, p->Device) == 0)
-			return p->Name;
-
+		if (p->Device != NULL) {
+			if (strcmp(device, p->Device) == 0)
+				return p->Name;
+		}
 		p = p->Next;
 	}
 
@@ -119,11 +121,12 @@ char *rs_config_get_port(rose_address *address)
 	rose_address addr;
 
 	while (p != NULL) {
-		rose_aton(p->Addr, addr.rose_addr);
+		if (p->Addr != NULL) {
+			rose_aton(p->Addr, addr.rose_addr);
 	
-		if (rose_cmp(address, &addr) == 0)
-			return p->Name;
-
+			if (rose_cmp(address, &addr) == 0)
+				return p->Name;
+		}
 		p = p->Next;
 	}
 
@@ -162,11 +165,11 @@ static int rs_config_init_port(int fd, int lineno, char *line, const char **ifca
 	}
 
 	for (p = rs_ports; p != NULL; p = p->Next) {
-		if (strcasecmp(name, p->Name) == 0) {
+		if (p->Name != NULL && strcasecmp(name, p->Name) == 0) {
 			fprintf(stderr, "rsconfig: duplicate port name %s in line %d of config file\n", name, lineno);
 			return FALSE;
 		}
-		if (strcasecmp(addr, p->Addr) == 0) {
+		if (p->Addr != NULL && strcasecmp(addr, p->Addr) == 0) {
 			fprintf(stderr, "rsconfig: duplicate address %s in line %d of config file\n", addr, lineno);
 			return FALSE;
 		}
@@ -217,6 +220,7 @@ int rs_config_load_ports(void)
 	int fd, lineno = 1, n = 0, i;
 	const char **calllist = NULL;
 	const char **devlist  = NULL;
+	const char **pp;
 	int callcount = 0;
 	struct ifreq ifr;
 
@@ -240,10 +244,11 @@ int rs_config_load_ports(void)
 	    s = strchr(buffer, ':');
 	    if (s) *s = 0;
 	    s = buffer;
-	    while (*s == ' ') ++s;
+	    while (isspace(*s & 0xff)) ++s;
 
 	    memset(&ifr, 0, sizeof(ifr));
-	    strcpy(ifr.ifr_name, s);
+	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1);
+	    ifr.ifr_name[IFNAMSIZ-1] = 0;
 
 	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
 	      fprintf(stderr, "rsconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
@@ -266,13 +271,21 @@ int rs_config_load_ports(void)
 	      continue;
 
 
-	    calllist = realloc(calllist, sizeof(char *) * (callcount+2));
-	    devlist  = realloc(devlist,  sizeof(char *) * (callcount+2));
-	    calllist[callcount] = strdup(s);
-	    devlist [callcount] = strdup(ifr.ifr_name);
-	    ++callcount;
-	    calllist[callcount] = NULL;
-	    devlist [callcount] = NULL;
+            if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
+              break;
+            calllist = pp;
+            if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
+              break;
+            devlist  = pp;
+            if ((calllist[callcount] = strdup(s)) != NULL) {
+              if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
+                ++callcount;
+                calllist[callcount] = NULL;
+                devlist [callcount] = NULL;
+              } else {
+                free((void*)calllist[callcount]);
+              }
+            }
 	  }
 	  fclose(fp);
 	  fp = NULL;
@@ -301,7 +314,8 @@ int rs_config_load_ports(void)
 
 	for(i = 0; calllist && calllist[i]; ++i) {
 	  free((void*)calllist[i]);
-	  free((void*)devlist[i]);
+	  if (devlist[i] != NULL)
+	  	free((void*)devlist[i]);
 	}
 	if (calllist) free(calllist);
 	if (devlist) free(devlist);

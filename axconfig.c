@@ -42,6 +42,24 @@ typedef struct _axport
 static AX_Port *ax25_ports     = NULL;
 static AX_Port *ax25_port_tail = NULL;
 
+static int is_same_call(char *call1, char *call2)
+{
+	if (!call1 || !call2)
+		return 0;
+	for (; *call1 && *call2; call1++, call2++) {
+		if (*call1 == '-' || *call2 == '-')
+			break;
+		if (tolower(*call1 & 0xff) != tolower(*call2 & 0xff))
+			return 0;
+	}
+	if (!*call1 && !*call2)
+		return 1;
+	if (!*call1 && !strcmp(call2, "-0"))
+		return 1;
+	if (!*call2 && !strcmp(call1, "-0"))
+		return 1;
+	return (!strcmp(call1, call2) ? 1 : 0);
+}
 
 static AX_Port *ax25_port_ptr(char *name)
 {
@@ -51,11 +69,10 @@ static AX_Port *ax25_port_ptr(char *name)
 		return p;
 
 	while (p != NULL) {
-		if (strcasecmp(p->Name, name) == 0)
+		if (p->Name != NULL && strcasecmp(p->Name, name) == 0)
 			return p;
-		if (strcasecmp(p->Call, name) == 0)
+		if (p->Call != NULL && is_same_call(p->Call, name))
 			return p;
-
 		p = p->Next;
 	}
 
@@ -87,7 +104,7 @@ char *ax25_config_get_name(char *device)
 {
 	AX_Port *p = ax25_ports;
 
-	while (p != NULL) {
+	while (p != NULL && p->Device != NULL) {
 		if (strcmp(p->Device, device) == 0)
 			return p->Name;
 
@@ -125,7 +142,7 @@ char *ax25_config_get_port(ax25_address *callsign)
 	if (ax25_cmp(callsign, &null_ax25_address) == 0)
 		return "*";
 		
-	while (p != NULL) {
+	while (p != NULL && p->Call != NULL) {
 		ax25_aton_entry(p->Call, (char *)&addr);
 
 		if (ax25_cmp(callsign, &addr) == 0)
@@ -183,6 +200,7 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	char *name, *call, *baud, *paclen, *window, *desc;
 	const char *dev = NULL;
 	int found;
+	char call_beautified[10]; /* DL9SAU-10\0 */
 
 	name   = strtok(line, " \t");
 	call   = strtok(NULL, " \t");
@@ -202,7 +220,7 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 			fprintf(stderr, "axconfig: duplicate port name %s in line %d of axports file\n", name, lineno);
 			return FALSE;
 		}
-		if (strcasecmp(call, p->Call) == 0) {
+		if (is_same_call(call, p->Call)) {
 			fprintf(stderr, "axconfig: duplicate callsign %s in line %d of axports file\n", call, lineno);
 			return FALSE;
 		}
@@ -224,10 +242,19 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	}
 
 	strupr(call);
+        /* user may have configured "DL9SAU". But we compare to *ifcalls,
+         * which comes from ifr_hwaddr.sa_data and it always contains a SSID;
+         * in this case, "DL9SAU-0". This fixes a bug introduced 2008-04-02,
+         * which caused interfaces without SSID not being found anymore. :(
+         */
+        strncpy(call_beautified, call, sizeof(call_beautified)-1);
+        call_beautified[sizeof(call_beautified)-1] = 0;
+        if (strchr(call_beautified, '-') == NULL && strlen(call_beautified) < 7)
+          strcat(call_beautified, "-0");
 
 	found = 0;
 	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
-	  if (strcmp(call,*ifcalls) == 0) {
+          if (strcmp(call_beautified, *ifcalls) == 0) {
 	    found = 1;
 	    dev = *ifdevs;
 	    break;
@@ -248,7 +275,7 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	}
 
 	p->Name        = strdup(name);
-	p->Call        = strdup(call);
+	p->Call        = strdup(call_beautified);
 	p->Device      = strdup(dev);
 	p->Baud        = atoi(baud);
 	p->Window      = atoi(window);
@@ -274,6 +301,7 @@ int ax25_config_load_ports(void)
 	int fd = -1, lineno = 1, n = 0, i;
 	const char **calllist = NULL;
 	const char **devlist  = NULL;
+	const char **pp;
 	int callcount = 0;
 	struct ifreq ifr;
 
@@ -297,10 +325,11 @@ int ax25_config_load_ports(void)
 	    s = strchr(buffer, ':');
 	    if (s) *s = 0;
 	    s = buffer;
-	    while (*s == ' ') ++s;
+	    while (isspace(*s & 0xff)) ++s;
 
 	    memset(&ifr, 0, sizeof(ifr));
-	    strcpy(ifr.ifr_name, s);
+	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1); 	 
+            ifr.ifr_name[IFNAMSIZ-1] = 0;
 
 	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
 	      fprintf(stderr, "axconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
@@ -322,14 +351,24 @@ int ax25_config_load_ports(void)
 	    if (!(ifr.ifr_flags & IFF_UP))
 	      continue;
 
-
-	    calllist = realloc(calllist, sizeof(char *) * (callcount+2));
-	    devlist  = realloc(devlist,  sizeof(char *) * (callcount+2));
-	    calllist[callcount] = strdup(s);
-	    devlist [callcount] = strdup(ifr.ifr_name);
-	    ++callcount;
-	    calllist[callcount] = NULL;
-	    devlist [callcount] = NULL;
+            if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
+              break;
+	    calllist = pp;
+	    if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
+              break;
+	    devlist  = pp;
+	    if ((calllist[callcount] = strdup(s)) != NULL) {
+	      if (calllist[callcount]) {
+                if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
+	          ++callcount;
+	          calllist[callcount] = NULL;
+	          devlist [callcount] = NULL;
+                } else {
+                  free((void*)calllist[callcount]);
+                  calllist[callcount] = NULL;
+                }
+              }
+            }
 	  }
 	  fclose(fp);
 	  fp = NULL;
@@ -358,7 +397,8 @@ int ax25_config_load_ports(void)
 
 	for(i = 0; calllist && calllist[i]; ++i) {
 	  free((void*)calllist[i]);
-	  free((void*)devlist[i]);
+	  if (devlist[i] != NULL)
+	    free((void*)devlist[i]);
 	}
 	if (calllist) free(calllist);
 	if (devlist) free(devlist);

@@ -104,10 +104,11 @@ char *ax25_config_get_name(char *device)
 {
 	AX_Port *p = ax25_ports;
 
-	while (p != NULL && p->Device != NULL) {
-		if (strcmp(p->Device, device) == 0)
-			return p->Name;
-
+	while (p != NULL) {
+		if (p->Device != NULL) {
+			if (strcmp(p->Device, device) == 0)
+				return p->Name;
+		}
 		p = p->Next;
 	}
 
@@ -142,12 +143,14 @@ char *ax25_config_get_port(ax25_address *callsign)
 	if (ax25_cmp(callsign, &null_ax25_address) == 0)
 		return "*";
 		
-	while (p != NULL && p->Call != NULL) {
-		ax25_aton_entry(p->Call, (char *)&addr);
+	while (p != NULL) {
+		if (p->Call != NULL) {
+			ax25_aton_entry(p->Call, (char *)&addr);
 
-		if (ax25_cmp(callsign, &addr) == 0)
-			return p->Name;
+			if (ax25_cmp(callsign, &addr) == 0)
+				return p->Name;
 
+		}
 		p = p->Next;
 	}
 

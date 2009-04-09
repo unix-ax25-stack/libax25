@@ -219,11 +219,11 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	}
 
 	for (p = ax25_ports; p != NULL; p = p->Next) {
-		if (strcasecmp(name, p->Name) == 0) {
+		if (p->Name != NULL && strcasecmp(name, p->Name) == 0) {
 			fprintf(stderr, "axconfig: duplicate port name %s in line %d of axports file\n", name, lineno);
 			return FALSE;
 		}
-		if (is_same_call(call, p->Call)) {
+		if (p->Call != NULL && is_same_call(call, p->Call)) {
 			fprintf(stderr, "axconfig: duplicate callsign %s in line %d of axports file\n", call, lineno);
 			return FALSE;
 		}
@@ -361,15 +361,13 @@ int ax25_config_load_ports(void)
               break;
 	    devlist  = pp;
 	    if ((calllist[callcount] = strdup(s)) != NULL) {
-	      if (calllist[callcount]) {
-                if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
-	          ++callcount;
-	          calllist[callcount] = NULL;
-	          devlist [callcount] = NULL;
-                } else {
-                  free((void*)calllist[callcount]);
-                  calllist[callcount] = NULL;
-                }
+              if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
+	        ++callcount;
+	        calllist[callcount] = NULL;
+	        devlist [callcount] = NULL;
+              } else {
+                free((void*)calllist[callcount]);
+                calllist[callcount] = NULL;
               }
             }
 	  }

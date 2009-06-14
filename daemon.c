@@ -17,7 +17,7 @@ int daemon_start(int ignsigcld)
 	/* Programming_ pp.72-85, by W. Richard Stephens, Prentice		*/
 	/* Hall PTR, 1990							*/
 
-	register int childpid, fd;
+	int childpid, fd;
 
 	/* If started by init, don't bother */
 	if (getppid() == 1)

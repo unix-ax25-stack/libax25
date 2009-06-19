@@ -1,5 +1,3 @@
-ACLOCAL_AMFLAGS = -I m4
-
 lib_LTLIBRARIES = libax25.la libax25io.la
 
 libax25includedir = $(includedir)/netax25

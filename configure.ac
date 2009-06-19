@@ -1,6 +1,7 @@
 AC_PREREQ(2.59)
 AC_INIT(libax25, 0.0.12-rc1, linux-hams@vger.kernel.org)
 AC_CONFIG_SRCDIR(axlib.h)
+AC_CONFIG_MACRO_DIR([m4]
 AM_INIT_AUTOMAKE([foreign no-define])
 
 AM_CONFIG_HEADER(config.h)

@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <signal.h>
 
-#include "ttyutils.h"
+#include <netax25/ttyutils.h>
 #include "pathnames.h"
 
 static struct speed_struct {

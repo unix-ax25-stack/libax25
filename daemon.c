@@ -9,7 +9,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 
-#include "daemon.h"
+#include <netax25/daemon.h>
 
 int daemon_start(int ignsigcld)
 {

@@ -4,15 +4,11 @@
 #include <string.h>
 #include <config.h>
 
-#ifdef HAVE_NETAX25_AX25_H
 #include <netax25/ax25.h>		/* Needed by nrconfig.h */
-#else
-#include "kernel_ax25.h"
-#endif
+#include <netax25/nrconfig.h>
+#include <netax25/procutils.h>
 
 #include "pathnames.h"
-#include "nrconfig.h"
-#include "procutils.h"
 
 #define min(a,b) ((a) < (b) ? (a) : (b))
 

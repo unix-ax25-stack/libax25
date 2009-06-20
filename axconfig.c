@@ -13,19 +13,11 @@
 
 #include <net/if.h>
 #include <net/if_arp.h>
-#ifdef HAVE_NETAX25_AX25_H
 #include <netax25/ax25.h>
-#else
-#include "kernel_ax25.h"
-#endif
-#ifdef HAVE_NETROSE_ROSE_H
+#include <netax25/axconfig.h>
+#include <netax25/axlib.h>
 #include <netrose/rose.h>
-#else
-#include "kernel_rose.h"
-#endif
-#include "axlib.h"
 #include "pathnames.h"
-#include "axconfig.h"
 
 typedef struct _axport
 {

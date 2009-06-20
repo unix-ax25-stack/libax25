@@ -1,51 +1,51 @@
 lib_LTLIBRARIES = libax25.la libax25io.la
 
-libax25includedir = $(includedir)/netax25
-libax25ioincludedir = $(includedir)/netax25
+libax25includedir = $(includedir)
+libax25ioincludedir = $(includedir)
 
 INCLUDES = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
 	   -DAX25_LOCALSTATEDIR=\""$(localstatedir)/ax25/"\" 
 
-libax25include_HEADERS = 	\
-	axlib.h		\
-	axconfig.h	\
-	nrconfig.h	\
-	rsconfig.h	\
-	daemon.h	\
-	ttyutils.h	\
-	procutils.h	\
-	kernel_ax25.h	\
-	kernel_rose.h	\
-	kernel_netrom.h	\
-	mheard.h	
+nobase_libax25include_HEADERS = 	\
+	netax25/axlib.h			\
+	netax25/axconfig.h		\
+	netax25/nrconfig.h		\
+	netax25/rsconfig.h		\
+	netax25/daemon.h		\
+	netax25/ttyutils.h		\
+	netax25/procutils.h		\
+	netax25/kernel_ax25.h		\
+	netax25/kernel_rose.h		\
+	netax25/kernel_netrom.h		\
+	netax25/mheard.h	
 
-libax25ioinclude_HEADERS = 	\
-	ax25io.h
+nobase_libax25ioinclude_HEADERS = 	\
+	netax25/ax25io.h
 
 libax25_la_SOURCES = \
 	axconfig.c \
-	axconfig.h \
-	axlib.h \
+	netax25/axconfig.h \
+	netax25/axlib.h \
 	axutils.c \
 	config.h \
 	daemon.c \
-	daemon.h \
-	mheard.h \
+	netax25/daemon.h \
+	netax25/mheard.h \
 	nrconfig.c \
-	nrconfig.h \
+	netax25/nrconfig.h \
 	pathnames.h \
 	procutils.c \
-	procutils.h \
+	netax25/procutils.h \
 	rsconfig.c \
-	rsconfig.h \
+	netax25/rsconfig.h \
 	ttyutils.c \
-	ttyutils.h  \
-	kernel_ax25.h \
-	kernel_rose.h
+	netax25/ttyutils.h  \
+	netax25/kernel_ax25.h \
+	netax25/kernel_rose.h
 	
 libax25io_la_SOURCES = \
 	ax25io.c \
-	ax25io.h 
+	netax25/ax25io.h 
 
 man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
 

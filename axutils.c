@@ -7,18 +7,9 @@
 #include <sys/socket.h>
 #include <config.h>
 
-#ifdef HAVE_NETAX25_AX25_H
 #include <netax25/ax25.h>
-#else
-#include "kernel_ax25.h"
-#endif
-#ifdef HAVE_NETROSE_ROSE_H
+#include <netax25/axlib.h>
 #include <netrose/rose.h>
-#else
-#include "kernel_rose.h"
-#endif
-
-#include "axlib.h"
 
 ax25_address null_ax25_address = {{0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x00}};
 

@@ -5,9 +5,9 @@
 #include <stdarg.h>
 #include <string.h>
 #include <arpa/telnet.h>
+#include <netax25/ax25io.h>
 
 #include "config.h"
-#include "ax25io.h"
 
 static inline int send_iac_iac(ax25io *p);
 static inline int send_iac_cmd(ax25io *p, unsigned char cmd, unsigned char opt);

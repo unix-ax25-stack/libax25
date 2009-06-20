@@ -6,6 +6,16 @@ libax25ioincludedir = $(includedir)
 INCLUDES = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
 	   -DAX25_LOCALSTATEDIR=\""$(localstatedir)/ax25/"\" 
 
+if !AX25_H
+USE_LIBAX25_AX25_H = netax25/ax25.h
+endif
+if !NETROM_H
+USE_LIBAX25_NETROM_H = netrom/netrom.h
+endif
+if !ROSE_H
+USE_LIBAX25_ROSE_H = netrose/rose.h
+endif
+
 nobase_libax25include_HEADERS = 	\
 	netax25/axlib.h			\
 	netax25/axconfig.h		\
@@ -14,10 +24,10 @@ nobase_libax25include_HEADERS = 	\
 	netax25/daemon.h		\
 	netax25/ttyutils.h		\
 	netax25/procutils.h		\
-	netax25/kernel_ax25.h		\
-	netax25/kernel_rose.h		\
-	netax25/kernel_netrom.h		\
-	netax25/mheard.h	
+	netax25/mheard.h		\
+	$(USE_LIBAX25_AX25_H)		\
+	$(USE_LIBAX25_NETROM_H)		\
+	$(USE_LIBAX25_ROSE_H)
 
 nobase_libax25ioinclude_HEADERS = 	\
 	netax25/ax25io.h
@@ -40,8 +50,8 @@ libax25_la_SOURCES = \
 	netax25/rsconfig.h \
 	ttyutils.c \
 	netax25/ttyutils.h  \
-	netax25/kernel_ax25.h \
-	netax25/kernel_rose.h
+	$(USE_LIBAX25_AX25_H) \
+	$(USE_LIBAX25_ROSE_H)
 	
 libax25io_la_SOURCES = \
 	ax25io.c \

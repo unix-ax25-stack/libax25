@@ -29,6 +29,8 @@ if test "$has_ax25" = "yes" ; then
 else
   AC_MSG_RESULT(no)
 fi
+AM_CONDITIONAL([AX25_H], [test "$has_ax25" = "yes"])
+
 AC_MSG_CHECKING(for working netrom/netrom.h header file)
 AC_HEADER_EGREP(unsigned int ndigis, netrom/netrom.h, has_netrom=yes, has_netrom=no)
 if test "$has_netrom" = "yes" ; then
@@ -37,6 +39,8 @@ if test "$has_netrom" = "yes" ; then
 else
   AC_MSG_RESULT(no)
 fi
+AM_CONDITIONAL([NETROM_H], [test "$has_netrom" = "yes"])
+
 AC_MSG_CHECKING(for working netrose/rose.h header file)
 AC_HEADER_EGREP(rose_facilities_struct, netrose/rose.h, has_rose=yes, has_rose=no)
 if test "$has_rose" = "yes" ; then
@@ -45,6 +49,7 @@ if test "$has_rose" = "yes" ; then
 else
   AC_MSG_RESULT(no)
 fi
+AM_CONDITIONAL([ROSE_H], [test "$has_rose" = "yes"])
 
 dnl Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST

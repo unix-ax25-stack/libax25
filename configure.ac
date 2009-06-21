@@ -1,5 +1,5 @@
 AC_PREREQ(2.59)
-AC_INIT(libax25, 0.0.12-rc1, linux-hams@vger.kernel.org)
+AC_INIT(libax25, 0.0.12-rc2, linux-hams@vger.kernel.org)
 AC_CONFIG_SRCDIR(axconfig.c)
 AM_INIT_AUTOMAKE([foreign no-define])
 

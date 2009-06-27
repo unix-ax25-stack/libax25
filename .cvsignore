@@ -12,6 +12,7 @@ config.sub
 configure
 depcomp
 install-sh
+libax25.spec
 ltmain.sh
 missing
 Makefile

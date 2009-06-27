@@ -4,6 +4,7 @@ libax25 0.0.12
 	  buildable on modern distributions.
 	* libax25 will again find AX.25 interfaces if if they do not have an
 	  IP address assigned.
+	* Add support for building rpm packages.
 
  -- Ralf Baechle DL5RB <ralf@linux-mips.org> Sat, 6 Jun 2009 17:00:00 +0100
 

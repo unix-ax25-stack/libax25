@@ -62,4 +62,5 @@ if test "x$GCC" = "xyes"; then
 fi
 
 dnl Checks for library functions.
-AC_OUTPUT(Makefile)
+AC_CONFIG_FILES([Makefile])
+AC_OUTPUT

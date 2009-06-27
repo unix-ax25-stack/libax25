@@ -60,7 +60,7 @@ libax25io_la_SOURCES = \
 man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
 
 
-EXTRA_DIST= $(man_MANS) glibc.patch $(etcfiles)
+EXTRA_DIST= $(man_MANS) glibc.patch $(etcfiles) libax25.spec
 
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/

@@ -62,5 +62,10 @@ if test "x$GCC" = "xyes"; then
 fi
 
 dnl Checks for library functions.
-AC_CONFIG_FILES([Makefile])
+basever=$(echo $PACKAGE_VERSION | sed -e 's@-.*$@@')
+AC_SUBST(BASEVERSION, [$basever])
+extraver=$(echo $PACKAGE_VERSION | sed -e 's@@<:@^-@:>@*-@@' -e 's@-@_@')
+AC_SUBST(EXTRAVERSION, [$extraver])
+
+AC_CONFIG_FILES([Makefile libax25.spec])
 AC_OUTPUT

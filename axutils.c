@@ -198,14 +198,17 @@ char *ax25_ntoa(const ax25_address *a)
 		if (c != ' ') *s++ = c;
 	}
 	
-	*s++ = '-';
+	/* Convention is:  -0 suffixes are NOT printed */
+	if (a->ax25_call[6] & 0x1E) {
+	       *s++ = '-';
 
-	if ((n = ((a->ax25_call[6] >> 1) & 0x0F)) > 9) {
-		*s++ = '1';
-		n -= 10;
+		if ((n = ((a->ax25_call[6] >> 1) & 0x0F)) > 9) {
+			*s++ = '1';
+			n -= 10;
+		}
+		*s++ = n + '0';
 	}
-	
-	*s++ = n + '0';
+
 	*s++ = '\0';
 
 	return buf;

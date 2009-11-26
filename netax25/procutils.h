@@ -55,13 +55,13 @@ struct proc_ax25 {
 	int			ndigi;
 	unsigned char		st;
 	unsigned short		vs, vr, va;
-	unsigned short		t1, t1timer, t2, t2timer, t3, t3timer;
-	unsigned short		idle, idletimer;
-	unsigned char		n2, n2count;
-	unsigned short		rtt;
+	unsigned long		t1timer, t1, t2timer, t2, t3timer, t3;
+	unsigned long		idletimer, idle;
+	unsigned char		n2count, n2;
+	unsigned long		rtt;
 	unsigned char		window;
 	unsigned short		paclen;
-	unsigned long		sndq, rcvq;
+	unsigned short		sndq, rcvq;
 	unsigned long		inode;
 
 	struct proc_ax25	*next;
@@ -73,11 +73,11 @@ struct proc_nr {
 	char			my_circuit[6], ur_circuit[6];
 	unsigned char		st;
 	unsigned short		vs, vr, va;
-	unsigned short		t1, t1timer, t2, t2timer, t4, t4timer;
-	unsigned short		idle, idletimer;
-	unsigned char		n2, n2count;
+	unsigned long		t1timer, t1, t2timer, t2, t4timer, t4;
+	unsigned long		idletimer, idle;
+	unsigned char		n2count, n2;
 	unsigned char		window;
-	unsigned long		sndq, rcvq;
+	unsigned short		sndq, rcvq;
 	unsigned long		inode;
 
 	struct proc_nr		*next;
@@ -120,33 +120,34 @@ struct proc_rs {
 };
 
 struct proc_rs_route {
-	unsigned short	lci1;
+	unsigned short		lci1;
 	char			address1[11], call1[10];
-	unsigned int	neigh1;
-	unsigned short	lci2;
+	unsigned int		neigh1;
+	unsigned short		lci2;
 	char			address2[11], call2[10];
-	unsigned int	neigh2;
+	unsigned int		neigh2;
 
 	struct proc_rs_route	*next;
 };
 
 struct proc_rs_neigh {
-	int				addr;
+	int			addr;
 	char			call[10];
 	char			dev[14];
-	int				count;
+	unsigned int		count;
+	unsigned int		use;
 	char			mode[4];
 	char			restart[4];
-	unsigned short	t0, tf;
+	unsigned short		t0, tf;
 
 	struct proc_rs_neigh	*next;
 };
 
 struct proc_rs_nodes {
 	char			address[11];
-	unsigned char	mask;
-	unsigned char	n;
-	unsigned int	neigh1, neigh2, neigh3;
+	unsigned char		mask;
+	unsigned char		n;
+	unsigned int		neigh1, neigh2, neigh3;
 
 	struct proc_rs_nodes	*next;
 };

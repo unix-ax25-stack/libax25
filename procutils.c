@@ -117,22 +117,22 @@ struct proc_ax25 *read_proc_ax25(void)
 		p->vr = safe_atoi(token(&cp, space));
 		p->va = safe_atoi(token(&cp, space));
 
-		p->t1timer = safe_atoi(token(&cp, space));
-		p->t1      = safe_atoi(token(&cp, space));
+		p->t1timer = safe_atox(token(&cp, space));
+		p->t1      = safe_atox(token(&cp, space));
 
-		p->t2timer = safe_atoi(token(&cp, space));
-		p->t2      = safe_atoi(token(&cp, space));
+		p->t2timer = safe_atox(token(&cp, space));
+		p->t2      = safe_atox(token(&cp, space));
 
-		p->t3timer = safe_atoi(token(&cp, space));
-		p->t3      = safe_atoi(token(&cp, space));
+		p->t3timer = safe_atox(token(&cp, space));
+		p->t3      = safe_atox(token(&cp, space));
 
-		p->idletimer = safe_atoi(token(&cp, space));
-		p->idle      = safe_atoi(token(&cp, space));
+		p->idletimer = safe_atox(token(&cp, space));
+		p->idle      = safe_atox(token(&cp, space));
 
 		p->n2count = safe_atoi(token(&cp, space));
 		p->n2      = safe_atoi(token(&cp, space));
 
-		p->rtt    = safe_atoi(token(&cp, space));
+		p->rtt    = safe_atox(token(&cp, space));
 
 		p->window = safe_atoi(token(&cp, space));
 
@@ -141,7 +141,7 @@ struct proc_ax25 *read_proc_ax25(void)
 		p->sndq   = safe_atoi(token(&cp, space));
 		p->rcvq   = safe_atoi(token(&cp, space));
 
-		p->inode  = safe_atoi(token(&cp, space));
+		p->inode  = safe_atox(token(&cp, space));
 
 		p->next = list;
 		list = p;
@@ -244,21 +244,21 @@ struct proc_nr *read_proc_nr(void)
 		p->vr = safe_atoi(token(&cp, space));
 		p->va = safe_atoi(token(&cp, space));
 
-		p->t1timer   = safe_atoi(token(&cp, "/"));
-		p->t1        = safe_atoi(token(&cp, "/ \t\r\n"));
-		p->t2timer   = safe_atoi(token(&cp, "/"));
-		p->t2        = safe_atoi(token(&cp, "/ \t\r\n"));
-		p->t4timer   = safe_atoi(token(&cp, "/"));
-		p->t4        = safe_atoi(token(&cp, "/ \t\r\n"));
-		p->idletimer = safe_atoi(token(&cp, "/"));
-		p->idle      = safe_atoi(token(&cp, "/ \t\r\n"));
+		p->t1timer   = safe_atox(token(&cp, "/"));
+		p->t1        = safe_atox(token(&cp, "/ \t\r\n"));
+		p->t2timer   = safe_atox(token(&cp, "/"));
+		p->t2        = safe_atox(token(&cp, "/ \t\r\n"));
+		p->t4timer   = safe_atox(token(&cp, "/"));
+		p->t4        = safe_atox(token(&cp, "/ \t\r\n"));
+		p->idletimer = safe_atox(token(&cp, "/"));
+		p->idle      = safe_atox(token(&cp, "/ \t\r\n"));
 		p->n2count   = safe_atoi(token(&cp, "/"));
 		p->n2        = safe_atoi(token(&cp, "/ \t\r\n"));
 
 		p->window = safe_atoi(token(&cp, space));
 		p->sndq   = safe_atoi(token(&cp, space));
 		p->rcvq   = safe_atoi(token(&cp, space));
-		p->inode  = safe_atoi(token(&cp, space));
+		p->inode  = safe_atox(token(&cp, space));
 
 		p->next = list;
 		list = p;
@@ -495,6 +495,7 @@ struct proc_rs_neigh *read_proc_rs_neigh(void)
 		safe_strncpy(p->call, strtok(NULL, " \t\n\r"), 9);
 		safe_strncpy(p->dev,  strtok(NULL, " \t\n\r"), 13);
 		p->count = safe_atoi(strtok(NULL, " \t\n\r"));
+		p->use = safe_atoi(strtok(NULL, " \t\n\r"));
 		safe_strncpy(p->mode,  strtok(NULL, " \t\n\r"), 3);
 		safe_strncpy(p->restart,  strtok(NULL, " \t\n\r"), 3);
 		p->t0 = safe_atoi(strtok(NULL, " \t\n\r"));

@@ -391,6 +391,10 @@ struct proc_nr_nodes *read_proc_nr_nodes(void)
 		if ((cp = nr_config_get_alias(name)) == NULL)
 			break;
 		safe_strncpy(new->alias, cp, 6);
+		new->w = 1;             /* local node w */
+		new->qual1 = 255;       /* obviously, local node quality should be set to maximum value */
+		new->obs1 = 6;          /* persist */ 
+
 		/*
 		 * n == 0 indicates a local node.
 		 */

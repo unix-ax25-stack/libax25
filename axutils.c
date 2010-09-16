@@ -108,7 +108,7 @@ int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 		else
 			addrp += sizeof(ax25_address);
 
-	} while (n < AX25_MAX_DIGIS && *bp);
+	} while (n <= AX25_MAX_DIGIS && *bp);
 
 	free(tmp);
 
@@ -148,7 +148,7 @@ int ax25_aton_arglist(const char *call[], struct full_sockaddr_ax25 *sax)
 		else
 			addrp += sizeof(ax25_address);
 
-	} while (n < AX25_MAX_DIGIS && call[argp] != NULL);
+	} while (n <= AX25_MAX_DIGIS && call[argp] != NULL);
 
 	/* Tidy up */
 	sax->fsa_ax25.sax25_ndigis = n - 1;

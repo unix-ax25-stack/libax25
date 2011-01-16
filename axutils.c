@@ -31,7 +31,7 @@ int ax25_aton_entry(const char *name, char *buf)
 			break;
 
 		if (!isalnum(c)) {
-			printf("axutils: invalid symbol in callsign %s\n", name);
+			printf("axutils: invalid symbol in callsign '%s'\n", name);
 			return -1;
 		}
 
@@ -50,7 +50,7 @@ int ax25_aton_entry(const char *name, char *buf)
 		p++;
 
 		if (sscanf(p, "%d", &ssid) != 1 || ssid < 0 || ssid > 15) {
-			printf("axutils: SSID must follow '-' and be numeric in the range 0-15 - %s\n", name);
+			printf("axutils: SSID must follow '-' and be numeric in the range 0-15 - '%s'\n", name);
 			return -1;
 		}
 	}
@@ -166,7 +166,7 @@ int rose_aton(const char *addr, char *buf)
 	int i, n;
 
 	if (strlen(addr) != 10) {
-		printf("axutils: invalid rose address length\n");
+		printf("axutils: invalid rose address '%s' length = %d\n", addr, strlen(addr));
 		return -1;
 	}
 
@@ -195,7 +195,8 @@ char *ax25_ntoa(const ax25_address *a)
 	for (n = 0, s = buf; n < 6; n++) {
 		c = (a->ax25_call[n] >> 1) & 0x7F;
 
-		if (c != ' ') *s++ = c;
+		if (c != ' ')
+			*s++ = c;
 	}
 	
 	/* Convention is:  -0 suffixes are NOT printed */
@@ -278,13 +279,11 @@ int rose_cmp(const rose_address *a, const rose_address *b)
  */
 int ax25_validate(const char *call)
 {
-	unsigned char c;
 	char s[7];
 	int n;
 
 	for (n = 0; n < 6; n++) {
-		c = call[n];
-		s[n] = (c >> 1) & 0x7F;
+		s[n] = (call[n] >> 1) & 0x7F;
 	}
 	s[6] = '\0';
 

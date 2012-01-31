@@ -1,3 +1,9 @@
+	* Interfaces with a callsign without SSID were not been found anymore
+	  after the last patch below. See cvs comment for detail.
+          Affected files: axconfig.c, nrconfig.c and procutils.c.
+
+ -- Thomas Osterried DL9SAU <ax25@x-berg.in-berlin.de> Wed, 01 Feb 2012 00:10:45 +0100
+
 	* ax25_ntoa() does no longer print a zero SSID.  This avoids addresses
 	  like AB3DEF-0 which is general convention anyway.
 

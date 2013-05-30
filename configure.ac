@@ -1,9 +1,9 @@
 AC_PREREQ(2.59)
 AC_INIT(libax25, 0.0.12-rc2, linux-hams@vger.kernel.org)
 AC_CONFIG_SRCDIR(axconfig.c)
-AM_INIT_AUTOMAKE([foreign no-define])
+AM_INIT_AUTOMAKE([foreign no-define 1.7])
 
-AM_CONFIG_HEADER(config.h)
+AC_CONFIG_HEADERS(config.h)
 
 dnl Checks for programs.
 AC_PROG_CC

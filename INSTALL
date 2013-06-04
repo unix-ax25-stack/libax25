@@ -13,9 +13,9 @@ To build it you type:
 
 If you want to put the files in the "normal" places, type:
 	./configure --exec_prefix=/usr --sysconfdir=/etc --localstatedir=/var
-	make 
+	make
 	make install
-	
+
 That will put the binaries in /usr/{s}bin and the config files in
 /etc/ax25
 

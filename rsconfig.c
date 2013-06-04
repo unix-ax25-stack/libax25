@@ -54,21 +54,21 @@ static RS_Port *rs_port_ptr(char *name)
 char *rs_config_get_next(char *name)
 {
 	RS_Port *p;
-	
+
 	if (rs_ports == NULL)
 		return NULL;
-		
+
 	if (name == NULL)
 		return rs_ports->Name;
-		
+
 	if ((p = rs_port_ptr(name)) == NULL)
 		return NULL;
-		
+
 	p = p->Next;
 
 	if (p == NULL)
 		return NULL;
-		
+
 	return p->Name;
 }
 
@@ -115,7 +115,7 @@ char *rs_config_get_port(rose_address *address)
 	while (p != NULL) {
 		if (p->Addr != NULL) {
 			rose_aton(p->Addr, addr.rose_addr);
-	
+
 			if (rose_cmp(address, &addr) == 0)
 				return p->Name;
 		}
@@ -146,7 +146,7 @@ static int rs_config_init_port(int fd, int lineno, char *line, const char **ifca
 	char *name, *addr, *desc;
 	const char *dev = NULL;
 	int found = 0;
-	
+
 	name   = strtok(line, " \t");
 	addr   = strtok(NULL, " \t");
 	desc   = strtok(NULL, "");
@@ -201,7 +201,7 @@ static int rs_config_init_port(int fd, int lineno, char *line, const char **ifca
 	rs_port_tail = p;
 
 	p->Next = NULL;
-	
+
 	return TRUE;
 }
 

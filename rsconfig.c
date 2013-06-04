@@ -261,21 +261,21 @@ int rs_config_load_ports(void)
 	      continue;
 
 
-            if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
-              break;
-            calllist = pp;
-            if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
-              break;
-            devlist  = pp;
-            if ((calllist[callcount] = strdup(s)) != NULL) {
-              if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
-                ++callcount;
-                calllist[callcount] = NULL;
-                devlist [callcount] = NULL;
-              } else {
-                free((void*)calllist[callcount]);
-              }
-            }
+	    if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
+	      break;
+	    calllist = pp;
+	    if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
+	      break;
+	    devlist  = pp;
+	    if ((calllist[callcount] = strdup(s)) != NULL) {
+	      if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
+		++callcount;
+		calllist[callcount] = NULL;
+		devlist [callcount] = NULL;
+	      } else {
+		free((void*)calllist[callcount]);
+	      }
+	    }
 	  }
 	  fclose(fp);
 	  fp = NULL;
@@ -305,7 +305,7 @@ int rs_config_load_ports(void)
 	for(i = 0; calllist && calllist[i]; ++i) {
 	  free((void*)calllist[i]);
 	  if (devlist[i] != NULL)
-	  	free((void*)devlist[i]);
+		free((void*)devlist[i]);
 	}
 	if (calllist) free(calllist);
 	if (devlist) free(devlist);

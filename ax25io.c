@@ -592,7 +592,7 @@ char *axio_getline(ax25io *p)
 	int ret;
 
 	ret = axio_gets((char *) p->gbuf + p->gbuf_usage,
-	                AXBUFLEN - p->gbuf_usage, p);
+			AXBUFLEN - p->gbuf_usage, p);
 	if (ret > 0 || (ret == 0 && errno == 0)) {
 		p->gbuf_usage = 0;
 		return (char *) p->gbuf;

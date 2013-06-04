@@ -669,5 +669,5 @@ struct proc_nr_nodes *find_node(char *addr, struct proc_nr_nodes *nodes)
 	}
 	if (!nodes)
 		free_proc_nr_nodes(list);
-        return p;
+	return p;
 }

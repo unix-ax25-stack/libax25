@@ -34,21 +34,21 @@ static NR_Port *nr_port_tail;
 
 static int is_same_call(char *call1, char *call2)
 {
-        if (!call1 || !call2)
-                return 0;
-        for (; *call1 && *call2; call1++, call2++) {
-                if (*call1 == '-' || *call2 == '-')
-                        break;
-                if (tolower(*call1 & 0xff) != tolower(*call2 & 0xff))
-                        return 0;
-        }
-        if (!*call1 && !*call2)
-                return 1;
-        if (!*call1 && !strcmp(call2, "-0"))
-                return 1;
-        if (!*call2 && !strcmp(call1, "-0"))
-                return 1;
-        return (!strcmp(call1, call2) ? 1 : 0);
+	if (!call1 || !call2)
+		return 0;
+	for (; *call1 && *call2; call1++, call2++) {
+		if (*call1 == '-' || *call2 == '-')
+			break;
+		if (tolower(*call1 & 0xff) != tolower(*call2 & 0xff))
+			return 0;
+	}
+	if (!*call1 && !*call2)
+		return 1;
+	if (!*call1 && !strcmp(call2, "-0"))
+		return 1;
+	if (!*call2 && !strcmp(call1, "-0"))
+		return 1;
+	return (!strcmp(call1, call2) ? 1 : 0);
 }
 
 static NR_Port *nr_port_ptr(char *name)
@@ -315,23 +315,23 @@ int nr_config_load_ports(void)
 	      continue;
 
 
-            if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
-              break;
-            calllist = pp;
-            if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
-              break;
-            devlist  = pp;
-            if ((calllist[callcount] = strdup(s)) != NULL) {
-              if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
-                ++callcount;
-                calllist[callcount] = NULL;
-                devlist [callcount] = NULL;
-              } else {
-                free((void*)calllist[callcount]);
-                calllist[callcount] = NULL;
+	    if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
+	      break;
+	    calllist = pp;
+	    if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
+	      break;
+	    devlist  = pp;
+	    if ((calllist[callcount] = strdup(s)) != NULL) {
+	      if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
+		++callcount;
+		calllist[callcount] = NULL;
+		devlist [callcount] = NULL;
+	      } else {
+		free((void*)calllist[callcount]);
+		calllist[callcount] = NULL;
 		devlist[callcount] = NULL;
-              }
-            }
+	      }
+	    }
 	  }
 	  fclose(fp);
 	  fp = NULL;

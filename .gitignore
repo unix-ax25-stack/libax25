@@ -16,7 +16,14 @@ config.sub
 configure
 depcomp
 install-sh
+libax25-*.shar.gz
+libax25-*.tar.Z
+libax25-*.tar.bz2
 libax25-*.tar.gz
+libax25-*.tar.lz
+libax25-*.tar.lzma
+libax25-*.tar.xz
+libax25-*.zip
 libax25.la
 libax25.spec
 libax25io.la

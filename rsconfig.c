@@ -1,5 +1,3 @@
-#define _LINUX_STRING_H_
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

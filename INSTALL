@@ -21,4 +21,3 @@ That will put the binaries in /usr/{s}bin and the config files in
 
 If you want to install the example config files
 	make installconf
-

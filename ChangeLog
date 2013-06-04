@@ -80,4 +80,3 @@ libax25 0.0.2
 	* Initial version from Terry Dawson's code, split from the old
 	  ax25-utils package.
  -- Craig Small <csmall@small.dropbear.id.au>  ,  2 Apr 1999
-

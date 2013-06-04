@@ -74,4 +74,3 @@ installconf:
 	  echo " $(INSTALL_DATA) $$p $(DESTDIR)$(etcdir)/$$p"; \
 	  $(INSTALL_DATA) $$p $(DESTDIR)$(etcdir)/$$p; \
 	done
-

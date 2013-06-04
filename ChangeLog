@@ -19,7 +19,7 @@ libax25 0.0.12
 
  -- Ralf Baechle DL5RB <ralf@linux-mips.org> Sat, 6 Jun 2009 17:00:00 +0100
 
-libax25 0.0.11	
+libax25 0.0.11
 	* libax25io handles nonblocking io correctly. (PE1RXQ)
 	  THIS BREAKS PRACTICLY EVERY APP USING THIS LIBRARY, FIX THEM!!!
 

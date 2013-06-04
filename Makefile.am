@@ -4,7 +4,7 @@ libax25includedir = $(includedir)
 libax25ioincludedir = $(includedir)
 
 INCLUDES = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
-	   -DAX25_LOCALSTATEDIR=\""$(localstatedir)/ax25/"\" 
+	   -DAX25_LOCALSTATEDIR=\""$(localstatedir)/ax25/"\"
 
 if !AX25_H
 USE_LIBAX25_AX25_H = netax25/ax25.h
@@ -52,10 +52,10 @@ libax25_la_SOURCES = \
 	netax25/ttyutils.h  \
 	$(USE_LIBAX25_AX25_H) \
 	$(USE_LIBAX25_ROSE_H)
-	
+
 libax25io_la_SOURCES = \
 	ax25io.c \
-	netax25/ax25io.h 
+	netax25/ax25io.h
 
 dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
 

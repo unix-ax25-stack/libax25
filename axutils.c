@@ -16,7 +16,7 @@ ax25_address null_ax25_address = {{0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x00}};
 /*
  *	Library routine for callsign conversion.
  */
- 
+
 int ax25_aton_entry(const char *name, char *buf)
 {
 	int ct   = 0;
@@ -66,12 +66,12 @@ int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 	char *addrp;
 	int n = 0;
 	char *tmp = strdup(call);
-	
+
 	if (tmp == NULL)
 		return -1;
-		
+
 	bp = tmp;
-	
+
 	addrp = sax->fsa_ax25.sax25_call.ax25_call;
 
 	do {
@@ -86,19 +86,19 @@ int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 
 		if (*np != '\0')
 			*np++ = '\0';
-	
+
 		/* Check for the optional 'via' syntax */
 		if (n == 1 && (strcasecmp(bp, "V") == 0 || strcasecmp(bp, "VIA") == 0)) {
 			bp = np;
 			continue;
 		}
-		
+
 		/* Process the token */
 		if (ax25_aton_entry(bp, addrp) == -1) {
 			free(tmp);
 			return -1;
 		}
-			
+
 		/* Move along */
 		bp = np;
 		n++;
@@ -114,7 +114,7 @@ int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 
 	/* Tidy up */
 	sax->fsa_ax25.sax25_ndigis = n - 1;
-	sax->fsa_ax25.sax25_family = AF_AX25;	
+	sax->fsa_ax25.sax25_family = AF_AX25;
 
 	return sizeof(struct full_sockaddr_ax25);
 }
@@ -132,15 +132,15 @@ int ax25_aton_arglist(const char *call[], struct full_sockaddr_ax25 *sax)
 		/* Fetch one callsign token */
 		if ((bp = call[argp++]) == NULL)
 			break;
-	
+
 		/* Check for the optional 'via' syntax */
 		if (n == 1 && (strcasecmp(bp, "V") == 0 || strcasecmp(bp, "VIA") == 0))
 			continue;
-		
+
 		/* Process the token */
 		if (ax25_aton_entry(bp, addrp) == -1)
 			return -1;
-			
+
 		n++;
 
 		if (n == 1)
@@ -152,7 +152,7 @@ int ax25_aton_arglist(const char *call[], struct full_sockaddr_ax25 *sax)
 
 	/* Tidy up */
 	sax->fsa_ax25.sax25_ndigis = n - 1;
-	sax->fsa_ax25.sax25_family = AF_AX25;	
+	sax->fsa_ax25.sax25_family = AF_AX25;
 
 	return sizeof(struct full_sockaddr_ax25);
 }
@@ -160,7 +160,7 @@ int ax25_aton_arglist(const char *call[], struct full_sockaddr_ax25 *sax)
 /*
  *	Library routine for Rose address conversion.
  */
- 
+
 int rose_aton(const char *addr, char *buf)
 {
 	int i, n;
@@ -198,7 +198,7 @@ char *ax25_ntoa(const ax25_address *a)
 		if (c != ' ')
 			*s++ = c;
 	}
-	
+
 	/* Convention is:  -0 suffixes are NOT printed */
 	if (a->ax25_call[6] & 0x1E) {
 	       *s++ = '-';
@@ -270,7 +270,7 @@ int rose_cmp(const rose_address *a, const rose_address *b)
 	for (i = 0; i < 5; i++)
 		if (a->rose_addr[i] != b->rose_addr[i])
 			return 1;
-			
+
 	return 0;
 }
 
@@ -302,10 +302,10 @@ char *strupr(char *s)
 
 	if (s == NULL)
 		return NULL;
-	
+
 	for (p = s; *p != '\0'; p++)
 		*p = toupper(*p);
-		
+
 	return s;
 }
 
@@ -318,9 +318,9 @@ char *strlwr(char *s)
 
 	if (s == NULL)
 		return NULL;
-	
+
 	for (p = s; *p != '\0'; p++)
 		*p = tolower(*p);
-		
+
 	return s;
 }

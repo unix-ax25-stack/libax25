@@ -74,21 +74,21 @@ static AX_Port *ax25_port_ptr(char *name)
 char *ax25_config_get_next(char *name)
 {
 	AX_Port *p;
-	
+
 	if (ax25_ports == NULL)
 		return NULL;
-		
+
 	if (name == NULL)
 		return ax25_ports->Name;
-	
+
 	if ((p = ax25_port_ptr(name)) == NULL)
 		return NULL;
-			
+
 	p = p->Next;
 
 	if (p == NULL)
 		return NULL;
-		
+
 	return p->Name;
 }
 
@@ -134,7 +134,7 @@ char *ax25_config_get_port(ax25_address *callsign)
 
 	if (ax25_cmp(callsign, &null_ax25_address) == 0)
 		return "*";
-		
+
 	while (p != NULL) {
 		if (p->Call != NULL) {
 			ax25_aton_entry(p->Call, (char *)&addr);
@@ -314,7 +314,7 @@ int ax25_config_load_ports(void)
 	    while (isspace(*s & 0xff)) ++s;
 
 	    memset(&ifr, 0, sizeof(ifr));
-	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1); 	 
+	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1);
             ifr.ifr_name[IFNAMSIZ-1] = 0;
 
 	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {

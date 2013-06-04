@@ -13,7 +13,7 @@ BuildRequires:	zlib-devel
 %description
 libax25 is a library for ham radio applications that use the AX.25, NETROM
 or ROSE protocols.  Included are routines to do ax25 address parsing, common
-ax25 application config file parsing, etc. 
+ax25 application config file parsing, etc.
 
 %package        devel
 

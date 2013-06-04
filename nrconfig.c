@@ -72,21 +72,21 @@ static NR_Port *nr_port_ptr(char *name)
 char *nr_config_get_next(char *name)
 {
 	NR_Port *p;
-	
+
 	if (nr_ports == NULL)
 		return NULL;
-		
+
 	if (name == NULL)
 		return nr_ports->Name;
-		
+
 	if ((p = nr_port_ptr(name)) == NULL)
 		return NULL;
-		
+
 	p = p->Next;
 
 	if (p == NULL)
 		return NULL;
-		
+
 	return p->Name;
 }
 
@@ -132,7 +132,7 @@ char *nr_config_get_port(ax25_address *callsign)
 	while (p != NULL) {
 		if (p->Call != NULL) {
 			ax25_aton_entry(p->Call, (char *)&addr);
-	
+
 			if (ax25_cmp(callsign, &addr) == 0)
 				return p->Name;
 
@@ -179,7 +179,7 @@ static int nr_config_init_port(int fd, int lineno, char *line, const char **ifca
 	char *name, *call, *alias, *paclen, *desc;
 	const char *dev = NULL;
 	int found = 0;
-	
+
 	name   = strtok(line, " \t");
 	call   = strtok(NULL, " \t");
 	alias  = strtok(NULL, " \t");
@@ -255,7 +255,7 @@ static int nr_config_init_port(int fd, int lineno, char *line, const char **ifca
 	nr_port_tail = p;
 
 	p->Next = NULL;
-	
+
 	return TRUE;
 }
 
@@ -293,7 +293,7 @@ int nr_config_load_ports(void)
 	    while (isspace(*s & 0xff)) ++s;
 
 	    memset(&ifr, 0, sizeof(ifr));
-	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1);        
+	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1);
 	    ifr.ifr_name[IFNAMSIZ-1] = 0;
 
 	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {

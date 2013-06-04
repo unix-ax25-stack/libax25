@@ -39,7 +39,7 @@ typedef struct ax25io_s {
 	int optr;		/* output pointer                       */
 	void *zptr;		/* pointer to the compression struct	*/
 
-        struct ax25io_s *next;	/* linked list pointer			*/
+	struct ax25io_s *next;	/* linked list pointer			*/
 } ax25io;
 
 #define EOLMODE_TEXT	0

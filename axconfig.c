@@ -239,7 +239,7 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	if ((cp = strstr(call, "-0")) != NULL)
 	  *cp = '\0';
 	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
-          if (strcmp(call, *ifcalls) == 0) {
+	  if (strcmp(call, *ifcalls) == 0) {
 	    found = 1;
 	    dev = *ifdevs;
 	    break;
@@ -313,7 +313,7 @@ int ax25_config_load_ports(void)
 
 	    memset(&ifr, 0, sizeof(ifr));
 	    strncpy(ifr.ifr_name, s, IFNAMSIZ-1);
-            ifr.ifr_name[IFNAMSIZ-1] = 0;
+	    ifr.ifr_name[IFNAMSIZ-1] = 0;
 
 	    if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
 	      fprintf(stderr, "axconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
@@ -335,22 +335,22 @@ int ax25_config_load_ports(void)
 	    if (!(ifr.ifr_flags & IFF_UP))
 	      continue;
 
-            if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
-              break;
+	    if ((pp = realloc(calllist, sizeof(char *) * (callcount+2))) == 0)
+	      break;
 	    calllist = pp;
 	    if ((pp = realloc(devlist,  sizeof(char *) * (callcount+2))) == 0)
-              break;
+	      break;
 	    devlist  = pp;
 	    if ((calllist[callcount] = strdup(s)) != NULL) {
-              if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
-	        ++callcount;
-	        calllist[callcount] = NULL;
-	        devlist [callcount] = NULL;
-              } else {
-                free((void*)calllist[callcount]);
-                calllist[callcount] = NULL;
-              }
-            }
+	      if ((devlist[callcount] = strdup(ifr.ifr_name)) != NULL) {
+		++callcount;
+		calllist[callcount] = NULL;
+		devlist [callcount] = NULL;
+	      } else {
+		free((void*)calllist[callcount]);
+		calllist[callcount] = NULL;
+	      }
+	    }
 	  }
 	  fclose(fp);
 	  fp = NULL;

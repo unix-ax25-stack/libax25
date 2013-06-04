@@ -1,6 +1,6 @@
 	* Interfaces with a callsign without SSID were not been found anymore
 	  after the last patch below. See cvs comment for detail.
-          Affected files: axconfig.c, nrconfig.c and procutils.c.
+	  Affected files: axconfig.c, nrconfig.c and procutils.c.
 
  -- Thomas Osterried DL9SAU <ax25@x-berg.in-berlin.de> Wed, 01 Feb 2012 00:10:45 +0100
 
@@ -27,9 +27,9 @@ libax25 0.0.11
 
 libax25 0.0.10
 
- 	* Fixed byte counting in flush_obuf() (PE1RXQ)
- 	* Fixed buffer overflow in flush_obuf() (PE1RXQ)
- 	* axio_flush() actually flushes the buffer (PE1RXQ)
+	* Fixed byte counting in flush_obuf() (PE1RXQ)
+	* Fixed buffer overflow in flush_obuf() (PE1RXQ)
+	* axio_flush() actually flushes the buffer (PE1RXQ)
 
  -- Craig Small <csmall@small.dropbear.id.au>  Fri, 29 Mar 2002 08:54:20 +1100
 

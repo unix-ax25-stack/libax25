@@ -254,10 +254,10 @@ int ax25_cmp(const ax25_address *a, const ax25_address *b)
 	if ((a->ax25_call[5] & 0xFE) != (b->ax25_call[5] & 0xFE))
 		return 1;
 
- 	if ((a->ax25_call[6] & 0x1E) != (b->ax25_call[6] & 0x1E))	/* SSID without control bit */
- 		return 2;
+	if ((a->ax25_call[6] & 0x1E) != (b->ax25_call[6] & 0x1E))	/* SSID without control bit */
+		return 2;
 
- 	return 0;
+	return 0;
 }
 
 /*

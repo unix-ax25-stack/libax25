@@ -29,8 +29,8 @@ typedef struct _nrport
 	char *Description;
 } NR_Port;
 
-static NR_Port *nr_ports       = NULL;
-static NR_Port *nr_port_tail   = NULL;
+static NR_Port *nr_ports;
+static NR_Port *nr_port_tail;
 
 static int is_same_call(char *call1, char *call2)
 {

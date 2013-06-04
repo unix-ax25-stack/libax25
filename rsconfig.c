@@ -28,8 +28,8 @@ typedef struct _rsport
 	char *Description;
 } RS_Port;
 
-static RS_Port *rs_ports       = NULL;
-static RS_Port *rs_port_tail   = NULL;
+static RS_Port *rs_ports;
+static RS_Port *rs_port_tail;
 
 static RS_Port *rs_port_ptr(char *name)
 {

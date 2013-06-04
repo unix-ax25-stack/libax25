@@ -29,8 +29,8 @@ typedef struct _axport
 	char *Description;
 } AX_Port;
 
-static AX_Port *ax25_ports     = NULL;
-static AX_Port *ax25_port_tail = NULL;
+static AX_Port *ax25_ports;
+static AX_Port *ax25_port_tail;
 
 static int is_same_call(char *call1, char *call2)
 {

@@ -13,7 +13,7 @@ static inline int send_iac_iac(ax25io *p);
 static inline int send_iac_cmd(ax25io *p, unsigned char cmd, unsigned char opt);
 static inline int send_linemode(ax25io *p);
 
-static ax25io *Iolist = NULL;
+static ax25io *Iolist;
 
 /* --------------------------------------------------------------------- */
 

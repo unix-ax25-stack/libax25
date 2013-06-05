@@ -48,7 +48,7 @@ static int is_same_call(char *call1, char *call2)
 		return 1;
 	if (!*call2 && !strcmp(call1, "-0"))
 		return 1;
-	return (!strcmp(call1, call2) ? 1 : 0);
+	return !strcmp(call1, call2) ? 1 : 0;
 }
 
 static NR_Port *nr_port_ptr(char *name)

@@ -358,7 +358,7 @@ int nr_config_load_ports(void)
 	if (fd >= 0) close(fd);
 	if (fp) fclose(fp);
 
-	for(i = 0; calllist && calllist[i]; ++i) {
+	for (i = 0; calllist && calllist[i]; ++i) {
 	  free((void*)calllist[i]);
 	  if (devlist[i] != NULL)
 	    free((void*)devlist[i]);

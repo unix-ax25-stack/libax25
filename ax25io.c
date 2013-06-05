@@ -70,7 +70,6 @@ void axio_end(ax25io *p)
 	close(p->ofd);
 	p->ifd = -1;
 	p->ofd = -1;
-	return;
 }
 
 void axio_end_all(void)

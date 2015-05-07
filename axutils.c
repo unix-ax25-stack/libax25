@@ -166,7 +166,8 @@ int rose_aton(const char *addr, char *buf)
 	int i, n;
 
 	if (strlen(addr) != 10) {
-		printf("axutils: invalid rose address '%s' length = %d\n", addr, strlen(addr));
+		printf("axutils: invalid rose address '%s' length = %zd\n",
+		       addr, strlen(addr));
 		return -1;
 	}
 

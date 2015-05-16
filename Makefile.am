@@ -3,8 +3,8 @@ lib_LTLIBRARIES = libax25.la libax25io.la
 libax25includedir = $(includedir)
 libax25ioincludedir = $(includedir)
 
-INCLUDES = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
-	   -DAX25_LOCALSTATEDIR=\""$(localstatedir)/ax25/"\"
+AM_CPPFLAGS = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
+	      -DAX25_LOCALSTATEDIR=\""$(localstatedir)/ax25/"\"
 
 if !AX25_H
 USE_LIBAX25_AX25_H = netax25/ax25.h

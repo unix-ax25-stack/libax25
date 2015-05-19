@@ -12,8 +12,8 @@ AC_PROG_LIBTOOL
 
 dnl Checks for libraries.
 
-AC_FUNC_SETPGRP
 AC_TYPE_SIGNAL
+AC_CHECK_FUNC(setsid,, AC_MSG_ERROR([setsid not found]))
 AC_CHECK_FUNCS(socket strdup strerror strspn)
 
 dnl Checks for header files.

@@ -17,7 +17,7 @@ int daemon_start(int ignsigcld)
 	/* Programming_ pp.72-85, by W. Richard Stephens, Prentice		*/
 	/* Hall PTR, 1990							*/
 
-	int childpid, fd;
+	int childpid;
 
 	/* If started by init, don't bother */
 	if (getppid() == 1)
@@ -35,16 +35,12 @@ int daemon_start(int ignsigcld)
 		exit(0);
 	}
 
-	/* Disassociate from controlling terminal and process group.		*/
-	/* Ensure the process can't reacquire a new controlling terminal.	*/
-	if (setpgrp() == -1)
-		return 0;
-
-	if ((fd = open("/dev/tty", O_RDWR)) >= 0) {
-		/* loose controlling tty */
-		ioctl(fd, TIOCNOTTY, NULL);
-		close(fd);
-	}
+	/*
+	 * Disassociate from controlling terminal and process group and
+	 * ensure the process can't reacquire a new controlling terminal.
+	 * We're freshly forked, so setsid can't fail.
+	 */
+	(void) setsid();
 
 out:
 	/* Move the current directory to root, to make sure we aren't on a	*/

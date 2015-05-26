@@ -25,12 +25,21 @@ Requires:       %{name} = %{version}-%{release}
 The %{name}-devel package contains libraries and header files for
 developing applications that use %{name}.
 
+%package	static
+Summary:	Static library files for %{name}
+Group:		Development/Libraries
+Requires:       %{name}-static = %{version}-%{release}
+
+%description	static
+The %{name}-static package contains the libax25 and libax25io libraries
+for static linking.  You only need these for static linking applications.
+
 %prep
 
 %setup -q -n %{name}-@VERSION@
 
 %build
-%configure --disable-static
+%configure
 make %{?_smp_mflags}
 
 %install
@@ -60,6 +69,10 @@ rm -rf $RPM_BUILD_ROOT
 %doc AUTHORS ChangeLog COPYING README
 %{_includedir}/*
 %{_libdir}/*.so
+
+%files static
+%defattr(-,root,root,-)
+%{_libdir}/*.a
 
 %changelog
 * Sat Jun 27 2009 Ralf Baechle <ralf@linux-mips.org>

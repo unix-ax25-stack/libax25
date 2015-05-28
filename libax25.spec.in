@@ -58,6 +58,7 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %defattr(-,root,root,-)
 %doc AUTHORS ChangeLog COPYING README
+%dir %{_sysconfdir}/ax25
 %config(noreplace)  %{_sysconfdir}/ax25/axports
 %config(noreplace)  %{_sysconfdir}/ax25/nrports
 %config(noreplace)  %{_sysconfdir}/ax25/rsports

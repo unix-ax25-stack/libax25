@@ -1,22 +1,22 @@
+libax25 0.0.12
+
 	* Interfaces with a callsign without SSID were not been found anymore
 	  after the last patch below. See cvs comment for detail.
 	  Affected files: axconfig.c, nrconfig.c and procutils.c.
-
- -- Thomas Osterried DL9SAU <ax25@x-berg.in-berlin.de> Wed, 01 Feb 2012 00:10:45 +0100
-
 	* ax25_ntoa() does no longer print a zero SSID.  This avoids addresses
 	  like AB3DEF-0 which is general convention anyway.
-
- -- Ralf Baechle DL5RB <ralf@linux-mips.org> Thu, 10 Sep 2009 18:52:00 +0200
-
-libax25 0.0.12
 	* Fix numerous warnings triggered by modern compilers
 	* Updated to recent autoconf and automake version to keep the code
 	  buildable on modern distributions.
 	* libax25 will again find AX.25 interfaces if if they do not have an
 	  IP address assigned.
 	* Add support for building rpm packages.
+	* Slightly modernize the implementation of daemon_start().
+	* Fix build issues with modern autoconf, automake and GCC.
+	* For the tarball release Regenerate generates files with most
+	  recent autoconf and automake.
 
+ -- Thomas Osterried DL9SAU <ax25@x-berg.in-berlin.de> Wed, 01 Feb 2012 00:10:45 +0100
  -- Ralf Baechle DL5RB <ralf@linux-mips.org> Sat, 6 Jun 2009 17:00:00 +0100
 
 libax25 0.0.11

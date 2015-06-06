@@ -67,5 +67,6 @@ AC_SUBST(BASEVERSION, [$basever])
 extraver=$(echo $PACKAGE_VERSION | sed -e 's@@<:@^-@:>@*-@@' -e 's@-@_@')
 AC_SUBST(EXTRAVERSION, [$extraver])
 
+AM_CONDITIONAL([BUILD_STATIC], [test "$enable_static" = yes])
 AC_CONFIG_FILES([Makefile libax25.spec])
 AC_OUTPUT

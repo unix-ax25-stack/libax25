@@ -14,7 +14,7 @@
 
 int daemon_start(int ignsigcld)
 {
-	/* Code to initialiaze a daemon process. Taken from _UNIX Network	*/
+	/* Code to initialize a daemon process. Taken from _UNIX Network	*/
 	/* Programming_ pp.72-85, by W. Richard Stephens, Prentice		*/
 	/* Hall PTR, 1990							*/
 

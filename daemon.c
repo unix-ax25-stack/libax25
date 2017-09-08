@@ -46,7 +46,8 @@ int daemon_start(int ignsigcld)
 out:
 	/* Move the current directory to root, to make sure we aren't on a	*/
 	/* mounted filesystem.							*/
-	chdir("/");
+	if (chdir("/") < 0)
+		return 0;
 
 	/* Clear any inherited file mode creation mask.	*/
 	umask(0);

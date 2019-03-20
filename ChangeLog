@@ -5,7 +5,8 @@ libax25 0.0.12
 	  Affected files: axconfig.c, nrconfig.c and procutils.c.
 	* ax25_ntoa() does no longer print a zero SSID.  This avoids addresses
 	  like AB3DEF-0 which is general convention anyway.
-	* Fix numerous warnings triggered by modern compilers
+	* Lots of small cleanup and fixes to silence warnings and issues
+	  raised by modern compilers, code checkers and manual review.
 	* Updated to recent autoconf and automake version to keep the code
 	  buildable on modern distributions.
 	* libax25 will again find AX.25 interfaces if if they do not have an
@@ -15,6 +16,10 @@ libax25 0.0.12
 	* Fix build issues with modern autoconf, automake and GCC.
 	* For the tarball release Regenerate generates files with most
 	  recent autoconf and automake.
+	* Improvments to git usage.
+	* Update to work without warnings with latest autotools.
+	* Lots of stylistic cleanups to the code trying to follow the
+	  coding style of the kernel.
 
  -- Thomas Osterried DL9SAU <ax25@x-berg.in-berlin.de> Wed, 01 Feb 2012 00:10:45 +0100
  -- Ralf Baechle DL5RB <ralf@linux-mips.org> Sat, 6 Jun 2009 17:00:00 +0100

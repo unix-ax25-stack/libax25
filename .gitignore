@@ -29,8 +29,8 @@ libax25.la
 libax25.spec
 libax25io.la
 libtool
-ltconfig
 ltmain.sh
+/m4
 missing
 stamp-h
 stamp-h1

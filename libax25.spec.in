@@ -7,7 +7,6 @@ Group:          System Environment/Libraries
 License:        LGPLv2+
 URL:            http://www.linux-ax25.org/
 Source0:        http://www.linux-ax25.org/pub/%{name}/%{name}-@VERSION@.tar.gz
-BuildRoot:      %{_tmppath}/%{name}-@VERSION@-%{release}-root-%(%{__id_u} -n)
 BuildRequires:	gcc
 BuildRequires:	zlib-devel
 

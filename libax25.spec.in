@@ -57,7 +57,6 @@ rm -rf $RPM_BUILD_ROOT
 %postun -p /sbin/ldconfig
 
 %files
-%defattr(-,root,root,-)
 %doc AUTHORS ChangeLog COPYING README
 %dir %{_sysconfdir}/ax25
 %config(noreplace)  %{_sysconfdir}/ax25/axports
@@ -67,12 +66,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man?/*
 
 %files devel
-%defattr(-,root,root,-)
 %{_includedir}/*
 %{_libdir}/*.so
 
 %files static
-%defattr(-,root,root,-)
 %{_libdir}/*.a
 
 %changelog

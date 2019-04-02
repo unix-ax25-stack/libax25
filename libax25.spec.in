@@ -63,11 +63,12 @@ rm -rf $RPM_BUILD_ROOT
 %config(noreplace)  %{_sysconfdir}/ax25/nrports
 %config(noreplace)  %{_sysconfdir}/ax25/rsports
 %{_libdir}/*.so.*
-%{_mandir}/man?/*
+%{_mandir}/man5/*.5*
 
 %files devel
 %{_includedir}/*
 %{_libdir}/*.so
+%{_mandir}/man3/*.3*
 
 %files static
 %{_libdir}/*.a

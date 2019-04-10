@@ -19,7 +19,9 @@ AC_CHECK_FUNCS(socket strdup strerror strspn)
 
 dnl Checks for header files.
 AC_HEADER_STDC
-AC_CHECK_HEADERS(fcntl.h sys/file.h sys/ioctl.h unistd.h zlib.h)
+AC_CHECK_HEADERS(fcntl.h sys/file.h sys/ioctl.h unistd.h)
+AC_CHECK_HEADER([zlib.h], AC_CHECK_LIB(z, zlibVersion,Z_LIB="-lz",Z_LIB=))
+AC_SUBST(Z_LIB, [$Z_LIB])
 
 dnl Checks for working glibc 2.1 headers
 AC_MSG_CHECKING(for working netax25/ax25.h header file)

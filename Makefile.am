@@ -57,6 +57,7 @@ libax25_la_SOURCES = \
 libax25io_la_SOURCES = \
 	ax25io.c \
 	netax25/ax25io.h
+libax25io_la_LIBADD = @Z_LIB@
 
 dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
 

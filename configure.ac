@@ -9,7 +9,7 @@ AC_CONFIG_HEADERS(config.h)
 dnl Checks for programs.
 AC_PROG_CC
 AC_PROG_GCC_TRADITIONAL
-AC_PROG_LIBTOOL
+LT_INIT
 
 dnl Checks for libraries.
 

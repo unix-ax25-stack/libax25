@@ -308,7 +308,7 @@ int ax25_config_load_ports(void)
 				break;
 			s = strchr(buffer, ':');
 			if (s) *s = 0;
-				s = buffer;
+			s = buffer;
 			while (isspace(*s & 0xff)) ++s;
 
 			memset(&ifr, 0, sizeof(ifr));

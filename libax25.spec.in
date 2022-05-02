@@ -53,7 +53,7 @@ rm -rf $RPM_BUILD_ROOT
 %postun -p /sbin/ldconfig
 
 %files
-%doc AUTHORS ChangeLog COPYING README
+%doc AUTHORS ChangeLog COPYING.LIB README
 %dir %{_sysconfdir}/ax25
 %config(noreplace)  %{_sysconfdir}/ax25/axports
 %config(noreplace)  %{_sysconfdir}/ax25/nrports

@@ -61,7 +61,7 @@ static struct speed_struct {
 	{3000000,	B3000000},
 #endif
 #ifdef  B3500000
-	{B3500000,	B3500000},
+	{3500000,	B3500000},
 #endif
 #ifdef  B4000000
 	{4000000,	B4000000},

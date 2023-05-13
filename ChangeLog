@@ -16,7 +16,7 @@ libax25 0.0.12
 	* Fix build issues with modern autoconf, automake and GCC.
 	* For the tarball release Regenerate generates files with most
 	  recent autoconf and automake.
-	* Improvments to git usage.
+	* Improvements to git usage.
 	* Update to work without warnings with latest autotools.
 	* Lots of stylistic cleanups to the code trying to follow the
 	  coding style of the kernel.
@@ -26,7 +26,7 @@ libax25 0.0.12
 
 libax25 0.0.11
 	* libax25io handles nonblocking io correctly. (PE1RXQ)
-	  THIS BREAKS PRACTICLY EVERY APP USING THIS LIBRARY, FIX THEM!!!
+	  THIS BREAKS PRACTICALLY EVERY APP USING THIS LIBRARY, FIX THEM!!!
 
  -- Craig Small <csmall@small.dropbear.id.au>  Fri, 21 Feb 2003 21:33:48 +1100
 

@@ -10,6 +10,9 @@ AM_CPPFLAGS = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
 if !AX25_H
 USE_LIBAX25_AX25_H = netax25/ax25.h
 endif
+if AGWPE
+USE_LIBAX25_AXSOCK = axsock.c
+endif
 if !NETROM_H
 USE_LIBAX25_NETROM_H = netrom/netrom.h
 endif
@@ -26,6 +29,9 @@ nobase_libax25include_HEADERS = 	\
 	netax25/ttyutils.h		\
 	netax25/procutils.h		\
 	netax25/mheard.h		\
+	netax25/agwpe.h			\
+	netax25/agwpe_client.h		\
+	netax25/agwpe_config.h		\
 	$(USE_LIBAX25_AX25_H)		\
 	$(USE_LIBAX25_NETROM_H)		\
 	$(USE_LIBAX25_ROSE_H)
@@ -51,7 +57,14 @@ libax25_la_SOURCES = \
 	netax25/rsconfig.h \
 	ttyutils.c \
 	netax25/ttyutils.h  \
+	agwpe.c \
+	netax25/agwpe.h \
+	agwpe_client.c \
+	netax25/agwpe_client.h \
+	agwpe_config.c \
+	netax25/agwpe_config.h \
 	$(USE_LIBAX25_AX25_H) \
+	$(USE_LIBAX25_AXSOCK) \
 	$(USE_LIBAX25_ROSE_H)
 
 libax25io_la_SOURCES = \
@@ -62,7 +75,7 @@ libax25io_la_LIBADD = @Z_LIB@
 dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
 
 
-EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec
+EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c
 
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/

@@ -18,8 +18,40 @@
 #ifndef _NETAX25_AX25_H
 #define _NETAX25_AX25_H	1
 
+#ifdef __GLIBC__
 #include <features.h>
+#endif
+
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+
+/* The AF_AX25 address family is no longer provided by the system on
+ * platforms where the Linux kernel AX.25 stack has been removed or
+ * never existed (BSD, SysV, macOS, ...).  Keep the historical Linux
+ * value so that the library and its users still compile everywhere.
+ */
+#ifndef AF_AX25
+#define AF_AX25		3
+#endif
+
+/* SIOCPROTOPRIVATE is Linux specific and normally pulled in via the
+ * system <sys/ioctl.h> / <asm-generic/ioctls.h>.  Provide a fallback
+ * for platforms without the Linux kernel interfaces.
+ */
+#ifndef SIOCPROTOPRIVATE
+#define SIOCPROTOPRIVATE	0x89F0
+#endif
+
+/* The AF_NETROM and AF_ROSE address families are also Linux kernel
+ * specific.  Provide their historical values here so that user programs
+ * including only this header still compile on other platforms.
+ */
+#ifndef AF_NETROM
+#define AF_NETROM	7
+#endif
+#ifndef AF_ROSE
+#define AF_ROSE		11
+#endif
 
 /* Setsockoptions(2) level.  Thanks to BSD these must match IPPROTO_xxx.  */
 #define SOL_AX25	257

@@ -85,10 +85,18 @@ int tty_raw(int fd, int hwflag)
 	term.c_oflag = 0;
 	term.c_lflag = 0;
 
+#if defined(CBAUD)
 #ifdef CIBAUD
 	term.c_cflag = (term.c_cflag & (CBAUD | CIBAUD)) | CREAD | CS8 | CLOCAL;
 #else
 	term.c_cflag = (term.c_cflag & CBAUD) | CREAD | CS8 | CLOCAL;
+#endif
+#else
+	/* No CBAUD bits in c_cflag on BSD, macOS, SysV.  The baud rate is
+	 * set separately via cfsetispeed/cfsetospeed in tty_speed().
+	 */
+	term.c_cflag &= ~CSIZE;
+	term.c_cflag |= CREAD | CS8 | CLOCAL;
 #endif
 
 	if (hwflag)

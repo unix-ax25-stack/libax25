@@ -20,6 +20,14 @@
 
 #include <netax25/ax25.h>
 
+/* The AF_NETROM address family is not provided by the system on
+ * platforms without the Linux kernel AX.25 stack.  Keep the historical
+ * Linux value so that the library and its users still compile everywhere.
+ */
+#ifndef AF_NETROM
+#define AF_NETROM	7
+#endif
+
 /* Setsockoptions(2) level.  Thanks to BSD these must match IPPROTO_xxx.  */
 #define SOL_NETROM	259
 

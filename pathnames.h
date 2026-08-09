@@ -8,6 +8,7 @@
 #define	CONF_AXPORTS_FILE	AX25_SYSCONFDIR"axports"
 #define	CONF_NRPORTS_FILE	AX25_SYSCONFDIR"nrports"
 #define	CONF_RSPORTS_FILE	AX25_SYSCONFDIR"rsports"
+#define	CONF_AGWPE_FILE		AX25_SYSCONFDIR"agwpe.conf"
 
 #define	PROC_AX25_FILE		"/proc/net/ax25"
 #define	PROC_AX25_ROUTE_FILE	"/proc/net/ax25_route"

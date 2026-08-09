@@ -53,12 +53,88 @@ set by kissattach(8).
 is the default maximum packet size for this interface.
 .TP 14
 .B window
-the default window size for this interface.
+the default window size (aka MAXFRAME) for this interface.
 .TP 14
 .B description
 a free format description of this interface, this field extends to the end
 of the line. This field may contain spaces.
 .RE
+.LP
+The special port name
+.B loop
+denotes a virtual loopback port with no physical interface behind it.
+It is used together with
+.BR ax25netd (8):
+an AX.25 service (ax25d, axspawn, ...) that binds the callsign of the loop
+port becomes reachable as a virtual station on the AGWPE loop port (255),
+bridging between local clients.  The speed, paclen and window fields are
+ignored for loop ports.
+.PP
+On systems where the AF_AX25 sockets are provided by the userspace AGWPE
+shim of
+.BR ax25 (3)
+instead of the kernel, the AGWPE port number is no longer the position of
+the entry in this file: the shim resolves the
+.B name
+against the "port information" reply of the AGWPE server
+.RB ( ax25netd ).
+An entry whose
+.B name
+matches the upstream name reported by the server selects the first
+channel of that upstream; a
+.B :N
+suffix on the
+.B name
+(e.g.\&
+.IR radio1:1 )
+selects upstream number N (counting from 0 in
+.BR agwpe.conf (5)
+order).  When the server's port list is not reachable, the position of the
+entry is used as a fallback.
+.PP
+Ports that are served by the AGWPE shim are conventionally named with an
+.B agwpe-
+prefix (e.g.\&
+.IR agwpe-radio1 ).
+The
+.B name
+is the interface identity that routing daemons and digipeater programs
+see on the wire, so the prefix keeps AGWPE ports distinguishable from
+kernel AX.25 interfaces and makes the backend of an entry obvious from
+the configuration alone.  This matters once both backends are present on
+one system (see below).
+.PP
+On platforms with a native kernel AX.25 stack (Linux) the AGWPE shim is
+not built by default and AF_AX25 sockets go to the kernel unchanged.  If
+libax25 was built with the shim as well
+.RB ( --enable-agwpe ),
+the
+.B AXSOCK_BACKEND
+environment variable selects the backend for a whole process:
+.B kernel
+passes AF_AX25 and packet sockets through to the OS, while
+.B agwpe
+routes them through the shim.  Without the variable the choice is made
+once per process: on Linux a single probe asks whether the kernel
+answers AF_AX25 (kernel module loaded); if it does the kernel is used,
+otherwise AGWPE.  On platforms without a native stack (macOS, BSD) the
+backend is always
+.B agwpe
+and AXSOCK_BACKEND is ignored.
+.PP
+The per-process switch is a stop-gap.  socket(2) must return a file
+descriptor before the callsign \-\- and therefore the port \-\- is known
+at bind(2)/connect(2) time, so the backend cannot be derived per port
+today.  The planned replacement is socket caching: socket() hands back a
+placeholder descriptor, bind() resolves the callsign against
+.I axports
+and the device field of the matching entry (the
+.B agwpe-
+prefix marks an AGWPE port, anything else is a kernel port) and dup2()s
+the real descriptor (kernel socket or AGWPE socketpair) over the
+placeholder, keeping the descriptor number visible to the application
+stable.  That removes AXSOCK_BACKEND altogether and lets kernel and
+AGWPE ports coexist in one process without an environment variable.
 .SH FILES
 .LP
 /etc/ax25/axports
@@ -66,4 +142,5 @@ of the line. This field may contain spaces.
 .BR call (1),
 .BR ax25 (4),
 .BR axparms (8),
-.BR kissattach (8).
+.BR kissattach (8),
+.BR ax25netd (8).

@@ -21,6 +21,14 @@
 #ifndef _NETROSE_ROSE_H
 #define _NETROSE_ROSE_H 1
 
+/* The AF_ROSE address family is not provided by the system on
+ * platforms without the Linux kernel AX.25 stack.  Keep the historical
+ * Linux value so that the library and its users still compile everywhere.
+ */
+#ifndef AF_ROSE
+#define AF_ROSE		11
+#endif
+
 /* Socket level values.  */
 #define SOL_ROSE        260
 

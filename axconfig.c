@@ -240,11 +240,22 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	char *cp;
 	if ((cp = strstr(call, "-0")) != NULL)
 		*cp = '\0';
-	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
-		if (strcmp(call, *ifcalls) == 0) {
-			found = 1;
-			dev = *ifdevs;
-			break;
+
+	if (ifcalls == NULL) {
+		/*
+		 * No kernel interface list is available because there is
+		 * no kernel AX.25 support (BSD, SysV, macOS, ...).  Accept
+		 * all configured ports and use the port name as device.
+		 */
+		found = 1;
+		dev = name;
+	} else {
+		for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
+			if (strcmp(call, *ifcalls) == 0) {
+				found = 1;
+				dev = *ifdevs;
+				break;
+			}
 		}
 	}
 
@@ -287,13 +298,34 @@ int ax25_config_load_ports(void)
 	int fd = -1, lineno = 1, n = 0, i;
 	const char **calllist = NULL;
 	const char **devlist  = NULL;
+#ifdef __linux__
 	const char **pp;
 	int callcount = 0;
-	struct ifreq ifr;
+#endif
 
+	/*
+	 * Reloads must start from an empty list, otherwise a second
+	 * ax25_config_load_ports() would report every port as a
+	 * duplicate.  Several programs (and the userspace AF_AX25
+	 * shim) legitimately call this more than once.
+	 */
+	while (ax25_ports != NULL) {
+		AX_Port *p = ax25_ports->Next;
+
+		free(ax25_ports->Name);
+		free(ax25_ports->Call);
+		free(ax25_ports->Device);
+		free(ax25_ports->Description);
+		free(ax25_ports);
+		ax25_ports = p;
+	}
+	ax25_port_tail = NULL;
+
+#ifdef __linux__
 	/* Reliable listing of all network ports on Linux
 	   is only available via reading  /proc/net/dev ...  */
 
+	struct ifreq ifr;
 
 	if ((fd = socket(PF_FILE, SOCK_DGRAM, 0)) < 0) {
 		fprintf(stderr, "axconfig: unable to open socket (%s)\n", strerror(errno));
@@ -359,6 +391,7 @@ int ax25_config_load_ports(void)
 		fclose(fp);
 		fp = NULL;
 	}
+#endif /* __linux__ */
 
 
 	if ((fp = fopen(CONF_AXPORTS_FILE, "r")) == NULL) {

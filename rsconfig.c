@@ -167,11 +167,21 @@ static int rs_config_init_port(int fd, int lineno, char *line, const char **ifca
 	}
 
 	found = 0;
-	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
-		if (strcmp(addr,*ifcalls) == 0) {
-			found = 1;
-			dev = *ifdevs;
-			break;
+	if (ifcalls == NULL) {
+		/*
+		 * No kernel interface list is available because there is
+		 * no kernel AX.25 support (BSD, SysV, macOS, ...).  Accept
+		 * all configured ports and use the port name as device.
+		 */
+		found = 1;
+		dev = name;
+	} else {
+		for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
+			if (strcmp(addr,*ifcalls) == 0) {
+				found = 1;
+				dev = *ifdevs;
+				break;
+			}
 		}
 	}
 
@@ -208,16 +218,19 @@ int rs_config_load_ports(void)
 {
 	FILE *fp = NULL;
 	char buffer[256], *s;
-	int fd, lineno = 1, n = 0, i;
+	int fd = -1, lineno = 1, n = 0, i;
 	const char **calllist = NULL;
 	const char **devlist  = NULL;
+#ifdef __linux__
 	const char **pp;
 	int callcount = 0;
-	struct ifreq ifr;
+#endif
 
+#ifdef __linux__
 	/* Reliable listing of all network ports on Linux
 	   is only available via reading  /proc/net/dev ...  */
 
+	struct ifreq ifr;
 
 	if ((fd = socket(PF_FILE, SOCK_DGRAM, 0)) < 0) {
 		fprintf(stderr, "rsconfig: unable to open socket (%s)\n", strerror(errno));
@@ -283,6 +296,7 @@ int rs_config_load_ports(void)
 		fclose(fp);
 		fp = NULL;
 	}
+#endif /* __linux__ */
 
 
 	if ((fp = fopen(CONF_RSPORTS_FILE, "r")) == NULL) {

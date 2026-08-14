@@ -58,6 +58,7 @@
 #include <netdb.h>
 
 #include "netax25/ax25.h"
+#include "wampes.h"
 #include "netax25/axlib.h"
 #include "netax25/axconfig.h"
 #include "netax25/agwpe.h"
@@ -1533,6 +1534,11 @@ int socket(int domain, int type, int protocol)
 	if (domain != AF_AX25)
 		return real_socket(domain, type, protocol);
 
+	/* WAMPES: the node runs the AX.25 machine, one socket per connection.
+	 * Nothing is tracked here - see wampes.c. */
+	if (wampes_enabled())
+		return wampes_socket(type);
+
 	/* Kernel backend: hand AF_AX25 to the kernel stack unchanged.  The
 	 * resulting fd is not tracked in the axsock table, so every other
 	 * interceptor falls through to its real_* counterpart. */
@@ -1556,8 +1562,13 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len)
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
 
-	if (s == NULL)
+	if (s == NULL) {
+		int ret;
+
+		if (wampes_bind(fd, addr, len, &ret))
+			return ret;
 		return real_bind(fd, addr, len);
+	}
 
 	/* SOCK_PACKET monitor (ax25-apps/listen -p): the app binds it to a
 	 * device name (the sockaddr family is AF_PACKET, the name sits in
@@ -1604,8 +1615,13 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
 
-	if (s == NULL)
+	if (s == NULL) {
+		int ret;
+
+		if (wampes_connect(fd, addr, len, &ret))
+			return ret;
 		return real_connect(fd, addr, len);
+	}
 
 	if (!axsock_is_ax25(addr, len)) {
 		errno = EAFNOSUPPORT;
@@ -1917,6 +1933,10 @@ int close(int fd)
 	 * safe as long as the lock hold times are short, which the
 	 * send-without-lock paths above guarantee.
 	 */
+	/* A WAMPES placeholder that never reached connect() - after connect()
+	 * there is nothing of ours left to forget. */
+	wampes_close(fd);
+
 	if (!axsock_may_have_sock())
 		return real_close(fd);
 
@@ -2102,6 +2122,13 @@ int setsockopt(int fd, int level, int optname,
 
 	(void)optval;
 	(void)optlen;
+
+	{
+		int ret;
+
+		if (wampes_setsockopt(fd, level, &ret))
+			return ret;
+	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);

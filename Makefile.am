@@ -11,7 +11,7 @@ if !AX25_H
 USE_LIBAX25_AX25_H = netax25/ax25.h
 endif
 if AGWPE
-USE_LIBAX25_AXSOCK = axsock.c
+USE_LIBAX25_AXSOCK = axsock.c wampes.c wampes.h
 endif
 if !NETROM_H
 USE_LIBAX25_NETROM_H = netrom/netrom.h
@@ -80,7 +80,7 @@ libax25io_la_LIBADD = @Z_LIB@
 dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
 
 
-EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c
+EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c wampes.c wampes.h
 
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/

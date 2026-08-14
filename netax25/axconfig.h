@@ -41,6 +41,12 @@ extern "C" {
  * this part of the library. It returns the number of active ports, or 0
  * on failure.
  */
+/* Set by a backend that resolves a "base:suffix" port name itself, so that
+ * such a name may be used without an axports entry of its own.  Left null,
+ * an unknown name stays unknown - see ax25_port_ptr().
+ */
+extern int (*ax25_config_lazy_hook)(const char *name, const char *base);
+
 extern int ax25_config_load_ports(void);
 
 /*

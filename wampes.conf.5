@@ -1,0 +1,137 @@
+.TH WAMPES.CONF 5 "14 August 2026" Linux "Linux Programmer's Manual"
+.SH NAME
+wampes.conf \- WAMPES nodes reachable from this machine
+.SH DESCRIPTION
+.LP
+The AX.25 stack left the Linux kernel in 7.1.  A
+.B WAMPES
+node has a complete one in user space and lends it to programs linked
+against
+.BR libax25 ,
+over a socket the node offers for the purpose.  This file says which nodes
+exist and where each of them listens.
+.LP
+It is read by
+.B libax25
+itself, once, when a program first needs a node.  Nothing else reads it and
+the node never sees it.
+.SH "FILE FORMAT"
+.LP
+Comments start with
+.B #
+and run to the end of the line.  Blank lines are ignored.  Everything else is
+one node per line, fields separated by whitespace:
+.PP
+.RS
+.nf
+.I name address \fR[\fIdescription\fR]
+.fi
+.RE
+.TP
+.I name
+What stands before the colon in an
+.BR axports (5)
+entry.  The entries
+.I wampes:hfb
+and
+.I wampes:70cm
+are two ports of the node
+.IR wampes .
+The name is resolved here, on this side, and is never sent to the node; what
+follows the colon is, because it names one of the node's own AX.25 ports.
+Case is ignored.
+.TP
+.I address
+Where the node listens.  Either a path, beginning with
+.BR / ,
+for its unix socket \-\-
+.I /usr/local/wampes/sockets/ax25
+in a default installation \-\- or
+.I host:port
+for its TCP service.  An IPv6 address literal goes in brackets, as in
+.IR [fd00::5]:8010 ,
+because an address full of colons cannot otherwise be told from the port
+that follows it.  A host name is resolved with
+.BR getaddrinfo (3)
+and may answer with either family.
+.TP
+.I description
+Free text, ignored.
+.SH "THE TCP SERVICE"
+.LP
+A node keeps its TCP service switched off unless its
+.I net.rc
+says
+.BR "start axtcp" ,
+and when it is on it listens on 127.0.0.1 and ::1 only.  A TCP port carries
+no rights of its own: switching it on is the statement that every account on
+that machine may use the transmitter.  Reaching a node over TCP from
+elsewhere means saying the same about the network in between.
+.LP
+The unix socket is the other way round.  It carries its rights in its mode \-\-
+0660 and group
+.B hams
+where that group exists \-\- so the sysop decides who may use it with the
+tools the file system already has.
+.SH "WITHOUT THIS FILE"
+.LP
+The file is optional.  Without it a single node at
+.I /usr/local/wampes/sockets/ax25
+is assumed, which is what a machine with one WAMPES on it wants and spares it
+a configuration file that would only ever hold one line.
+.LP
+The environment variable
+.B WAMPES_SOCKET
+overrides both, for every node, and is meant for trying something out rather
+than for running a station.
+.SH EXAMPLE
+.LP
+.RS
+.nf
+# name          address                         description
+wampes          /usr/local/wampes/sockets/ax25  the node on this machine
+db0aaa          192.168.1.5:8010                the club node, over TCP
+db0bbb          [fd00::5]:8010                  the same, over IPv6
+.fi
+.RE
+.LP
+and in
+.BR axports (5),
+one entry per port of a node, each with a callsign of its own:
+.LP
+.RS
+.nf
+# name          callsign  baud  paclen  window  description
+wampes:hfb      DL9SAU-1  9600  256     2       node wampes, port hfb
+wampes:70cm     DL9SAU-2  9600  256     2       node wampes, port 70cm
+db0aaa:hf1      DL9SAU-3  1200  128     1       club node, HF
+.fi
+.RE
+.LP
+One entry per port and not per node, because
+.BR axports (5)
+refuses duplicate callsigns and every port of a WAMPES node has a callsign of
+its own anyway.  That callsign is what an outgoing connection uses as its
+source unless the program binds one itself \-\-
+.B call \-s
+does.
+.SH DIAGNOSTICS
+.LP
+A line without an address, a name or address that is too long, or more nodes
+than the built-in limit are reported on standard error and the line is
+skipped; the rest of the file is still read.
+.LP
+A port name that no
+.BR axports (5)
+entry matches is refused before any socket is opened.  A port the node does
+not have is refused by the node, and
+.BR connect (2)
+fails with ENODEV.
+.SH FILES
+.LP
+/etc/ax25/wampes.conf
+.SH "SEE ALSO"
+.BR call (1),
+.BR ax25 (4),
+.BR axports (5),
+.BR agwpe.conf (5).

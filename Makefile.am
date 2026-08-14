@@ -77,7 +77,7 @@ libax25io_la_SOURCES = \
 	netax25/ax25io.h
 libax25io_la_LIBADD = @Z_LIB@
 
-dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5
+dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5
 
 
 EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c wampes.c wampes.h
@@ -87,7 +87,7 @@ AX25_LOCALSTATEDIR=@localstatedir@/ax25/
 
 # Needed so that the install is optional
 etcdir = $(AX25_SYSCONFDIR)
-etcfiles =  axports rsports nrports
+etcfiles =  axports rsports nrports wampes.conf
 installconf:
 	$(mkinstalldirs) $(DESTDIR)$(etcdir)
 	@list='$(etcfiles)'; for p in $$list; do \

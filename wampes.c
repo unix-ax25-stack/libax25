@@ -236,6 +236,14 @@ static int reason_to_errno(const char *line)
 {
 	const char *why = strstr(line, " - ");
 
+	/* The node knows its own ports, so it is the one that says a name is
+	 * not among them.  A wrong interface is a wrong device and nothing
+	 * else - the caller gets ENODEV and its own perror() shows it.
+	 */
+	if (strstr(line, "no interface ") != NULL)
+		return ENODEV;
+	if (strstr(line, "does not carry AX.25") != NULL)
+		return ENODEV;
 	if (why == NULL)
 		return EINVAL;                  /* a parse error, not a refusal */
 	why += 3;

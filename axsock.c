@@ -1999,6 +1999,13 @@ int listen(int fd, int backlog)
 
 	(void)backlog;
 
+	{
+		int ret;
+
+		if (wampes_listen(fd, &ret))
+			return ret;
+	}
+
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
@@ -2031,6 +2038,13 @@ int accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
 
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "axsock: accept(fd=%d) called\n", fd);
+	{
+		int ret;
+
+		if (wampes_accept(fd, addr, addrlen, &ret))
+			return ret;
+	}
+
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {

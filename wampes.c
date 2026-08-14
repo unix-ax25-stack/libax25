@@ -60,6 +60,9 @@ struct wampes_sock {
 	char port[32];                      /* axports entry, from bind() */
 	int connected;                      /* connect() has put the real
 					     * socket behind this number */
+	int listening;                      /* listen() has put the control
+					     * connection behind it, and
+					     * accept() reads calls off it */
 };
 
 static struct wampes_sock *Socks;
@@ -241,6 +244,19 @@ static int reason_to_errno(const char *line)
 	if (!strcmp(why, "nomem"))     return ENOBUFS;
 	if (!strcmp(why, "invalid"))   return EINVAL;
 	if (!strcmp(why, "noproto"))   return EPROTONOSUPPORT;
+	return ECONNREFUSED;
+}
+
+/* The refusals listen() can get.  They are the same three a TCP server
+ * knows, which is not a coincidence: claiming a callsign is claiming an
+ * address, and a second claimant has to hear so rather than quietly share.
+ */
+
+static int listen_errno(const char *line)
+{
+	if (strstr(line, "already taken"))         return EADDRINUSE;
+	if (strstr(line, "not open for clients"))  return EACCES;
+	if (strstr(line, "belongs to a port"))     return EADDRNOTAVAIL;
 	return ECONNREFUSED;
 }
 
@@ -454,6 +470,178 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	close(sock);
 	s->connected = 1;
 	*ret = 0;
+	return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+
+/* listen() claims the callsign the socket was bound to.
+ *
+ * The claim goes over an ordinary service connection, and that connection
+ * then becomes the listening descriptor - which is why poll() and select()
+ * on it work with nothing of ours involved: it is readable exactly when a
+ * call is waiting.
+ *
+ * The refusal surfaces here rather than in bind(), where a TCP server would
+ * meet it.  bind() cannot ask: the same call names the source of an outgoing
+ * connection, and claiming a callsign for every socket that names one would
+ * be wrong.  Only listen() says what the socket is for.
+ */
+
+int wampes_listen(int fd, int *ret)
+{
+	char line[512];
+	char cmd[128];
+	int sock;
+	struct wampes_sock *s;
+
+	if ((s = find_sock(fd)) == NULL)
+		return 0;                   /* not ours */
+	*ret = -1;
+	if (s->local[0] == '\0') {
+		errno = EDESTADDRREQ;       /* nothing was bound */
+		return 1;
+	}
+	if ((sock = wampes_dial(wampes_address(s->port))) < 0)
+		return 1;
+
+	sprintf(cmd, "listen %s\n", s->local);
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "wampes: -> %s", cmd);
+	if (write(sock, cmd, strlen(cmd)) != (ssize_t) strlen(cmd)) {
+		close(sock);
+		errno = ECONNRESET;
+		return 1;
+	}
+	for (;;) {
+		if (read_line(sock, line, sizeof(line)) < 0) {
+			close(sock);
+			errno = ECONNRESET;
+			return 1;
+		}
+		if (getenv("AXSOCK_DEBUG"))
+			fprintf(stderr, "wampes: <- %s\n", line);
+		if (strncmp(line, "*** ", 4) != 0)
+			continue;
+		if (strncmp(line, "*** listening", 13) == 0)
+			break;
+		close(sock);
+		errno = listen_errno(line);
+		return 1;
+	}
+	if (dup2(sock, fd) < 0) {
+		int save = errno;
+
+		close(sock);
+		errno = save;
+		return 1;
+	}
+	close(sock);
+	s->listening = 1;
+	*ret = 0;
+	return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+
+/* accept() is one recvmsg(): the node sends the trace line and the descriptor
+ * for the session together, so there is nothing to match up.
+ *
+ *      hfa DL1TST-1,DB0BBB > DL9SAU-13
+ *
+ * The port, then who called and by what path, then the callsign they called.
+ * What goes into the address the caller gets is the calling station, which is
+ * what a peer address means.
+ */
+
+static void parse_call(const char *text, struct full_sockaddr_ax25 *fsa,
+		       socklen_t len)
+{
+	char buf[128];
+	char *p;
+	int n = 0;
+
+	strncpy(buf, text, sizeof(buf) - 1);
+	buf[sizeof(buf) - 1] = '\0';
+	for (p = strtok(buf, ","); p != NULL; p = strtok(NULL, ",")) {
+		if (n == 0) {
+			ax25_aton_entry(p, fsa->fsa_ax25.sax25_call.ax25_call);
+		} else {
+			if (len < (socklen_t) sizeof(*fsa) ||
+			    n - 1 >= AX25_MAX_DIGIS)
+				break;
+			ax25_aton_entry(p, fsa->fsa_digipeater[n - 1].ax25_call);
+			fsa->fsa_ax25.sax25_ndigis = n;
+		}
+		n++;
+	}
+	fsa->fsa_ax25.sax25_family = AF_AX25;
+}
+
+int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
+{
+	char line[256];
+	char *sp;
+	int newfd = -1;
+	struct cmsghdr *cm;
+	struct iovec iov;
+	struct msghdr msg;
+	struct wampes_sock *s;
+	ssize_t n;
+	union {
+		char buf[CMSG_SPACE(sizeof(int))];
+		struct cmsghdr align;
+	} control;
+
+	if ((s = find_sock(fd)) == NULL || !s->listening)
+		return 0;                   /* not ours, or not listening */
+	*ret = -1;
+
+	memset(&msg, 0, sizeof(msg));
+	memset(&control, 0, sizeof(control));
+	iov.iov_base = line;
+	iov.iov_len = sizeof(line) - 1;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = control.buf;
+	msg.msg_controllen = sizeof(control.buf);
+
+	while ((n = recvmsg(fd, &msg, 0)) < 0 && errno == EINTR)
+		;
+	if (n < 0)
+		return 1;                   /* errno is the caller's answer */
+	if (n == 0) {
+		errno = ECONNABORTED;       /* the node went away */
+		return 1;
+	}
+	line[n] = '\0';
+	for (cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm))
+		if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS)
+			memcpy(&newfd, CMSG_DATA(cm), sizeof(newfd));
+	if (newfd < 0) {
+		errno = EPROTO;             /* a line without a descriptor */
+		return 1;
+	}
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "wampes: accept %s", line);
+
+	/* "<port> <src>[,<digi>...] > <dst>" - take the second word. */
+	if (addr != NULL && addrlen != NULL &&
+	    *addrlen >= (socklen_t) sizeof(struct sockaddr_ax25)) {
+		struct full_sockaddr_ax25 fsa;
+
+		memset(&fsa, 0, sizeof(fsa));
+		if ((sp = strchr(line, ' ')) != NULL) {
+			char *end = strchr(++sp, ' ');
+
+			if (end != NULL) *end = '\0';
+			parse_call(sp, &fsa, *addrlen);
+		}
+		if (*addrlen > (socklen_t) sizeof(fsa))
+			*addrlen = sizeof(fsa);
+		memcpy(addr, &fsa, *addrlen);
+	}
+	*ret = newfd;
 	return 1;
 }
 

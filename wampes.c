@@ -41,9 +41,15 @@
 #include "netax25/axlib.h"
 #include "netax25/axconfig.h"
 
+#include "pathnames.h"
+
 #include "wampes.h"
 
 #define WAMPES_MAX_SOCK 64
+
+/* Where a node listens when nothing says otherwise: one machine, one node,
+ * no configuration file worth the name. */
+#define WAMPES_DEFAULT_SOCKET "/usr/local/wampes/sockets/ax25"
 #define WAMPES_CALLLEN  10              /* "DL9SAU-15" and the NUL */
 
 /* A socket the application holds.  After connect() the descriptor IS the
@@ -95,6 +101,99 @@ static void drop_sock(int fd)
 
 /*---------------------------------------------------------------------------*/
 
+/* Which node, and where it listens.  One node per line in wampes.conf, in the
+ * shape agwpe.conf has:
+ *
+ *      <name>  <address>  [description]
+ *
+ * where the address is a path for a unix socket or host:port for the node's
+ * TCP service.  The name is what stands before the colon in an axports entry,
+ * so "wampes:hfb" and "wampes:70cm" are two interfaces of the node "wampes".
+ *
+ * Read once, on first use.  A missing file is not an error: without one the
+ * single node at the compiled-in place is assumed, which is what a machine
+ * with one WAMPES on it wants and saves it a configuration file that would
+ * only ever hold one line.
+ */
+
+#define WAMPES_MAX_NODE 16
+
+static struct {
+	char name[32];
+	char addr[256];
+} Nodes[WAMPES_MAX_NODE];
+static int Nnodes;
+static int Nodes_read;
+
+static void wampes_config_load(void)
+{
+	FILE *fp;
+	char line[512];
+	int lineno = 0;
+
+	Nodes_read = 1;
+	if ((fp = fopen(CONF_WAMPES_FILE, "r")) == NULL)
+		return;
+	while (fgets(line, sizeof(line), fp) != NULL) {
+		char *name;
+		char *addr;
+		char *p;
+
+		lineno++;
+		if ((p = strchr(line, '#')) != NULL) *p = '\0';
+		if ((name = strtok(line, " \t\r\n")) == NULL)
+			continue;
+		if ((addr = strtok(NULL, " \t\r\n")) == NULL) {
+			fprintf(stderr, "wampes_config: %s line %d: "
+				"no address for \"%s\"\n",
+				CONF_WAMPES_FILE, lineno, name);
+			continue;
+		}
+		if (Nnodes >= WAMPES_MAX_NODE) {
+			fprintf(stderr, "wampes_config: %s line %d: "
+				"more than %d nodes\n",
+				CONF_WAMPES_FILE, lineno, WAMPES_MAX_NODE);
+			break;
+		}
+		if (strlen(name) >= sizeof(Nodes[0].name) ||
+		    strlen(addr) >= sizeof(Nodes[0].addr)) {
+			fprintf(stderr, "wampes_config: %s line %d: "
+				"name or address too long\n",
+				CONF_WAMPES_FILE, lineno);
+			continue;
+		}
+		strcpy(Nodes[Nnodes].name, name);
+		strcpy(Nodes[Nnodes].addr, addr);
+		Nnodes++;
+	}
+	fclose(fp);
+}
+
+/* Is this axports entry served by a WAMPES node, and which?  The node is the
+ * part before the colon; an entry with no colon is a node name on its own.
+ */
+
+static const char *wampes_node_addr(const char *port)
+{
+	char name[32];
+	const char *colon;
+	int i;
+	size_t n;
+
+	if (!Nodes_read)
+		wampes_config_load();
+	colon = strchr(port, ':');
+	n = colon ? (size_t) (colon - port) : strlen(port);
+	if (n == 0 || n >= sizeof(name))
+		return NULL;
+	memcpy(name, port, n);
+	name[n] = '\0';
+	for (i = 0; i < Nnodes; i++)
+		if (!strcasecmp(Nodes[i].name, name))
+			return Nodes[i].addr;
+	return NULL;
+}
+
 /* An axports entry names one WAMPES interface: "wampes:hf1".  The part before
  * the colon says which node - that is resolved here, on this side, and never
  * reaches WAMPES.  The part after it says which of the node's ports to leave
@@ -113,18 +212,21 @@ static const char *wampes_iface(const char *port)
 	return (colon != NULL && colon[1] != '\0') ? colon + 1 : NULL;
 }
 
-/* Where the node listens.  One variable for now, which is enough to reach a
- * node; wampes.conf in the shape of agwpe.conf comes with the second node.
+/* Where the node listens.  wampes.conf decides, because it is the only place
+ * that can tell two nodes apart.  WAMPES_SOCKET still wins over it, so a test
+ * can point a program at another node without editing a file, and the
+ * compiled-in place is what a machine with one node and no file gets.
  */
 
 static const char *wampes_address(const char *port)
 {
 	const char *s;
 
-	(void) port;
 	if ((s = getenv("WAMPES_SOCKET")) != NULL && *s != '\0')
 		return s;
-	return "/usr/local/wampes/sockets/ax25";
+	if (port != NULL && (s = wampes_node_addr(port)) != NULL)
+		return s;
+	return WAMPES_DEFAULT_SOCKET;
 }
 
 /* A path is a unix socket, anything else is host:port.  Both are ordinary
@@ -167,7 +269,21 @@ static int wampes_dial(const char *addr)
 		return -1;
 	}
 	strcpy(host, addr);
-	if ((colon = strrchr(host, ':')) == NULL) {
+	/* "[fd00::5]:8010" as well as "host:8010".  An IPv6 literal is full of
+	 * colons, so the brackets are what says where the address ends -
+	 * getaddrinfo() wants them gone again.
+	 */
+	if (host[0] == '[') {
+		char *close = strchr(host, ']');
+
+		if (close == NULL || close[1] != ':') {
+			errno = EINVAL;
+			return -1;
+		}
+		*close = '\0';
+		colon = close + 1;
+		memmove(host, host + 1, strlen(host));
+	} else if ((colon = strrchr(host, ':')) == NULL) {
 		errno = EINVAL;
 		return -1;
 	}

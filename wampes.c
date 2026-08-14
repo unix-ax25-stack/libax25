@@ -452,34 +452,109 @@ int wampes_socket(int type)
  * callsign of the axports entry there, which is how the port is named.
  */
 
+/* Which axports entry does this bind name?  libax25 puts the entry's callsign
+ * in the first digipeater slot, so the name comes back from the reverse
+ * lookup.  An empty answer is not an error here: a program may bind a source
+ * call without naming a port at all.
+ */
+
+static void port_of_bind(const struct sockaddr *addr, socklen_t len,
+			 char *port, size_t portlen)
+{
+	const struct full_sockaddr_ax25 *fsa =
+		(const struct full_sockaddr_ax25 *) addr;
+	char *name;
+
+	*port = '\0';
+	if (len < (socklen_t) sizeof(*fsa) || fsa->fsa_ax25.sax25_ndigis <= 0)
+		return;
+	/* Only reads it, but says otherwise in the header. */
+	name = ax25_config_get_port((ax25_address *) &fsa->fsa_digipeater[0]);
+	if (name == NULL)
+		return;
+	strncpy(port, name, portlen - 1);
+	port[portlen - 1] = '\0';
+}
+
+/* Put an unbound unix socket behind a descriptor the application already
+ * holds.  Used when a port turns out to be a WAMPES one after the socket was
+ * made by somebody else - a kernel AF_AX25 socket, say.  The number survives,
+ * which is all the application knows about it.
+ */
+
+static int replace_with_placeholder(int fd)
+{
+	int ph;
+
+	if ((ph = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+		return -1;
+	if (dup2(ph, fd) < 0) {
+		int save = errno;
+
+		close(ph);
+		errno = save;
+		return -1;
+	}
+	close(ph);
+	return 0;
+}
+
 int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 {
-	const struct full_sockaddr_ax25 *fsa;
+	char port[32];
 	const struct sockaddr_ax25 *sa;
 	struct wampes_sock *s;
 
-	if ((s = find_sock(fd)) == NULL)
-		return 0;                       /* not ours */
-	*ret = -1;
+	s = find_sock(fd);
+	if (s == NULL && !is_ax25(addr, len))
+		return 0;                       /* not ours, and not AX.25 */
 	if (!is_ax25(addr, len)) {
+		*ret = -1;
 		errno = EAFNOSUPPORT;
 		return 1;
 	}
+	port_of_bind(addr, len, port, sizeof(port));
+
+	if (s == NULL) {
+		/* Not ours yet.  bind() is the first moment the port is known,
+		 * so it is the first moment the backend can be chosen per port
+		 * instead of per process.  A port belongs to us when its node
+		 * is named in wampes.conf - the file is the register, so no
+		 * name is magic and nothing has to be guessed from a prefix.
+		 */
+		if (!port[0] || wampes_node_addr(port) == NULL)
+			return 0;
+		/* Whoever made the descriptor lets go of it, or we put an
+		 * empty socket behind the number ourselves.
+		 */
+		if (axsock_forget(fd) != 0 && replace_with_placeholder(fd)) {
+			*ret = -1;
+			return 1;
+		}
+		if (Nsocks >= WAMPES_MAX_SOCK) {
+			*ret = -1;
+			errno = EMFILE;
+			return 1;
+		}
+		if ((s = calloc(1, sizeof(*s))) == NULL) {
+			*ret = -1;
+			errno = ENOMEM;
+			return 1;
+		}
+		s->fd = fd;
+		s->next = Socks;
+		Socks = s;
+		Nsocks++;
+		if (getenv("AXSOCK_DEBUG"))
+			fprintf(stderr, "wampes: fd=%d taken over for port '%s'\n",
+				fd, port);
+	}
+
+	*ret = -1;
 	sa = (const struct sockaddr_ax25 *) addr;
 	strncpy(s->local, ax25_ntoa(&sa->sax25_call), sizeof(s->local) - 1);
 	s->local[sizeof(s->local) - 1] = '\0';
-
-	fsa = (const struct full_sockaddr_ax25 *) addr;
-	if (len >= (socklen_t) sizeof(*fsa) && fsa->fsa_ax25.sax25_ndigis > 0) {
-		/* Only reads it, but says otherwise in the header. */
-		char *name = ax25_config_get_port(
-			(ax25_address *) &fsa->fsa_digipeater[0]);
-
-		if (name != NULL) {
-			strncpy(s->port, name, sizeof(s->port) - 1);
-			s->port[sizeof(s->port) - 1] = '\0';
-		}
-	}
+	strcpy(s->port, port);
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "wampes: bind fd=%d local='%s' port='%s'\n",
 			fd, s->local, s->port);

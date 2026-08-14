@@ -1492,6 +1492,45 @@ static void *axsock_peer_reader(void *arg)
 	return NULL;
 }
 
+/* Hand a freshly made socket to another backend.
+ *
+ * Only ever a socket that has been created and not yet used: it is not
+ * connected, not registered and has no reader thread, so there is nothing to
+ * tear down but the entry itself and the router end of its pair.  The
+ * descriptor the application holds stays open and keeps its number, which is
+ * the whole point - the application was given that number before anybody
+ * could know which port it would name.
+ *
+ * Returns 0 when the socket was ours and has been let go, -1 otherwise.
+ */
+
+int axsock_forget(int fd)
+{
+	struct axsock_sock *s, **pp;
+	int peer;
+
+	if (!axsock_may_have_sock())
+		return -1;
+	pthread_mutex_lock(&axsock_lock);
+	for (pp = &axsock_list; (s = *pp) != NULL; pp = &s->next)
+		if (s->fd == fd)
+			break;
+	if (s == NULL || s->state != AXSOCK_NEW || s->registered || s->raw) {
+		pthread_mutex_unlock(&axsock_lock);
+		return -1;
+	}
+	*pp = s->next;
+	__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
+	peer = s->peer;
+	free(s);
+	pthread_mutex_unlock(&axsock_lock);
+	if (peer >= 0)
+		real_close(peer);
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "axsock: fd=%d handed to another backend\n", fd);
+	return 0;
+}
+
 int socket(int domain, int type, int protocol)
 {
 	struct axsock_sock *s;
@@ -1558,17 +1597,24 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len)
 	const struct sockaddr_ax25 *sa;
 	struct axsock_sock *s;
 
-	pthread_mutex_lock(&axsock_lock);
-	s = axsock_find_locked(fd);
-	pthread_mutex_unlock(&axsock_lock);
-
-	if (s == NULL) {
+	/* Before our own table: bind() is the first moment the port is known,
+	 * and therefore the first moment the backend can be chosen per port
+	 * rather than per process.  A socket made here is handed over if the
+	 * port turns out to belong to a WAMPES node.
+	 */
+	{
 		int ret;
 
 		if (wampes_bind(fd, addr, len, &ret))
 			return ret;
-		return real_bind(fd, addr, len);
 	}
+
+	pthread_mutex_lock(&axsock_lock);
+	s = axsock_find_locked(fd);
+	pthread_mutex_unlock(&axsock_lock);
+
+	if (s == NULL)
+		return real_bind(fd, addr, len);
 
 	/* SOCK_PACKET monitor (ax25-apps/listen -p): the app binds it to a
 	 * device name (the sockaddr family is AF_PACKET, the name sits in

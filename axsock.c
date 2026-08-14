@@ -2363,6 +2363,13 @@ int getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	struct axsock_sock *s;
 
+	{
+		int ret;
+
+		if (wampes_getsockname(fd, addr, addrlen, &ret))
+			return ret;
+	}
+
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
@@ -2388,6 +2395,13 @@ int getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen)
 int getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	struct axsock_sock *s;
+
+	{
+		int ret;
+
+		if (wampes_getpeername(fd, addr, addrlen, &ret))
+			return ret;
+	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);

@@ -19,6 +19,10 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		   int *ret);
 int wampes_listen(int fd, int *ret);
 int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret);
+int wampes_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,
+		       int *ret);
+int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
+		       int *ret);
 int wampes_setsockopt(int fd, int level, int *ret);
 int wampes_close(int fd);
 

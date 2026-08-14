@@ -69,6 +69,13 @@ struct wampes_sock {
 	int listening;                      /* listen() has put the control
 					     * connection behind it, and
 					     * accept() reads calls off it */
+	/* What getsockname() and getpeername() answer.  Both are known - the
+	 * handover line carries the caller and the called callsign, and
+	 * outgoing we have the destination and the bound source - and they
+	 * are kept only because those two calls ask for them again later.
+	 */
+	struct full_sockaddr_ax25 me, him;
+	int have_me, have_him;
 };
 
 static struct wampes_sock *Socks;
@@ -706,6 +713,20 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	}
 	close(sock);
 	s->connected = 1;
+	/* ax25d and axspawn ask afterwards who is at each end; answer from
+	 * what we already had rather than from the unix socket underneath,
+	 * which would say AF_UNIX with an empty path and be believed.
+	 */
+	memset(&s->him, 0, sizeof(s->him));
+	memcpy(&s->him, addr,
+	       len < (socklen_t) sizeof(s->him) ? (size_t) len : sizeof(s->him));
+	s->him.fsa_ax25.sax25_family = AF_AX25;
+	s->have_him = 1;
+	memset(&s->me, 0, sizeof(s->me));
+	s->me.fsa_ax25.sax25_family = AF_AX25;
+	if (s->local[0] != '\0')
+		ax25_aton_entry(s->local, s->me.fsa_ax25.sax25_call.ax25_call);
+	s->have_me = 1;
 	*ret = 0;
 	return 1;
 }
@@ -862,24 +883,113 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "wampes: accept %s", line);
 
-	/* "<port> <src>[,<digi>...] > <dst>" - take the second word. */
-	if (addr != NULL && addrlen != NULL &&
-	    *addrlen >= (socklen_t) sizeof(struct sockaddr_ax25)) {
-		struct full_sockaddr_ax25 fsa;
+	/* "<port> <src>[,<digi>...] > <dst>": the caller with the path it came
+	 * by, and the callsign of ours that it reached.  Both are wanted -
+	 * the first is the peer address, the second is what ax25d asks for to
+	 * choose a configuration stanza.
+	 */
+	{
+		struct full_sockaddr_ax25 him, me;
+		struct wampes_sock *ns;
+		char *arrow;
 
-		memset(&fsa, 0, sizeof(fsa));
+		memset(&him, 0, sizeof(him));
+		memset(&me, 0, sizeof(me));
+		me.fsa_ax25.sax25_family = AF_AX25;
 		if ((sp = strchr(line, ' ')) != NULL) {
 			char *end = strchr(++sp, ' ');
 
 			if (end != NULL) *end = '\0';
-			parse_call(sp, &fsa, *addrlen);
+			parse_call(sp, &him, (socklen_t) sizeof(him));
+			if (end != NULL &&
+			    (arrow = strstr(end + 1, "> ")) != NULL) {
+				char *dst = arrow + 2;
+				char *nl = strpbrk(dst, " \r\n");
+
+				if (nl != NULL) *nl = '\0';
+				ax25_aton_entry(dst,
+					me.fsa_ax25.sax25_call.ax25_call);
+			}
 		}
-		if (*addrlen > (socklen_t) sizeof(fsa))
-			*addrlen = sizeof(fsa);
-		memcpy(addr, &fsa, *addrlen);
+		if (addr != NULL && addrlen != NULL &&
+		    *addrlen >= (socklen_t) sizeof(struct sockaddr_ax25)) {
+			if (*addrlen > (socklen_t) sizeof(him))
+				*addrlen = sizeof(him);
+			memcpy(addr, &him, *addrlen);
+		}
+		/* The session descriptor is tracked from here on, so that
+		 * getsockname() and getpeername() can be answered for it.
+		 * Nothing else about it is intercepted.
+		 */
+		if (Nsocks < WAMPES_MAX_SOCK &&
+		    (ns = calloc(1, sizeof(*ns))) != NULL) {
+			ns->fd = newfd;
+			ns->connected = 1;
+			ns->me = me;
+			ns->him = him;
+			ns->have_me = 1;
+			ns->have_him = 1;
+			strncpy(ns->port, s->port, sizeof(ns->port) - 1);
+			ns->next = Socks;
+			Socks = ns;
+			Nsocks++;
+		}
 	}
 	*ret = newfd;
 	return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+
+/* Who is at each end.  ax25d asks the first of these on every accepted socket
+ * to learn which of the node's callsigns was dialled, because that decides
+ * which of its stanzas applies; axspawn asks the second to learn who is
+ * logging in.  Without an answer here they reach the unix socket underneath
+ * and get AF_UNIX with an empty path - not an error, just rubbish, which is
+ * the worst of the two.
+ */
+
+static int answer_addr(const struct full_sockaddr_ax25 *src, int have,
+		       struct sockaddr *addr, socklen_t *addrlen, int *ret)
+{
+	socklen_t n;
+
+	*ret = -1;
+	if (!have) {
+		errno = ENOTCONN;
+		return 1;
+	}
+	if (addr == NULL || addrlen == NULL ||
+	    *addrlen < (socklen_t) sizeof(struct sockaddr_ax25)) {
+		errno = EINVAL;
+		return 1;
+	}
+	n = *addrlen;
+	if (n > (socklen_t) sizeof(*src)) n = sizeof(*src);
+	memcpy(addr, src, n);
+	*addrlen = n;
+	*ret = 0;
+	return 1;
+}
+
+int wampes_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,
+		       int *ret)
+{
+	struct wampes_sock *s;
+
+	if ((s = find_sock(fd)) == NULL)
+		return 0;
+	return answer_addr(&s->me, s->have_me, addr, addrlen, ret);
+}
+
+int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
+		       int *ret)
+{
+	struct wampes_sock *s;
+
+	if ((s = find_sock(fd)) == NULL)
+		return 0;
+	return answer_addr(&s->him, s->have_him, addr, addrlen, ret);
 }
 
 /*---------------------------------------------------------------------------*/

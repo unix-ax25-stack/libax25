@@ -36,7 +36,8 @@ extern "C" {
 #endif
 
 #define	AGWPE_UPSTREAM_NAME_MAX	24
-#define	AGWPE_UPSTREAM_HOST_MAX	64
+/* Unix socket paths can be up to sun_path (108) plus a leading "/".  */
+#define	AGWPE_UPSTREAM_HOST_MAX	128
 #define	AGWPE_AUTH_NAME_MAX	24
 #define	AGWPE_AUTH_PASS_MAX	128
 
@@ -62,6 +63,16 @@ extern "C" {
 					 * ::1), require a login from any
 					 * other peer */
 #define	AGWPE_AUTH_ALWAYS	2	/* require a login from everyone */
+
+/* Ownership of the loop port unix domain socket, selected by the "group"
+ * directive.  AGWPE_GROUP_DEFAULT gives the socket to the daemon's run
+ * user (uid and primary gid after the privilege drop), so the daemon's
+ * own user and group can connect.  AGWPE_GROUP_NAMED restricts access
+ * to a single group (e.g. "hams", see ax25-tools/ax25/axspawn.conf),
+ * AGWPE_GROUP_ALL makes the socket world accessible.  */
+#define	AGWPE_GROUP_DEFAULT	0
+#define	AGWPE_GROUP_NAMED	1
+#define	AGWPE_GROUP_ALL		2
 
 struct agwpe_upstream {
 	char			name[AGWPE_UPSTREAM_NAME_MAX];
@@ -93,9 +104,35 @@ struct agwpe_config {
 	 * before they may issue any other frame.  */
 	int			auth;
 
+	/* Automatic digipeater resolution ("autoroute yes|no" in
+	 * agwpe.conf): when set (the default) the daemon asks the ax25rtd
+	 * route cache for a learned path on the target port before it
+	 * sends a connect that names no digipeaters.  A connect with an
+	 * explicit digipeater path ('v') is never touched.  */
+	int			autoroute;
+
 	/* Loop port client credentials, from agwpe_shadow.conf.  */
 	struct agwpe_auth	*clients;
 	int			nclients;
+
+	/* Loop port unix domain socket.  An empty path disables it; the
+	 * AGWPE protocol itself is unchanged, only the transport differs.
+	 * This is not configured in agwpe.conf: the daemon fills it from
+	 * the shared ax25common.conf ("loop socket"), overridable on the
+	 * command line.  */
+	char			socket_path[108];
+
+	/* Whether the TCP loop listener is enabled at all.  With "tcp
+	 * no" the unix socket is the only way in.  From ax25common.conf
+	 * ("loop tcp"), overridable on the command line.  */
+	int			tcp_enabled;
+
+	/* Ownership of the unix socket: one of the AGWPE_GROUP_*
+	 * constants; group_name names the group for AGWPE_GROUP_NAMED (a
+	 * name or a numeric gid).  From ax25common.conf ("loop group"),
+	 * overridable on the command line.  */
+	int			group_mode;
+	char			group_name[64];
 };
 
 /*

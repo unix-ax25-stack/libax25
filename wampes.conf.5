@@ -121,12 +121,27 @@ A line without an address, a name or address that is too long, or more nodes
 than the built-in limit are reported on standard error and the line is
 skipped; the rest of the file is still read.
 .LP
-A port name that no
-.BR axports (5)
-entry matches is refused before any socket is opened.  A port the node does
-not have is refused by the node, and
+A port the node does not have is refused by the node, and
 .BR connect (2)
 fails with ENODEV.
+.LP
+A name whose node is not in this file is refused before any socket is opened.
+A name whose node
+.I is
+in this file but which has no
+.BR axports (5)
+entry of its own \-\- 
+.I wampes:70cm
+where only
+.I wampes
+is configured \-\- is accepted: the node's entry is used and the node routes
+the call.  What such a name cannot do is pin the port, because
+.BR bind (2)
+hands the library a callsign and never a port name, and entries that share a
+callsign cannot be told apart by one.  Pinning keeps needing an entry, and
+that entry keeps needing a callsign of its own.  A line on standard error
+says so once per name, because whoever typed the suffix meant something by
+it.
 .SH FILES
 .LP
 /etc/ax25/wampes.conf

@@ -141,10 +141,15 @@ and no environment variable is needed;
 .B AXSOCK_BACKEND
 remains only as an override.
 .PP
-A name that no entry matches is refused here, before any socket is opened;
-an interface the node does not have is refused by the node, and
+A name whose node is not in
+.BR wampes.conf (5)
+is refused here, before any socket is opened; an interface the node does not
+have is refused by the node, and
 .BR connect (2)
-fails with ENODEV.
+fails with ENODEV.  A name whose node is configured but which has no entry of
+its own is accepted and the node's own entry is used \-\- the node then routes
+the call rather than leaving by a named port, and a line on standard error
+says so once.
 .PP
 On platforms with a native kernel AX.25 stack (Linux) the AGWPE shim is
 not built by default and AF_AX25 sockets go to the kernel unchanged.  If

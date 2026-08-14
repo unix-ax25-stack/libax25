@@ -53,9 +53,23 @@ static int is_same_call(char *call1, char *call2)
 	return !strcmp(call1, call2) ? 1 : 0;
 }
 
+/* Asked when a "base:suffix" name has no entry of its own.  A backend whose
+ * ports carry a suffix it resolves itself may answer yes for its own base
+ * names, and the entry for the base is then used.  Nothing here knows which
+ * backend that is: the backend installs the hook.
+ *
+ * It is deliberately not the default.  Where a suffix selects something -
+ * the AGWPE channel, say - falling back to the base would quietly use the
+ * wrong one, which is worse than refusing the name.
+ */
+
+int (*ax25_config_lazy_hook)(const char *name, const char *base);
+
 static AX_Port *ax25_port_ptr(char *name)
 {
 	AX_Port *p = ax25_ports;
+	char base[64];
+	char *colon;
 
 	if (name == NULL)
 		return p;
@@ -68,6 +82,19 @@ static AX_Port *ax25_port_ptr(char *name)
 		p = p->Next;
 	}
 
+	if (ax25_config_lazy_hook == NULL)
+		return NULL;
+	if ((colon = strchr(name, ':')) == NULL || colon == name)
+		return NULL;
+	if ((size_t) (colon - name) >= sizeof(base))
+		return NULL;
+	memcpy(base, name, colon - name);
+	base[colon - name] = '\0';
+	if (!(*ax25_config_lazy_hook)(name, base))
+		return NULL;
+	for (p = ax25_ports; p != NULL; p = p->Next)
+		if (p->Name != NULL && strcasecmp(p->Name, base) == 0)
+			return p;
 	return NULL;
 }
 

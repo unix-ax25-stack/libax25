@@ -194,6 +194,44 @@ static const char *wampes_node_addr(const char *port)
 	return NULL;
 }
 
+/* A "wampes:70cm" with no axports entry of its own is accepted and the entry
+ * for the node is used.  What it cannot do is pin the port, and the reason is
+ * worth knowing: bind() hands us a callsign, never a port name, so the name
+ * comes back from a reverse lookup - and entries that share a callsign cannot
+ * be told apart by one, while axports refuses duplicate callsigns anyway.  So
+ * the suffix is accepted and the node routes.  Pinning a port keeps needing
+ * an entry, and that entry keeps needing a callsign of its own.
+ *
+ * Said once per name rather than silently, because somebody who typed the
+ * suffix meant something by it.
+ */
+
+static int wampes_lazy_base(const char *name, const char *base)
+{
+	static char said[8][64];
+	static int nsaid;
+	int i;
+
+	if (wampes_node_addr(base) == NULL)
+		return 0;                   /* not one of ours */
+	for (i = 0; i < nsaid; i++)
+		if (!strcasecmp(said[i], name))
+			return 1;
+	if (nsaid < (int) (sizeof(said) / sizeof(said[0])) &&
+	    strlen(name) < sizeof(said[0])) {
+		strcpy(said[nsaid++], name);
+		fprintf(stderr, "wampes: no axports entry for \"%s\" - using %s "
+			"and letting the node route\n", name, base);
+	}
+	return 1;
+}
+
+__attribute__((constructor))
+static void wampes_init(void)
+{
+	ax25_config_lazy_hook = wampes_lazy_base;
+}
+
 /* An axports entry names one WAMPES interface: "wampes:hf1".  The part before
  * the colon says which node - that is resolved here, on this side, and never
  * reaches WAMPES.  The part after it says which of the node's ports to leave

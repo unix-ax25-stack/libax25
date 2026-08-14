@@ -129,18 +129,17 @@ the same one an operator types at an RMNC or XNET.
 One entry per WAMPES interface rather than one per node, because this file
 refuses duplicate callsigns and every WAMPES interface has a callsign of its
 own anyway.  The callsign in the entry is what an outgoing connection uses as
-its source unless the program binds one itself.  Where the node listens comes
-from the
-.B WAMPES_SOCKET
-environment variable for the time being: a path for a unix socket, or
-.I host:port
-for the node's TCP service, which is off unless the node's
-.I net.rc
-turns it on.  A
-.I wampes.conf
-in the shape of
-.BR agwpe.conf (5)
-is to replace it.
+its source unless the program binds one itself.  Where the node listens is
+named in
+.BR wampes.conf (5),
+one node per line.  That file is also what makes an entry a WAMPES entry: a
+port belongs to a WAMPES node when the name before the colon appears there,
+so nothing is guessed from the spelling and no name is reserved.  The backend
+is therefore chosen per port, at
+.BR bind (2),
+and no environment variable is needed;
+.B AXSOCK_BACKEND
+remains only as an override.
 .PP
 A name that no entry matches is refused here, before any socket is opened;
 an interface the node does not have is refused by the node, and
@@ -175,17 +174,20 @@ placeholder descriptor, bind() resolves the callsign against
 .I axports
 and the device field of the matching entry (the
 .B agwpe-
-prefix marks an AGWPE port, a
-.B wampes:
-prefix a WAMPES one, anything else a kernel port) and dup2()s
+prefix marks an AGWPE port, anything else a kernel port) and dup2()s
 the real descriptor (kernel socket or AGWPE socketpair) over the
 placeholder, keeping the descriptor number visible to the application
 stable.  That removes AXSOCK_BACKEND altogether and lets kernel,
 AGWPE and WAMPES ports coexist in one process without an environment
 variable.
 .PP
-The WAMPES backend already works this way for everything after
-.BR connect (2):
+The WAMPES backend already works this way.  Its sockets change hands at
+.BR bind (2),
+the first moment the port is known: whoever made the descriptor lets go of it
+and the number the application holds does not change, so kernel, AGWPE and
+WAMPES ports are usable side by side in one process today.  After
+.BR connect (2)
+it costs nothing at all:
 the descriptor the application holds becomes the connection itself, so
 .BR read (2),
 .BR write (2),
@@ -202,4 +204,5 @@ reach the kernel with nothing in between.
 .BR axparms (8),
 .BR kissattach (8),
 .BR ax25netd (8),
-.BR agwpe.conf (5).
+.BR agwpe.conf (5),
+.BR wampes.conf (5).

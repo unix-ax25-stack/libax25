@@ -233,10 +233,59 @@ static int wampes_lazy_base(const char *name, const char *base)
 	return 1;
 }
 
+/* A descriptor inherited across exec.
+ *
+ * ax25d hands its child the accepted connection on descriptor 0, and the
+ * child asks getpeername(0) who is calling - axspawn does exactly that before
+ * it picks a unix account.  Over a socketpair there is nothing to ask: the
+ * kernel answers AF_UNIX and the child refuses the call.  So the parent says
+ * so in the environment and this picks it up, which means no child has to be
+ * changed for it.
+ *
+ *      AXSOCK_INHERIT=<fd> <local> <peer>
+ *
+ * Removed from the environment once read: what is true of this process is not
+ * true of anything it starts in turn.
+ */
+
+static void wampes_inherit(void)
+{
+	char him[20], me[20];
+	const char *v;
+	int fd;
+	struct wampes_sock *s;
+
+	if ((v = getenv("AXSOCK_INHERIT")) == NULL)
+		return;
+	unsetenv("AXSOCK_INHERIT");
+	if (sscanf(v, "%d %19s %19s", &fd, me, him) != 3 || fd < 0)
+		return;
+	if ((s = calloc(1, sizeof(*s))) == NULL)
+		return;
+	s->fd = fd;
+	s->connected = 1;
+	s->me.fsa_ax25.sax25_family = AF_AX25;
+	s->him.fsa_ax25.sax25_family = AF_AX25;
+	if (ax25_aton_entry(me, s->me.fsa_ax25.sax25_call.ax25_call) < 0 ||
+	    ax25_aton_entry(him, s->him.fsa_ax25.sax25_call.ax25_call) < 0) {
+		free(s);
+		return;
+	}
+	s->have_me = 1;
+	s->have_him = 1;
+	s->next = Socks;
+	Socks = s;
+	Nsocks++;
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "wampes: inherited fd=%d, %s called %s\n",
+			fd, him, me);
+}
+
 __attribute__((constructor))
 static void wampes_init(void)
 {
 	ax25_config_lazy_hook = wampes_lazy_base;
+	wampes_inherit();
 }
 
 /* An axports entry names one WAMPES interface: "wampes:hf1".  The part before

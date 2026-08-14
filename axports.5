@@ -86,23 +86,34 @@ channel of that upstream; a
 suffix on the
 .B name
 (e.g.\&
-.IR radio1:1 )
-selects upstream number N (counting from 0 in
-.BR agwpe.conf (5)
-order).  When the server's port list is not reachable, the position of the
-entry is used as a fallback.
+.IR agwpe-direwolf2:4 )
+selects channel N of that upstream, i.e.\& the (N+1)-th radio interface
+of the upstream in question: the name before the colon picks the
+upstream, the suffix the channel inside it.  This is how the channels
+of one radio server (one upstream in
+.BR agwpe.conf (5))
+are addressed.  When the server's port list is not reachable, the
+position of the entry is used as the upstream index, so the port number
+is position * 16 + channel.
 .PP
 Ports that are served by the AGWPE shim are conventionally named with an
 .B agwpe-
 prefix (e.g.\&
-.IR agwpe-radio1 ).
+.IR agwpe-direwolf2 ).
 The
 .B name
 is the interface identity that routing daemons and digipeater programs
 see on the wire, so the prefix keeps AGWPE ports distinguishable from
 kernel AX.25 interfaces and makes the backend of an entry obvious from
 the configuration alone.  This matters once both backends are present on
-one system (see below).
+one system (see below).  The prefix is a pure namespace marker: when the
+entry is resolved, it is stripped before the remaining name is matched
+against the upstream name in
+.BR agwpe.conf (5),
+which carries no prefix
+.RB ( agwpe-direwolf2
+is the interface name for the upstream
+.IR direwolf2 ).
 .PP
 On platforms with a native kernel AX.25 stack (Linux) the AGWPE shim is
 not built by default and AF_AX25 sockets go to the kernel unchanged.  If

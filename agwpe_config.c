@@ -31,6 +31,18 @@
  * ::1) are trusted, any other client must log in first.  "yes" asks
  * every client to log in, "no" trusts everyone.  "required" and
  * "always" are synonyms for "yes", "loop" for "extern".
+ *
+ * The loop port endpoint (unix socket, TCP port, socket group) is NOT
+ * configured here but in the shared ax25common.conf, read by both
+ * ax25netd and its local clients (ax25tcpd, the AGWPE shim); see
+ * netax25/axcommon.h.
+ *
+ *	autoroute	yes|no
+ *
+ * resolves a digipeater path for connects without one: when enabled
+ * (the default) the daemon asks the ax25rtd route cache for the
+ * destination on the target port and sends the learned path.  A connect
+ * that names its digipeaters ('v') is never touched.
  */
 
 #include <stdio.h>
@@ -69,12 +81,15 @@ int agwpe_config_load(const char *path, struct agwpe_config *cfg)
 	char line[256], *s, *name, *host, *port;
 	struct agwpe_upstream *tmp;
 	int lineno = 0;
-	int virtual;
+	int virtual, unixup;
 
 	if (cfg == NULL)
 		return -1;
 	memset(cfg, 0, sizeof(*cfg));
 	cfg->auth = AGWPE_AUTH_EXTERN;	/* default: trust loopback only */
+	cfg->autoroute = 1;		/* default: kernel AX.25 semantics */
+	/* The loop port endpoint (socket/tcp/group) is not set here; the
+	 * daemon applies the shared ax25common.conf.  */
 
 	fp = fopen(path, "r");
 	if (fp == NULL)
@@ -109,9 +124,42 @@ int agwpe_config_load(const char *path, struct agwpe_config *cfg)
 			continue;
 		}
 
-		virtual = (strcmp(name, AGWPE_LOOP_NAME) == 0);
+		if (strcasecmp(name, "autoroute") == 0) {
+			if (host == NULL ||
+			    (strcasecmp(host, "yes") != 0 &&
+			     strcasecmp(host, "on") != 0 &&
+			     strcmp(host, "1") != 0 &&
+			     strcasecmp(host, "no") != 0 &&
+			     strcasecmp(host, "off") != 0 &&
+			     strcmp(host, "0") != 0)) {
+				fprintf(stderr, "agwpe_config: autoroute needs yes or no on line %d of %s\n",
+					lineno, path);
+				goto error;
+			}
+			cfg->autoroute = (strcasecmp(host, "no") != 0 &&
+					  strcasecmp(host, "off") != 0 &&
+					  strcmp(host, "0") != 0);
+			continue;
+		}
 
-		if (!virtual && (host == NULL || port == NULL)) {
+		if (strcasecmp(name, "socket") == 0 ||
+		    strcasecmp(name, "tcp") == 0 ||
+		    strcasecmp(name, "group") == 0) {
+			fprintf(stderr,
+				"agwpe_config: '%s' on line %d of %s belongs in ax25common.conf, not here\n",
+				name, lineno, path);
+			goto error;
+		}
+
+		virtual = (strcmp(name, AGWPE_LOOP_NAME) == 0);
+		unixup = (host != NULL && host[0] == '/');
+
+		if (!virtual && host == NULL) {
+			fprintf(stderr, "agwpe_config: unable to parse line %d of %s\n",
+				lineno, path);
+			goto error;
+		}
+		if (!virtual && !unixup && port == NULL) {
 			fprintf(stderr, "agwpe_config: unable to parse line %d of %s\n",
 				lineno, path);
 			goto error;
@@ -153,6 +201,10 @@ int agwpe_config_load(const char *path, struct agwpe_config *cfg)
 
 		if (virtual) {
 			cfg->upstreams[cfg->count].virtual = 1;
+			cfg->upstreams[cfg->count].tcp_port = 0;
+		} else if (unixup) {
+			/* A host starting with '/' is a unix domain socket;
+			 * the tcp-port column is ignored ("-" or absent).  */
 			cfg->upstreams[cfg->count].tcp_port = 0;
 		} else {
 			int tp = atoi(port);

@@ -53,6 +53,7 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <sys/un.h>
 #include <net/if.h>
 #include <netdb.h>
 
@@ -61,6 +62,7 @@
 #include "netax25/axconfig.h"
 #include "netax25/agwpe.h"
 #include "netax25/agwpe_client.h"
+#include "netax25/axmon.h"
 
 #define	AXSOCK_DEFAULT_HOST	"127.0.0.1"
 #define	AXSOCK_DEFAULT_PORT	8100
@@ -231,6 +233,14 @@ struct axsock_sock {
  * calls route back through these wrappers.  Those fds are never axsock
  * fds, but the lock is re-taken while an outer axsock call already holds
  * it (e.g. connect() -> axsock_ensure_locked() -> TCP connect()).
+ *
+ * The lock protects the socket table and the AGWPE client lifecycle.  It
+ * is a data lock, never a blocking-I/O lock: every frame send takes a
+ * client reference, snapshots its arguments and releases the lock before
+ * touching the (blocking) AGWPE TCP socket, then re-acquires it to drop
+ * the reference.  Recursion therefore only ever re-enters around short
+ * critical sections, which also bounds what a signal handler calling
+ * close() can be made to wait for.
  */
 static pthread_mutex_t	axsock_lock;
 static pthread_cond_t	axsock_cond = PTHREAD_COND_INITIALIZER;
@@ -239,17 +249,24 @@ static struct axsock_sock	*axsock_list;
 static int			axsock_nsock;
 static int			axsock_nraw;	/* open SOCK_PACKET monitors */
 
+/* SOL_AX25 options already warned about (setsockopt: once per process
+ * and option, see axsock_setsockopt).  Guarded by axsock_lock.  */
+static int			axsock_warned[16];
+static int			axsock_nwarned;
+
 static agwpe_client_t		*axsock_agwpe;
 static pthread_t		axsock_thread;
 static int			axsock_up;
 
-/*
- * Set when this process is a service spawned by ax25d.  The accepted
- * socket (fd 1) was handed over via AXSOCK_INHERIT; the parent keeps
- * dispatching inbound traffic into the pipe, so we must neither run a
- * reader thread nor (re-)register any calls here.
+/* Client lifetime across sends that run without axsock_lock (see
+ * axsock_client_acquire): a sender snapshots axsock_agwpe and bumps the
+ * reference, so ensure_locked() must not free a client still in flight.
+ * It instead retires it to axsock_retired, and once every reference is
+ * gone axsock_client_release() reaps them all.  Guarded by axsock_lock.
  */
-static int			axsock_inherit;
+static unsigned int		axsock_client_refs;
+static agwpe_client_t		*axsock_retired[4];
+static int			axsock_nretired;
 
 /* Every call this process registered with the server, with a reference
  * count so that several sockets sharing one call do not unregister it
@@ -275,6 +292,55 @@ static struct axsock_sock *axsock_find_locked(int fd)
 		if (s->fd == fd)
 			return s;
 	return NULL;
+}
+
+/*
+ * Fast path for the hot interposers (close, write): when no AGWPE-backed
+ * socket exists at all, skip the mutex and the table walk.  axsock_nsock
+ * is mutated only under axsock_lock, so this relaxed load either sees the
+ * current count or a value one mutation stale; it can never tear.  The
+ * only way it misleads is a thread reading a stale zero just as the very
+ * first shim socket is created by another thread, and even then both
+ * misroutes degrade gracefully: close() just drops the descriptor (the
+ * peer reader thread still sees EOF and tears the session down) and
+ * write() delivers the bytes into the socketpair, from which the peer
+ * reader forwards them as the same 'D' frame the slow path would send.
+ */
+static inline int axsock_may_have_sock(void)
+{
+	return __atomic_load_n(&axsock_nsock, __ATOMIC_RELAXED) != 0;
+}
+
+/*
+ * Take a reference on the AGWPE client so a frame can be sent without
+ * holding axsock_lock.  Called with the lock held; returns NULL when the
+ * link is down, in which case the caller reports ENOTCONN.  The caller
+ * must pair this with axsock_client_release() after its send.
+ */
+static agwpe_client_t *axsock_client_acquire(void)
+{
+	if (!axsock_up || axsock_agwpe == NULL)
+		return NULL;
+	axsock_client_refs++;
+	return axsock_agwpe;
+}
+
+/*
+ * Drop a client reference taken by axsock_client_acquire.  Called with
+ * the lock held.  Reaps every client retired by axsock_client_retire()
+ * as soon as it is the last outstanding reference.
+ */
+static void axsock_client_release(void)
+{
+	if (axsock_client_refs > 0)
+		axsock_client_refs--;
+	if (axsock_client_refs == 0 && axsock_nretired > 0) {
+		int i;
+
+		for (i = 0; i < axsock_nretired; i++)
+			agwpe_client_free(axsock_retired[i]);
+		axsock_nretired = 0;
+	}
 }
 
 /*
@@ -399,6 +465,21 @@ static void axsock_ports_parse(const unsigned char *data, size_t len)
  * the axsock lock held.  Returns 0 on success (table cached), -1 on
  * error (failures are retried on the next call).
  */
+
+/*
+ * Connect the AGWPE client to the configured server.  A leading '/'
+ * in AXSOCK_HOST selects a unix domain socket (a path), anything else
+ * a TCP host:port.  The unix socket is gated by its file permissions,
+ * so an ax25netd configured with 'socket' and 'group hams' is only
+ * reachable by members of that group.
+ */
+static int axsock_transport_connect(agwpe_client_t *c)
+{
+	if (axsock_host[0] == '/')
+		return agwpe_client_connect_unix(c, axsock_host);
+	return agwpe_client_connect_host(c, axsock_host, axsock_port);
+}
+
 static int axsock_ports_fetch(void)
 {
 	const char *host, *portstr;
@@ -425,20 +506,39 @@ static int axsock_ports_fetch(void)
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
-	if (getaddrinfo(axsock_host, service, &hints, &res) != 0)
-		return -1;
 
-	for (ai = res; ai != NULL; ai = ai->ai_next) {
-		fd = real_socket(ai->ai_family, ai->ai_socktype,
-				 ai->ai_protocol);
-		if (fd < 0)
-			continue;
-		if (real_connect(fd, ai->ai_addr, ai->ai_addrlen) == 0)
-			break;
-		real_close(fd);
-		fd = -1;
+	if (axsock_host[0] == '/') {
+		struct sockaddr_un sa;
+
+		if (strlen(axsock_host) >= sizeof(sa.sun_path))
+			return -1;
+		fd = real_socket(AF_UNIX, SOCK_STREAM, 0);
+		if (fd >= 0) {
+			memset(&sa, 0, sizeof(sa));
+			sa.sun_family = AF_UNIX;
+			strncpy(sa.sun_path, axsock_host,
+				sizeof(sa.sun_path) - 1);
+			if (real_connect(fd, (struct sockaddr *)&sa,
+					 SUN_LEN(&sa)) != 0) {
+				real_close(fd);
+				fd = -1;
+			}
+		}
+	} else if (getaddrinfo(axsock_host, service, &hints, &res) != 0) {
+		return -1;
+	} else {
+		for (ai = res; ai != NULL; ai = ai->ai_next) {
+			fd = real_socket(ai->ai_family, ai->ai_socktype,
+					 ai->ai_protocol);
+			if (fd < 0)
+				continue;
+			if (real_connect(fd, ai->ai_addr, ai->ai_addrlen) == 0)
+				break;
+			real_close(fd);
+			fd = -1;
+		}
+		freeaddrinfo(res);
 	}
-	freeaddrinfo(res);
 	if (fd < 0)
 		return -1;
 
@@ -494,38 +594,40 @@ static int axsock_ports_fetch(void)
 	return (axsock_gnports >= 0) ? 0 : -1;
 }
 
-/* The flat port of the first channel of the idx-th distinct upstream in
- * the 'G' reply (the reply lists the upstreams in agwpe.conf order).  */
-static int axsock_gport_of_index(int idx)
+/* The flat port of channel "chan" of the upstream named "base".  The
+ * channels of one upstream are contiguous in the 'G' reply, starting at
+ * its first channel, so channel N is first + N.  Returns -1 when the
+ * upstream or that channel is not reported.  */
+static int axsock_gport_channel(const char *base, int chan)
 {
-	int i, seen = 0;
+	int i, baseport = -1;
 
-	for (i = 0; i < axsock_gnports; i++) {
-		int j, dup = 0;
-
-		for (j = 0; j < i; j++)
-			if (strcasecmp(axsock_gports[j].up,
-				       axsock_gports[i].up) == 0) {
-				dup = 1;
-				break;
-			}
-		if (dup)
-			continue;
-		if (seen++ == idx)
-			return axsock_gports[i].port;
-	}
+	for (i = 0; i < axsock_gnports; i++)
+		if (strcasecmp(axsock_gports[i].up, base) == 0) {
+			baseport = axsock_gports[i].port;
+			break;
+		}
+	if (baseport < 0)
+		return -1;
+	if (chan == 0)
+		return baseport;
+	for (i = 0; i < axsock_gnports; i++)
+		if (strcasecmp(axsock_gports[i].up, base) == 0 &&
+		    axsock_gports[i].port == baseport + chan)
+			return baseport + chan;
 	return -1;
 }
 
-/* The flat port of the first channel of the upstream named "name".  */
-static int axsock_gport_of_name(const char *name)
+/* Strip the conventional "agwpe-" namespace marker from an axports
+ * interface name, so the remaining name can be matched against the
+ * upstream name in the 'G' reply (the name in agwpe.conf).  The prefix
+ * keeps the virtual AGWPE interface names distinct from kernel AX.25
+ * interfaces on systems with both.  */
+static const char *axsock_strip_prefix(const char *name)
 {
-	int i;
-
-	for (i = 0; i < axsock_gnports; i++)
-		if (strcasecmp(axsock_gports[i].up, name) == 0)
-			return axsock_gports[i].port;
-	return -1;
+	if (strncasecmp(name, "agwpe-", 6) == 0)
+		name += 6;
+	return name;
 }
 
 /*
@@ -537,15 +639,20 @@ static int axsock_gport_of_name(const char *name)
  *
  *   - the reserved interface name "loop" is the virtual loopback
  *     upstream and always uses AGWPE_PORT_LOOP;
- *   - an interface name with a ":N" suffix (e.g. "radio1:1") selects
- *     upstream number N (counting from 0 in agwpe.conf order) and
- *     returns its first channel;
+ *   - an interface name with a ":N" suffix (e.g. "agwpe-direwolf2:4")
+ *     selects channel N of the upstream of the same name, i.e. the
+ *     (N+1)-th radio interface of that upstream (the name before the
+ *     ":" selects the upstream, the suffix the channel inside it);
  *   - a plain interface name selects the first channel of the upstream
- *     that carries the same name in the 'G' reply.
+ *     that carries the same name in the 'G' reply;
+ *   - an optional "agwpe-" prefix on the interface name is a namespace
+ *     marker (the virtual interface name in axports) and is stripped
+ *     before matching against the upstream name.
  *
  * When the 'G' table is not reachable the old positional mapping is
  * used as a fallback: the position of the first axports entry whose
- * address matches is the port.  A bound call with an SSID for which no
+ * address matches is the upstream index, so the flat port is
+ * position * 16 + channel.  A bound call with an SSID for which no
  * entry exists falls back to the loop interface: its base call serves
  * every SSID.  Falls back to port 0.
  */
@@ -555,9 +662,11 @@ static unsigned char axsock_port_for(const char *call)
 {
 	char *name, *addr;
 	unsigned char i = 0, pos = 0;
+	char base[24];
 	const char *entry = NULL;
 	const char *colon;
 	int idx;
+	size_t blen;
 
 	ax25_config_load_ports();
 
@@ -587,11 +696,10 @@ static unsigned char axsock_port_for(const char *call)
 	if (entry == NULL)
 		return 0;
 
-	/* The reserved loop interface is the virtual loopback upstream.  */
-	if (strcasecmp(entry, "loop") == 0)
-		return AGWPE_PORT_LOOP;
-
-	/* Optional ":N" suffix selects the upstream index.  */
+	/* Optional ":N" suffix selects a channel of the named upstream,
+	 * not a second upstream: "direwolf:1" is interface 1 (channel 1)
+	 * of the upstream "direwolf", the way netd numbers the channels
+	 * of one radio server.  */
 	idx = -1;
 	colon = strrchr(entry, ':');
 	if (colon != NULL && colon != entry && colon[1] != '\0') {
@@ -602,27 +710,33 @@ static unsigned char axsock_port_for(const char *call)
 		v = strtol(colon + 1, &end, 10);
 		if (errno == 0 && *end == '\0' && v >= 0 && v < 256)
 			idx = (int)v;
+		blen = (size_t)(colon - entry);
+		if (blen >= sizeof(base))
+			blen = sizeof(base) - 1;
+		memcpy(base, entry, blen);
+		base[blen] = '\0';
+	} else {
+		strncpy(base, entry, sizeof(base) - 1);
+		base[sizeof(base) - 1] = '\0';
 	}
 
-	if (idx >= 0) {
-		if (axsock_ports_fetch() == 0) {
-			int p = axsock_gport_of_index(idx);
-
-			if (p >= 0)
-				return (unsigned char)p;
-		}
-		/* Best effort without the table: the flat stride.  */
-		return (unsigned char)(idx * 16);
-	}
+	/* The reserved loop interface is the virtual loopback upstream.  */
+	if (strcasecmp(base, "loop") == 0)
+		return AGWPE_PORT_LOOP;
 
 	if (axsock_ports_fetch() == 0) {
-		int p = axsock_gport_of_name(entry);
+		int p = axsock_gport_channel(axsock_strip_prefix(base),
+					     (idx >= 0) ? idx : 0);
 
 		if (p >= 0)
 			return (unsigned char)p;
 	}
 
-	return pos;
+	/* Best effort without the table: the positional mapping extended
+	 * with the channel (upstream index = position in axports).  */
+	if (idx >= 0)
+		return (unsigned char)(pos * 16 + idx);
+	return (unsigned char)pos;
 }
 
 /* Reverse of axsock_port_for(): the configured port name for an AGWPE
@@ -696,7 +810,8 @@ static struct axsock_sock *axsock_alloc_sock_locked(int type)
 	int fds[2];
 	int fl;
 
-	if (axsock_nsock >= AXSOCK_MAX_SOCK) {
+	if (__atomic_load_n(&axsock_nsock, __ATOMIC_RELAXED) >=
+	    AXSOCK_MAX_SOCK) {
 		errno = EMFILE;
 		return NULL;
 	}
@@ -750,7 +865,7 @@ static struct axsock_sock *axsock_alloc_sock_locked(int type)
 
 	s->next = axsock_list;
 	axsock_list = s;
-	axsock_nsock++;
+	__atomic_add_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
 
 	return s;
 }
@@ -893,20 +1008,28 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 	 * strips again.  */
 	if (hdr->datakind == AGWPE_DK_RAW) {
 		for (s = axsock_list; s != NULL; s = s->next) {
-			size_t off = 0;
+			unsigned char fbuf[AXMON_PREFIX_LEN + AXMON_FRAME_MAX];
+			ssize_t n;
 
 			if (!s->raw || s->peer < 0)
 				continue;
 			if (!axsock_raw_match(s, hdr->port))
 				continue;
-			while (off < len) {
-				ssize_t n;
-
-				n = real_write(s->peer, data + off, len - off);
-				if (n < 0)
-					break;
-				off += n;
-			}
+			/* Deliver each frame as one length prefixed unit
+			 * (see netax25/axmon.h): the monitor socketpair is
+			 * a byte stream, and a stream merges frames that
+			 * arrive back to back, which would make listen(1)
+			 * decode past the end of the first frame.  */
+			if (len == 0 || len > AXMON_FRAME_MAX)
+				continue;	/* monitor cannot show it */
+			fbuf[0] = (unsigned char)(len >> 24);
+			fbuf[1] = (unsigned char)(len >> 16);
+			fbuf[2] = (unsigned char)(len >> 8);
+			fbuf[3] = (unsigned char)len;
+			memcpy(fbuf + AXMON_PREFIX_LEN, data, len);
+			n = real_write(s->peer, fbuf, AXMON_PREFIX_LEN + len);
+			if (n != (ssize_t)(AXMON_PREFIX_LEN + len))
+				continue;	/* monitor fell behind: drop */
 			s->port = hdr->port;
 		}
 		goto out;
@@ -1075,6 +1198,23 @@ static void *axsock_reader(void *arg)
 }
 
 /*
+ * Drop the current AGWPE client (called with the lock held, on the way
+ * to establishing a new one).  A client that a sender is still using
+ * outside the lock is retired instead of freed; the last reference
+ * holder reaps it in axsock_client_release().  If the retired list is
+ * full the client is freed anyway - reconnects must not be blocked on a
+ * leak far rarer than the list can ever be asked to absorb.
+ */
+static void axsock_client_retire(void)
+{
+	if (axsock_client_refs == 0 || axsock_nretired >= 4)
+		agwpe_client_free(axsock_agwpe);
+	else
+		axsock_retired[axsock_nretired++] = axsock_agwpe;
+	axsock_agwpe = NULL;
+}
+
+/*
  * Make sure the AGWPE connection is up.  Called with the lock held.
  */
 static int axsock_ensure_locked(void)
@@ -1087,10 +1227,8 @@ static int axsock_ensure_locked(void)
 	if (axsock_up)
 		return 0;
 
-	if (axsock_agwpe != NULL) {
-		agwpe_client_free(axsock_agwpe);
-		axsock_agwpe = NULL;
-	}
+	if (axsock_agwpe != NULL)
+		axsock_client_retire();
 
 	host = getenv("AXSOCK_HOST");
 	axsock_host = (host != NULL && host[0] != '\0') ?
@@ -1107,12 +1245,10 @@ static int axsock_ensure_locked(void)
 		return -1;
 	}
 
-	if (agwpe_client_connect_host(axsock_agwpe, axsock_host,
-				      axsock_port) != 0) {
+	if (axsock_transport_connect(axsock_agwpe) != 0) {
 		int e = agwpe_client_err(axsock_agwpe);
 
-		agwpe_client_free(axsock_agwpe);
-		axsock_agwpe = NULL;
+		axsock_client_retire();
 		errno = (e != 0) ? e : ECONNREFUSED;
 		return -1;
 	}
@@ -1131,16 +1267,8 @@ static int axsock_ensure_locked(void)
 					   (pass != NULL) ? pass : "");
 	}
 
-	if (axsock_inherit) {
-		/* ax25d still dispatches inbound traffic for us; a reader
-		 * thread here would deliver every frame twice.  */
-		axsock_up = 1;
-		return 0;
-	}
-
 	if (pthread_create(&axsock_thread, NULL, axsock_reader, NULL) != 0) {
-		agwpe_client_free(axsock_agwpe);
-		axsock_agwpe = NULL;
+		axsock_client_retire();
 		errno = EAGAIN;
 		return -1;
 	}
@@ -1151,29 +1279,96 @@ static int axsock_ensure_locked(void)
 }
 
 /*
- * Send one data frame on an established connection.  Called with the lock
- * held.
+ * Send one data frame on an established connection.  The AGWPE TCP
+ * connection is blocking, so the send is done without axsock_lock - a
+ * full TCP buffer must not stall every other socket call in the
+ * process.  The client pointer is snapshotted and referenced under the
+ * lock (so ensure_locked() cannot free it), all per-socket fields are
+ * copied to locals, and the lock is dropped only for the write itself.
+ * Called with the lock held, returns with it held.
  */
 static ssize_t axsock_send_data(struct axsock_sock *s,
 				const void *buf, size_t len)
 {
+	unsigned char port, pid;
+	char local[AGWPE_MAX_CALL], remote[AGWPE_MAX_CALL];
+	agwpe_client_t *cl;
+	int rc;
+
 	if (s->state != AXSOCK_CONNECTED) {
 		errno = ENOTCONN;
 		return -1;
 	}
-	if (!axsock_up || axsock_agwpe == NULL) {
+	cl = axsock_client_acquire();
+	if (cl == NULL) {
 		errno = ENOTCONN;
 		return -1;
 	}
-	if (agwpe_client_send_data(axsock_agwpe, s->port, s->pid,
-				   s->local, s->remote,
-				   (const unsigned char *)buf,
-				   (int)len) != 0) {
-		errno = (agwpe_client_err(axsock_agwpe) != 0) ?
-			agwpe_client_err(axsock_agwpe) : EIO;
+
+	/* Snapshot everything the send needs before the lock goes down;
+	 * another thread may close the socket and free s meanwhile.  */
+	port = s->port;
+	pid = s->pid;
+	memcpy(local, s->local, AGWPE_MAX_CALL);
+	memcpy(remote, s->remote, AGWPE_MAX_CALL);
+
+	pthread_mutex_unlock(&axsock_lock);
+	rc = agwpe_client_send_data(cl, port, pid, local, remote,
+				    (const unsigned char *)buf, (int)len);
+	pthread_mutex_lock(&axsock_lock);
+	axsock_client_release();
+
+	if (rc != 0) {
+		errno = (agwpe_client_err(cl) != 0) ?
+			agwpe_client_err(cl) : EIO;
 		return -1;
 	}
 	return (ssize_t)len;
+}
+
+/*
+ * Send a DGRAM (unproto) frame, releasing axsock_lock around the TCP
+ * write for the same reason as axsock_send_data.  Called with the lock
+ * held, returns with it held.  digis may be NULL / ndigis 0.
+ */
+static int axsock_send_unproto(struct axsock_sock *s, const char *target,
+			       const char *const *digis, int ndigis,
+			       const void *buf, size_t len)
+{
+	unsigned char port, pid;
+	char local[AGWPE_MAX_CALL];
+	agwpe_client_t *cl;
+	int rc;
+
+	cl = axsock_client_acquire();
+	if (cl == NULL) {
+		errno = ENOTCONN;
+		return -1;
+	}
+
+	port = s->port;
+	pid = s->pid;
+	memcpy(local, s->local, AGWPE_MAX_CALL);
+
+	pthread_mutex_unlock(&axsock_lock);
+	if (ndigis > 0)
+		rc = agwpe_client_send_unproto_via(cl, port, pid, local,
+						   target, digis, ndigis,
+						   (const unsigned char *)buf,
+						   (int)len);
+	else
+		rc = agwpe_client_send_unproto(cl, port, pid, local, target,
+					       (const unsigned char *)buf,
+					       (int)len);
+	pthread_mutex_lock(&axsock_lock);
+	axsock_client_release();
+
+	if (rc != 0) {
+		errno = (agwpe_client_err(cl) != 0) ?
+			agwpe_client_err(cl) : EIO;
+		return -1;
+	}
+	return 0;
 }
 
 static void axsock_disconnect_locked(struct axsock_sock *s)
@@ -1207,7 +1402,7 @@ static void axsock_peer_reader_teardown(struct axsock_sock *s)
 			break;
 		}
 	}
-	axsock_nsock--;
+	__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
 
 	if (s->peer >= 0)
 		real_close(s->peer);
@@ -1258,17 +1453,33 @@ static void *axsock_peer_reader(void *arg)
 		if (n <= 0)
 			break;
 
+		/* The outbound forward is a blocking TCP write to the AGWPE
+		 * server; take the client outside axsock_lock so a slow
+		 * server never stalls every other socket call (including
+		 * the dispatch path that writes inbound frames into this
+		 * same socketpair).
+		 */
 		pthread_mutex_lock(&axsock_lock);
-		if (s->state == AXSOCK_CONNECTED && axsock_up &&
-		    axsock_agwpe != NULL) {
-			if (getenv("AXSOCK_DEBUG"))
-				fprintf(stderr, "axsock: peer forward %zd bytes to %.*s\n",
-					n, AGWPE_MAX_CALL, s->remote);
-			(void)agwpe_client_send_data(axsock_agwpe, s->port,
-						     s->pid, s->local,
-						     s->remote,
-						     (const unsigned char *)buf,
-						     (int)n);
+		if (s->state == AXSOCK_CONNECTED) {
+			unsigned char port = s->port, pid = s->pid;
+			char local[AGWPE_MAX_CALL], remote[AGWPE_MAX_CALL];
+			agwpe_client_t *cl = axsock_client_acquire();
+
+			if (cl != NULL) {
+				memcpy(local, s->local, AGWPE_MAX_CALL);
+				memcpy(remote, s->remote, AGWPE_MAX_CALL);
+				if (getenv("AXSOCK_DEBUG"))
+					fprintf(stderr,
+						"axsock: peer forward %zd bytes to %.*s\n",
+						n, AGWPE_MAX_CALL, remote);
+				pthread_mutex_unlock(&axsock_lock);
+				(void)agwpe_client_send_data(cl, port, pid,
+							     local, remote,
+							     (const unsigned char *)buf,
+							     (int)n);
+				pthread_mutex_lock(&axsock_lock);
+				axsock_client_release();
+			}
 		}
 		pthread_mutex_unlock(&axsock_lock);
 	}
@@ -1583,24 +1794,8 @@ ssize_t sendto(int fd, const void *buf, size_t len, int flags,
 				}
 			}
 
-			if (ndigis > 0) {
-				if (agwpe_client_send_unproto_via(axsock_agwpe,
-						s->port, s->pid, s->local,
-						target, digis, ndigis,
-						(const unsigned char *)buf,
-						(int)len) != 0) {
-					errno = (agwpe_client_err(axsock_agwpe) != 0) ?
-						agwpe_client_err(axsock_agwpe) : EIO;
-					pthread_mutex_unlock(&axsock_lock);
-					return -1;
-				}
-			} else if (agwpe_client_send_unproto(axsock_agwpe, s->port,
-							    s->pid, s->local,
-							    target,
-							    (const unsigned char *)buf,
-							    (int)len) != 0) {
-				errno = (agwpe_client_err(axsock_agwpe) != 0) ?
-					agwpe_client_err(axsock_agwpe) : EIO;
+			if (axsock_send_unproto(s, target, digis, ndigis,
+						buf, len) != 0) {
 				pthread_mutex_unlock(&axsock_lock);
 				return -1;
 			}
@@ -1617,6 +1812,9 @@ ssize_t write(int fd, const void *buf, size_t len)
 {
 	struct axsock_sock *s;
 	ssize_t r;
+
+	if (!axsock_may_have_sock())
+		return real_write(fd, buf, len);
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
@@ -1708,6 +1906,20 @@ int close(int fd)
 	struct axsock_sock *s, **pp;
 	int peer, rfd;
 
+	/*
+	 * Fast path: when no AGWPE-backed socket exists, close() is a
+	 * plain descriptor release.  This also keeps a signal handler
+	 * calling close() from ever taking the lock (and thus from ever
+	 * waiting on another thread): listen's SIGINT handler closes the
+	 * monitor socket this way.  The one call that cannot be kept out
+	 * of the lock is closing the monitor socket itself while the
+	 * dispatch thread is mid-write - the recursive mutex makes that
+	 * safe as long as the lock hold times are short, which the
+	 * send-without-lock paths above guarantee.
+	 */
+	if (!axsock_may_have_sock())
+		return real_close(fd);
+
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
@@ -1746,7 +1958,7 @@ int close(int fd)
 			break;
 		}
 	}
-	axsock_nsock--;
+	__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
 
 	peer = s->peer;
 	rfd = s->fd;
@@ -1860,22 +2072,71 @@ int accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
 	return afd;
 }
 
+/* AX.25 option names for the stderr warning below.  */
+static const char *axsock_opt_name(int optname)
+{
+	switch (optname) {
+	case AX25_WINDOW:	return "AX25_WINDOW";
+	case AX25_T1:		return "AX25_T1";
+	case AX25_T2:		return "AX25_T2";
+	case AX25_T3:		return "AX25_T3";
+	case AX25_N2:		return "AX25_N2";
+	case AX25_BACKOFF:	return "AX25_BACKOFF";
+	case AX25_EXTSEQ:	return "AX25_EXTSEQ";
+	case AX25_PIDINCL:	return "AX25_PIDINCL";
+	case AX25_IDLE:		return "AX25_IDLE";
+	case AX25_PACLEN:	return "AX25_PACLEN";
+	case AX25_IPMAXQUEUE:	return "AX25_IPMAXQUEUE";
+	case AX25_IAMDIGI:	return "AX25_IAMDIGI";
+	case AX25_KILL:		return "AX25_KILL";
+	default:		return NULL;
+	}
+}
+
 int setsockopt(int fd, int level, int optname,
 	       const void *optval, socklen_t optlen)
 {
 	struct axsock_sock *s;
+	int warn = 0;
+	int i;
 
-	(void)optname;
 	(void)optval;
 	(void)optlen;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
+	if (s != NULL && level == SOL_AX25) {
+		/* Warn once per process and option (AGWPE-BEWERTUNG 9.4):
+		 * the AGWPE server owns the channel parameters and ignores
+		 * maxframe and friends anyway, so the call is a no-op over
+		 * the wire.  It still returns success so existing programs
+		 * that check the return value keep working.  */
+		for (i = 0; i < axsock_nwarned; i++)
+			if (axsock_warned[i] == optname)
+				break;
+		warn = (i == axsock_nwarned);
+		if (warn && axsock_nwarned <
+			    (int)(sizeof(axsock_warned) /
+				  sizeof(axsock_warned[0])))
+			axsock_warned[axsock_nwarned++] = optname;
+	}
 	pthread_mutex_unlock(&axsock_lock);
 
 	if (s == NULL)
 		return real_setsockopt(fd, level, optname, optval, optlen);
 
+	if (warn) {
+		const char *name = axsock_opt_name(optname);
+		char num[16];
+
+		if (name == NULL) {
+			snprintf(num, sizeof(num), "%d", optname);
+			name = num;
+		}
+		fprintf(stderr, "axsock: setsockopt(SOL_AX25, %s) is "
+			"ignored: the AGWPE server owns the channel "
+			"parameters\n", name);
+	}
 	if (level == SOL_AX25 || level == SOL_SOCKET)
 		return 0;
 	errno = ENOPROTOOPT;
@@ -2084,7 +2345,6 @@ static void axsock_atfork_child(void)
 	axsock_nsock = 0;
 	axsock_agwpe = NULL;
 	axsock_up = 0;
-	axsock_inherit = 0;
 	axsock_nregistered = 0;
 }
 
@@ -2118,42 +2378,4 @@ static void axsock_init(void)
 	real_getsockname = dlsym(RTLD_NEXT, "getsockname");
 	real_listen = dlsym(RTLD_NEXT, "listen");
 	real_accept = dlsym(RTLD_NEXT, "accept");
-
-	/* A service spawned by ax25d: the accepted connection was handed
-	 * over on fd 1 via AXSOCK_INHERIT="local|remote|port|fd".  The
-	 * parent process keeps dispatching inbound traffic into the pipe,
-	 * so this process only sends (and closes) over its own AGWPE
-	 * connection; no reader thread, no call registration.  */
-	{
-		const char *inh = getenv("AXSOCK_INHERIT");
-
-		if (inh != NULL && inh[0] != '\0') {
-			char loc[AGWPE_MAX_CALL] = "", rem[AGWPE_MAX_CALL] = "";
-			unsigned int port = 0, fd = 0;
-			int n = sscanf(inh, "%9[^|]|%9[^|]|%u|%u",
-				       loc, rem, &port, &fd);
-
-			if (n == 4 && port > 0 && port <= 255 && fd > 0) {
-				struct axsock_sock *s =
-					calloc(1, sizeof(*s));
-
-				if (s != NULL) {
-					axsock_copy_call(s->local, loc);
-					axsock_copy_call(s->remote, rem);
-					s->fd = (int)fd;
-					s->peer = -1;
-					s->type = SOCK_SEQPACKET;
-					s->state = AXSOCK_CONNECTED;
-					s->port = (unsigned char)port;
-					s->pid = AGWPE_PID_AX25;
-					axsock_inherit = 1;
-					pthread_mutex_lock(&axsock_lock);
-					s->next = axsock_list;
-					axsock_list = s;
-					axsock_nsock++;
-					pthread_mutex_unlock(&axsock_lock);
-				}
-			}
-		}
-	}
 }

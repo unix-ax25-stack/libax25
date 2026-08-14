@@ -37,9 +37,12 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/select.h>
+#include <sys/un.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
 
@@ -54,6 +57,16 @@ struct agwpe_client {
 	struct agwpe_client_cb	cb;
 	void			*opaque;
 	int			err;
+
+	/*
+	 * Serializes the outgoing frame stream.  The shim (libax25
+	 * AXSOCK) drops its table lock while a frame is being sent so a
+	 * full TCP buffer never blocks every other socket call in the
+	 * process; several threads can then send concurrently, and this
+	 * mutex keeps whole frames (header + data) contiguous on the wire
+	 * instead of interleaved.
+	 */
+	pthread_mutex_t		wlock;
 
 	unsigned char		*rbuf;
 	size_t			rlen;
@@ -77,6 +90,8 @@ agwpe_client_t *agwpe_client_new(const struct agwpe_client_cb *cb, void *opaque)
 	if (cb != NULL)
 		c->cb = *cb;
 
+	pthread_mutex_init(&c->wlock, NULL);
+
 	c->rbuf = malloc(AGWPE_BUF_INIT);
 	if (c->rbuf == NULL) {
 		free(c);
@@ -94,9 +109,17 @@ void agwpe_client_free(agwpe_client_t *c)
 
 	if (c->fd >= 0)
 		close(c->fd);
+	pthread_mutex_destroy(&c->wlock);
 	free(c->rbuf);
 	free(c);
 }
+
+/*
+ * Non-blocking connect with a bounded wait; defined below, used by
+ * both connect paths.  Returns 0 on success (fd blocking, open), -1 on
+ * failure (fd closed, errno set).
+ */
+static int agwpe_connect_wait(int fd, const struct sockaddr *sa, socklen_t len);
 
 /*
  * Connect to the AGWPE server.  Returns 0 on success, -1 on error.
@@ -104,8 +127,32 @@ void agwpe_client_free(agwpe_client_t *c)
 int agwpe_client_connect_host(agwpe_client_t *c, const char *host, int tcp_port)
 {
 	struct addrinfo hints, *res, *ai;
-	char portstr[16];
-	int s;
+	char portstr[16], *h = NULL;
+	int s, save_errno = 0;
+
+	if (host == NULL) {
+		c->err = EINVAL;
+		return -1;
+	}
+
+	/* Accept the bracketed IPv6 notation "[::1]" from configuration
+	 * files; getaddrinfo wants the bare address.  */
+	if (host[0] == '[') {
+		size_t n = strlen(host);
+
+		if (n < 3 || host[n - 1] != ']') {
+			c->err = EINVAL;
+			return -1;
+		}
+		h = malloc(n - 1);
+		if (h == NULL) {
+			c->err = ENOMEM;
+			return -1;
+		}
+		memcpy(h, host + 1, n - 2);
+		h[n - 2] = '\0';
+		host = h;
+	}
 
 	if (c->fd >= 0) {
 		close(c->fd);
@@ -122,22 +169,25 @@ int agwpe_client_connect_host(agwpe_client_t *c, const char *host, int tcp_port)
 	snprintf(portstr, sizeof(portstr), "%d", tcp_port);
 
 	if (getaddrinfo(host, portstr, &hints, &res) != 0) {
+		free(h);
 		c->err = EADDRNOTAVAIL;
 		return -1;
 	}
+	free(h);
 
 	for (ai = res; ai != NULL; ai = ai->ai_next) {
 		s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 		if (s < 0)
 			continue;
-		if (connect(s, ai->ai_addr, ai->ai_addrlen) == 0)
+		if (agwpe_connect_wait(s, ai->ai_addr, ai->ai_addrlen) == 0)
 			break;
-		close(s);
+		/* agwpe_connect_wait closed s and set errno */
+		save_errno = errno;
 	}
 	freeaddrinfo(res);
 
 	if (ai == NULL) {
-		c->err = ECONNREFUSED;
+		c->err = save_errno ? save_errno : ECONNREFUSED;
 		return -1;
 	}
 
@@ -166,6 +216,111 @@ void agwpe_client_close(agwpe_client_t *c)
 	}
 }
 
+/* Bound for a single connect() attempt.  A unix socket completes
+ * immediately, but an unreachable TCP peer must not stall the calling
+ * daemon; the attempt is aborted after this many milliseconds.  */
+#define	AGWPE_CONNECT_TIMEOUT	5000
+
+/*
+ * Non-blocking connect with a bounded wait.  The socket is switched to
+ * non-blocking for the attempt and back to blocking for the regular
+ * frame I/O afterwards.  Returns 0 on success (fd still open, blocking
+ * mode), -1 on failure (fd closed, errno set).
+ */
+static int agwpe_connect_wait(int fd, const struct sockaddr *sa, socklen_t len)
+{
+	struct pollfd pfd;
+	int flags, soerr, rc;
+	socklen_t sl;
+
+	flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+		errno = EIO;
+		goto fail;
+	}
+
+	rc = connect(fd, sa, len);
+	if (rc < 0 && errno != EINPROGRESS)
+		goto fail;
+
+	if (rc < 0) {	/* EINPROGRESS: wait for completion */
+		pfd.fd = fd;
+		pfd.events = POLLOUT;
+		do {
+			rc = poll(&pfd, 1, AGWPE_CONNECT_TIMEOUT);
+		} while (rc < 0 && errno == EINTR);
+		if (rc <= 0) {
+			if (rc == 0)
+				errno = ETIMEDOUT;
+			goto fail;
+		}
+		sl = sizeof(soerr);
+		soerr = 0;
+		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) < 0 ||
+		    soerr != 0) {
+			if (soerr != 0)
+				errno = soerr;
+			goto fail;
+		}
+	}
+
+	/* Back to blocking mode for the frame stream.  */
+	(void)fcntl(fd, F_SETFL, flags);
+	return 0;
+
+fail:
+	(void)fcntl(fd, F_SETFL, flags);
+	close(fd);
+	return -1;
+}
+
+/*
+ * Connect to a unix domain socket instead of a TCP port.  The AGWPE
+ * frame stream is unchanged, so an ax25netd listening on a unix socket
+ * is interchangeable with one listening on TCP; the file permissions of
+ * the socket gate who may connect at all.
+ */
+int agwpe_client_connect_unix(agwpe_client_t *c, const char *path){
+	struct sockaddr_un sa;
+	int s;
+
+	if (c == NULL)
+		return -1;
+
+	if (c->fd >= 0) {
+		close(c->fd);
+		c->fd = -1;
+	}
+
+	/* A new connection starts a fresh frame stream.  */
+	c->rlen = 0;
+
+	if (path == NULL || path[0] == '\0' ||
+	    strlen(path) >= sizeof(sa.sun_path)) {
+		c->err = EINVAL;
+		return -1;
+	}
+
+	s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s < 0) {
+		c->err = errno;
+		return -1;
+	}
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, path, sizeof(sa.sun_path) - 1);
+
+	if (agwpe_connect_wait(s, (struct sockaddr *)&sa, SUN_LEN(&sa)) < 0) {
+		c->err = errno;
+		return -1;
+	}
+
+	c->fd = s;
+	c->err = 0;
+	return 0;
+}
+
 int agwpe_client_fd(const agwpe_client_t *c)
 {
 	return c->fd;
@@ -190,10 +345,25 @@ int agwpe_client_send_frame(agwpe_client_t *c, const struct agwpe_s *hdr,
 {
 	uint32_t dlen;
 	ssize_t n;
+	int rv = -1;
 
 	if (c == NULL || c->fd < 0) {
 		c->err = ENOTCONN;
 		return -1;
+	}
+
+	/*
+	 * Send the whole frame under the write lock so concurrent
+	 * threads (the shim releases its table lock around sends) never
+	 * interleave header and data bytes of different frames.  The
+	 * lock is dropped only on return, so c->fd stays valid for the
+	 * duration even if another thread tears the client down.
+	 */
+	pthread_mutex_lock(&c->wlock);
+
+	if (c->fd < 0) {
+		c->err = ENOTCONN;
+		goto out;
 	}
 
 	dlen = agwpe_netle2host(hdr->data_len);
@@ -201,7 +371,7 @@ int agwpe_client_send_frame(agwpe_client_t *c, const struct agwpe_s *hdr,
 	n = send(c->fd, hdr, AGWPE_HEADER_LEN, MSG_NOSIGNAL);
 	if (n != AGWPE_HEADER_LEN) {
 		c->err = errno;
-		return -1;
+		goto out;
 	}
 
 	if (dlen > 0 && data != NULL) {
@@ -210,14 +380,17 @@ int agwpe_client_send_frame(agwpe_client_t *c, const struct agwpe_s *hdr,
 			n = send(c->fd, data + sent, dlen - sent, MSG_NOSIGNAL);
 			if (n <= 0) {
 				c->err = errno;
-				return -1;
+				goto out;
 			}
 			sent += n;
 		}
 	}
 
 	c->err = 0;
-	return 0;
+	rv = 0;
+out:
+	pthread_mutex_unlock(&c->wlock);
+	return rv;
 }
 
 /*

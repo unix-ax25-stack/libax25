@@ -135,6 +135,13 @@ extern void agwpe_client_free(agwpe_client_t *c);
 extern int agwpe_client_connect_host(agwpe_client_t *c, const char *host,
 				     int tcp_port);
 
+/*
+ * Open the connection over a unix domain socket instead of TCP.  The
+ * AGWPE frame stream is unchanged; the socket file permissions decide
+ * who may connect at all.  Returns 0 on success, -1 on error.
+ */
+extern int agwpe_client_connect_unix(agwpe_client_t *c, const char *path);
+
 extern void agwpe_client_close(agwpe_client_t *c);
 
 extern int agwpe_client_fd(const agwpe_client_t *c);

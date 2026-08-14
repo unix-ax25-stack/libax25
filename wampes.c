@@ -412,14 +412,41 @@ static int wampes_dial(const char *addr)
  * anyway.
  */
 
-static int read_line(int fd, char *buf, size_t buflen)
+static int read_line(int fd, char *buf, size_t buflen, int *fdp)
 {
 	size_t n = 0;
 
 	for (;;) {
 		char c;
-		ssize_t got = read(fd, &c, 1);
+		ssize_t got;
+		struct cmsghdr *cm;
+		struct iovec iov;
+		struct msghdr msg;
+		union {
+			char buf[CMSG_SPACE(sizeof(int))];
+			struct cmsghdr align;
+		} control;
 
+		/* recvmsg rather than read, because the answer to a handover
+		 * carries a descriptor alongside the line.  On a stream it
+		 * arrives with the first byte of the message that brought it,
+		 * so reading a byte at a time still catches it.
+		 */
+		memset(&msg, 0, sizeof(msg));
+		memset(&control, 0, sizeof(control));
+		iov.iov_base = &c;
+		iov.iov_len = 1;
+		msg.msg_iov = &iov;
+		msg.msg_iovlen = 1;
+		msg.msg_control = control.buf;
+		msg.msg_controllen = sizeof(control.buf);
+		got = recvmsg(fd, &msg, 0);
+		if (got > 0 && fdp != NULL && *fdp < 0)
+			for (cm = CMSG_FIRSTHDR(&msg); cm != NULL;
+			     cm = CMSG_NXTHDR(&msg, cm))
+				if (cm->cmsg_level == SOL_SOCKET &&
+				    cm->cmsg_type == SCM_RIGHTS)
+					memcpy(fdp, CMSG_DATA(cm), sizeof(int));
 		if (got == 0)
 			return n ? (int) n : -1;    /* EOF */
 		if (got < 0) {
@@ -666,6 +693,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	const struct full_sockaddr_ax25 *fsa;
 	const struct sockaddr_ax25 *sa;
 	int i;
+	int handed = -1;
 	int ndigis = 0;
 	int sock;
 	struct wampes_sock *s;
@@ -690,6 +718,13 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		errno = ECONNRESET;
 		return 1;
 	}
+	/* Ask for a descriptor rather than for this connection to become the
+	 * pipe.  The node makes the pair itself and can therefore give it
+	 * frame boundaries, which a connection the application made cannot
+	 * have.  A node that does not know the word answers nothing and the
+	 * old way still works - see below.
+	 */
+	(void) write(sock, "handover\n", 9);
 
 	strcpy(cmd, "connect ");
 	{
@@ -728,7 +763,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	}
 
 	for (;;) {
-		if (read_line(sock, line, sizeof(line)) < 0) {
+		if (read_line(sock, line, sizeof(line), &handed) < 0) {
 			/* The node closed without a verdict.  It does that
 			 * when the link never came up: WAMPES retried until
 			 * it gave up and dropped the control block.
@@ -753,6 +788,18 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	 * is in the way: the entry is dropped, so read(), write(), poll() and
 	 * close() find nothing to intercept and go to the kernel.
 	 */
+	/* The descriptor the node handed over is the session; the connection
+	 * we spoke over was only the way to ask for it.  Without one - an
+	 * older node - that connection is the session, as it always was.
+	 */
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, handed >= 0
+			? "wampes: session on a handed-over descriptor\n"
+			: "wampes: no handover - the control connection is the session\n");
+	if (handed >= 0) {
+		close(sock);
+		sock = handed;
+	}
 	if (dup2(sock, fd) < 0) {
 		int save = errno;
 
@@ -821,7 +868,7 @@ int wampes_listen(int fd, int *ret)
 		return 1;
 	}
 	for (;;) {
-		if (read_line(sock, line, sizeof(line)) < 0) {
+		if (read_line(sock, line, sizeof(line), NULL) < 0) {
 			close(sock);
 			errno = ECONNRESET;
 			return 1;

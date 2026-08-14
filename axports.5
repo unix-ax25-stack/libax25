@@ -115,6 +115,38 @@ which carries no prefix
 is the interface name for the upstream
 .IR direwolf2 ).
 .PP
+Ports served by a
+.B WAMPES
+node are named
+.BI wampes: interface
+\-\- the part before the colon says which node, the part after it which of
+that node's own AX.25 ports the traffic leaves by.  The node part is
+resolved on this side and never reaches WAMPES; the interface part travels
+as the port prefix WAMPES understands
+.RI ( "connect hfb:DB0AAA-8" ),
+the same one an operator types at an RMNC or XNET.
+.PP
+One entry per WAMPES interface rather than one per node, because this file
+refuses duplicate callsigns and every WAMPES interface has a callsign of its
+own anyway.  The callsign in the entry is what an outgoing connection uses as
+its source unless the program binds one itself.  Where the node listens comes
+from the
+.B WAMPES_SOCKET
+environment variable for the time being: a path for a unix socket, or
+.I host:port
+for the node's TCP service, which is off unless the node's
+.I net.rc
+turns it on.  A
+.I wampes.conf
+in the shape of
+.BR agwpe.conf (5)
+is to replace it.
+.PP
+A name that no entry matches is refused here, before any socket is opened;
+an interface the node does not have is refused by the node, and
+.BR connect (2)
+fails with ENODEV.
+.PP
 On platforms with a native kernel AX.25 stack (Linux) the AGWPE shim is
 not built by default and AF_AX25 sockets go to the kernel unchanged.  If
 libax25 was built with the shim as well
@@ -123,9 +155,11 @@ the
 .B AXSOCK_BACKEND
 environment variable selects the backend for a whole process:
 .B kernel
-passes AF_AX25 and packet sockets through to the OS, while
+passes AF_AX25 and packet sockets through to the OS,
 .B agwpe
-routes them through the shim.  Without the variable the choice is made
+routes them through the shim, and
+.B wampes
+hands them to a WAMPES node.  Without the variable the choice is made
 once per process: on Linux a single probe asks whether the kernel
 answers AF_AX25 (kernel module loaded); if it does the kernel is used,
 otherwise AGWPE.  On platforms without a native stack (macOS, BSD) the
@@ -141,11 +175,24 @@ placeholder descriptor, bind() resolves the callsign against
 .I axports
 and the device field of the matching entry (the
 .B agwpe-
-prefix marks an AGWPE port, anything else is a kernel port) and dup2()s
+prefix marks an AGWPE port, a
+.B wampes:
+prefix a WAMPES one, anything else a kernel port) and dup2()s
 the real descriptor (kernel socket or AGWPE socketpair) over the
 placeholder, keeping the descriptor number visible to the application
-stable.  That removes AXSOCK_BACKEND altogether and lets kernel and
-AGWPE ports coexist in one process without an environment variable.
+stable.  That removes AXSOCK_BACKEND altogether and lets kernel,
+AGWPE and WAMPES ports coexist in one process without an environment
+variable.
+.PP
+The WAMPES backend already works this way for everything after
+.BR connect (2):
+the descriptor the application holds becomes the connection itself, so
+.BR read (2),
+.BR write (2),
+.BR poll (2)
+and
+.BR close (2)
+reach the kernel with nothing in between.
 .SH FILES
 .LP
 /etc/ax25/axports
@@ -154,4 +201,5 @@ AGWPE ports coexist in one process without an environment variable.
 .BR ax25 (4),
 .BR axparms (8),
 .BR kissattach (8),
-.BR ax25netd (8).
+.BR ax25netd (8),
+.BR agwpe.conf (5).

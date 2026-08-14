@@ -14,6 +14,7 @@
 int wampes_enabled(void);
 int axsock_forget(int fd);   /* in axsock.c */
 int wampes_socket(int type);
+void wampes_note_protocol(int fd, int protocol);
 int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret);
 int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		   int *ret);

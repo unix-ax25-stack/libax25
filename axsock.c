@@ -1573,6 +1573,23 @@ int socket(int domain, int type, int protocol)
 	if (domain != AF_AX25)
 		return real_socket(domain, type, protocol);
 
+	/* Whoever ends up owning this descriptor, the protocol id was said
+	 * here and nowhere else; bind() is too late to ask.
+	 */
+	if (protocol != 0) {
+		int nfd = -1;
+
+		if (wampes_enabled())
+			nfd = wampes_socket(type);
+		else if (axsock_backend_now() == 1)
+			nfd = real_socket(domain, type, protocol);
+		else
+			nfd = axsock_new_sock(type);
+		if (nfd >= 0)
+			wampes_note_protocol(nfd, protocol);
+		return nfd;
+	}
+
 	/* WAMPES: the node runs the AX.25 machine, one socket per connection.
 	 * Nothing is tracked here - see wampes.c. */
 	if (wampes_enabled())

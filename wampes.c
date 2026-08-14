@@ -64,6 +64,9 @@ struct wampes_sock {
 	int fd;
 	char local[WAMPES_CALLLEN];         /* source call, from bind() */
 	char port[32];                      /* axports entry, from bind() */
+	int pid;                            /* protocol id, from the third
+					     * argument of socket() - 0 means
+					     * plain text, as it always did */
 	int connected;                      /* connect() has put the real
 					     * socket behind this number */
 	int listening;                      /* listen() has put the control
@@ -538,6 +541,49 @@ int wampes_enabled(void)
  * connect(), which is close().
  */
 
+/* The third argument of socket() is the protocol id.
+ *
+ * Kernel AX.25 ignored it and every program passes 0, so it has been free all
+ * along - and it is the one place the API has for saying "this connection
+ * carries something other than text".  A node listens per protocol id and a
+ * connect can name one, so a program can finally ask for either.  Noted here
+ * for every AF_AX25 socket, because bind() may hand one over to us that
+ * somebody else made.
+ */
+
+static struct { int fd; int pid; } Pids[WAMPES_MAX_SOCK];
+static int Npids;
+
+void wampes_note_protocol(int fd, int protocol)
+{
+	int i;
+
+	for (i = 0; i < Npids; i++)
+		if (Pids[i].fd == fd) {
+			Pids[i].pid = protocol;
+			return;
+		}
+	if (Npids < (int) (sizeof(Pids) / sizeof(Pids[0]))) {
+		Pids[Npids].fd = fd;
+		Pids[Npids].pid = protocol;
+		Npids++;
+	}
+}
+
+static int protocol_of(int fd)
+{
+	int i;
+
+	for (i = 0; i < Npids; i++)
+		if (Pids[i].fd == fd) {
+			int pid = Pids[i].pid;
+
+			Pids[i] = Pids[--Npids];
+			return pid;
+		}
+	return 0;
+}
+
 int wampes_socket(int type)
 {
 	struct wampes_sock *s;
@@ -663,6 +709,7 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 			return 1;
 		}
 		s->fd = fd;
+		s->pid = protocol_of(fd);
 		s->next = Socks;
 		Socks = s;
 		Nsocks++;
@@ -751,6 +798,12 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	if (s->local[0] != '\0') {
 		strncat(cmd, " < ", sizeof(cmd) - strlen(cmd) - 2);
 		strncat(cmd, s->local, sizeof(cmd) - strlen(cmd) - 2);
+	}
+	if (s->pid) {
+		char opt[24];
+
+		sprintf(opt, " --pid 0x%02x", s->pid);
+		strncat(cmd, opt, sizeof(cmd) - strlen(cmd) - 2);
 	}
 	strcat(cmd, "\n");
 
@@ -859,7 +912,10 @@ int wampes_listen(int fd, int *ret)
 	if ((sock = wampes_dial(wampes_address(s->port))) < 0)
 		return 1;
 
-	sprintf(cmd, "listen %s\n", s->local);
+	if (s->pid)
+		sprintf(cmd, "listen %s pid=0x%02x\n", s->local, s->pid);
+	else
+		sprintf(cmd, "listen %s\n", s->local);
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "wampes: -> %s", cmd);
 	if (write(sock, cmd, strlen(cmd)) != (ssize_t) strlen(cmd)) {

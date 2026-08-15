@@ -120,9 +120,17 @@ static int axsock_backend_now(void)
 			axsock_backend = 1;
 		else if (strcmp(b, "agwpe") == 0)
 			axsock_backend = 0;
+		else if (strcmp(b, "wampes") == 0)
+			/* Not one of this function's answers - wampes.c reads
+			 * the same variable and takes the call before anybody
+			 * asks here.  Named all the same, so that the one
+			 * value both of them understand does not get reported
+			 * as a typo on every run.
+			 */
+			axsock_backend = 0;
 		else
 			fprintf(stderr, "axsock: unknown AXSOCK_BACKEND \"%s\" "
-				"(kernel|agwpe), using default\n", b);
+				"(kernel|agwpe|wampes), using default\n", b);
 	}
 
 	if (axsock_backend < 0) {
@@ -1546,6 +1554,42 @@ int socket(int domain, int type, int protocol)
 	if (domain == AF_PACKET && type == SOCK_PACKET) {
 		if (axsock_backend_now() == 1)
 			return real_socket(domain, type, protocol);
+
+		/* WAMPES has no monitor stream: nothing feeds a copy of every
+		 * frame back to us the way the AGWPE 'K' record does.  Hand
+		 * out a descriptor that simply stays quiet, rather than
+		 * failing - which is what happened before, because
+		 * axsock_ensure_locked() went looking for an AGWPE server and
+		 * came back with ECONNREFUSED.
+		 *
+		 * The difference matters for programs that open a monitor
+		 * beside their real work.  A failed socket() takes the whole
+		 * program down with it; a quiet one costs it one feature and
+		 * leaves the rest working.  Say so once, on stderr, so that
+		 * nobody spends an evening wondering why the window is empty.
+		 */
+		if (wampes_enabled()) {
+			static int said;
+
+			pthread_mutex_lock(&axsock_lock);
+			s = axsock_alloc_sock_locked(type);
+			if (s == NULL) {
+				pthread_mutex_unlock(&axsock_lock);
+				return -1;
+			}
+			s->raw = 1;
+			axsock_nraw++;
+			fd = s->fd;
+			if (!said) {
+				said = 1;
+				fprintf(stderr, "axsock: no monitor stream "
+					"through WAMPES - this socket stays "
+					"silent\n");
+			}
+			pthread_mutex_unlock(&axsock_lock);
+			return fd;
+		}
+
 		pthread_mutex_lock(&axsock_lock);
 		if (axsock_ensure_locked() != 0) {
 			pthread_mutex_unlock(&axsock_lock);

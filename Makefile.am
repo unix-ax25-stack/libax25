@@ -67,6 +67,7 @@ libax25_la_SOURCES = \
 	netax25/agwpe_config.h \
 	axcommon.c \
 	netax25/axcommon.h \
+	axmon.c \
 	netax25/axmon.h \
 	$(USE_LIBAX25_AX25_H) \
 	$(USE_LIBAX25_AXSOCK) \

@@ -1550,8 +1550,15 @@ int socket(int domain, int type, int protocol)
 	 * AGWPE 'K' frames the server sends once raw monitoring is on.
 	 * On a kernel backend the packet socket is real: raw AX.25 frames
 	 * are delivered by the OS itself.
+	 *
+	 * SOCK_PACKET is the marker, not the address family: listen asks
+	 * for AF_PACKET, ax25-tools/kiss/net2kiss for AF_INET, which is
+	 * how one did this before Linux 2.2 and how that program still
+	 * does it.  Both mean the same thing here.  Where a kernel stack
+	 * answers, both go straight through untouched.
 	 */
-	if (domain == AF_PACKET && type == SOCK_PACKET) {
+	if (type == SOCK_PACKET &&
+	    (domain == AF_PACKET || domain == AF_INET)) {
 		if (axsock_backend_now() == 1)
 			return real_socket(domain, type, protocol);
 
@@ -1677,15 +1684,17 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len)
 	if (s == NULL)
 		return real_bind(fd, addr, len);
 
-	/* SOCK_PACKET monitor (ax25-apps/listen -p): the app binds it to a
-	 * device name (the sockaddr family is AF_PACKET, the name sits in
-	 * sa_data).  There is no packet socket to bind on macOS/BSD, so just
-	 * remember the device and filter the raw stream in dispatch.  */
+	/* SOCK_PACKET monitor (ax25-apps/listen -p, net2kiss -i): the app
+	 * binds it to a device name (the name sits in sa_data; the family is
+	 * AF_PACKET or, for net2kiss, AF_INET - see socket() above).  There
+	 * is no packet socket to bind on macOS/BSD, so just remember the
+	 * device and filter the raw stream in dispatch.  */
 	if (s->raw) {
 		const struct sockaddr *sa0 = (const struct sockaddr *)addr;
 
 		if (addr == NULL || len < sizeof(*sa0) ||
-		    sa0->sa_family != AF_PACKET) {
+		    (sa0->sa_family != AF_PACKET &&
+		     sa0->sa_family != AF_INET)) {
 			errno = EAFNOSUPPORT;
 			return -1;
 		}
@@ -2356,6 +2365,25 @@ int ioctl(int fd, unsigned long request, ...)
 		memset(&ifr->AXSOCK_IFR_HWADDR, 0,
 		       sizeof(ifr->AXSOCK_IFR_HWADDR));
 		ifr->AXSOCK_IFR_HWADDR.sa_family = AF_AX25;
+		return 0;
+	}
+	case SIOCGIFFLAGS:
+	case SIOCSIFFLAGS: {
+		/* net2kiss reads the interface flags to put them back when it
+		 * exits, and writes them only to add IFF_PROMISC (its -z
+		 * option).  There is no interface here, and the AGWPE monitor
+		 * is promiscuous anyway - it gets every frame the server
+		 * hears.  Report an interface that is up, and accept the write
+		 * without doing anything, so that the caller's save and
+		 * restore cancel each other out.  */
+		struct ifreq *ifr = (struct ifreq *)arg;
+
+		if (ifr == NULL) {
+			errno = EFAULT;
+			return -1;
+		}
+		if (request == SIOCGIFFLAGS)
+			ifr->ifr_flags = IFF_UP | IFF_RUNNING;
 		return 0;
 	}
 	case SIOCAX25CTLCON: {

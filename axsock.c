@@ -79,11 +79,13 @@ static int	(*real_close)(int);
  * On a platform with a native kernel AX.25 stack (Linux, HAVE_KERNEL_AX25)
  * AF_AX25 and AF_PACKET/SOCK_PACKET sockets are normally passed straight
  * through to the kernel (real_socket) and this shim stays out of the way.
- * Where libax25 was also built with the AGWPE shim (--enable-agwpe) the
- * AXSOCK_BACKEND environment variable forces one or the other per process:
+ * Where libax25 was also built to serve them from userspace
+ * (--enable-userspace-ax25) the AXSOCK_BACKEND environment variable forces
+ * one or the other per process:
  *
  *   AXSOCK_BACKEND=kernel   all AX.25 goes to the kernel stack
  *   AXSOCK_BACKEND=agwpe    all AX.25 goes to AGWPE via the shim
+ *   AXSOCK_BACKEND=wampes   all AX.25 goes to a WAMPES node (see wampes.c)
  *
  * Without the variable the backend is decided once per process (cached
  * for the lifetime of the program, so a long running service probes at

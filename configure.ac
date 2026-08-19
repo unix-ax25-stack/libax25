@@ -49,27 +49,29 @@ if test "$ac_have_kernel_ax25" = "yes" ; then
   AC_DEFINE(HAVE_KERNEL_AX25, 1, [Define if the platform has a native kernel AX.25 stack])
 fi
 
-dnl The userspace AGWPE shim (axsock.c) backs AF_AX25 sockets with the
-dnl AGWPE protocol.  It is required on platforms without a native kernel
-dnl AX.25 stack and can additionally be enabled on Linux so that a single
-dnl libax25 serves both kernel and AGWPE ports (selected per process with
-dnl the AXSOCK_BACKEND environment variable).
-AC_ARG_ENABLE([agwpe],
-	AS_HELP_STRING([--enable-agwpe], [build the userspace AGWPE socket shim (axsock.c), even on platforms with a native kernel AX.25 stack]),
-	[ac_enable_agwpe=$enableval],
-	[ac_enable_agwpe=auto])
-AC_MSG_CHECKING(whether to build the userspace AGWPE socket shim)
-case $ac_enable_agwpe in
-	yes) ac_build_agwpe=yes ;;
-	no)  ac_build_agwpe=no ;;
+dnl Serving AF_AX25 from userspace: axsock.c intercepts the socket calls
+dnl and hands them to something outside the kernel - an AGWPE server, or a
+dnl WAMPES node through wampes.c.  Which one is a run time question; this
+dnl only decides whether the interception is built at all.  It is required
+dnl on platforms without a native kernel AX.25 stack, and can be built on
+dnl Linux as well so that one libax25 serves kernel and userspace ports
+dnl alike (AXSOCK_BACKEND picks per process).
+AC_ARG_ENABLE([userspace-ax25],
+	AS_HELP_STRING([--enable-userspace-ax25], [intercept the AX.25 socket calls and serve them from userspace (AGWPE server, WAMPES node) instead of the kernel stack, even where a kernel stack exists]),
+	[ac_enable_userspace_ax25=$enableval],
+	[ac_enable_userspace_ax25=auto])
+AC_MSG_CHECKING(whether to serve AX.25 sockets from userspace)
+case $ac_enable_userspace_ax25 in
+	yes) ac_build_userspace_ax25=yes ;;
+	no)  ac_build_userspace_ax25=no ;;
 	*)   if test "$ac_have_kernel_ax25" = "yes" ; then
-		ac_build_agwpe=no
+		ac_build_userspace_ax25=no
 	     else
-		ac_build_agwpe=yes
+		ac_build_userspace_ax25=yes
 	     fi ;;
 esac
-AC_MSG_RESULT($ac_build_agwpe)
-AM_CONDITIONAL([AGWPE], [test "$ac_build_agwpe" = "yes"])
+AC_MSG_RESULT($ac_build_userspace_ax25)
+AM_CONDITIONAL([USERSPACE_AX25], [test "$ac_build_userspace_ax25" = "yes"])
 
 AC_MSG_CHECKING(for working netrom/netrom.h header file)
 AC_EGREP_HEADER(unsigned int ndigis, netrom/netrom.h, has_netrom=yes, has_netrom=no)

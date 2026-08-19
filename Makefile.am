@@ -10,7 +10,10 @@ AM_CPPFLAGS = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
 if !AX25_H
 USE_LIBAX25_AX25_H = netax25/ax25.h
 endif
-if AGWPE
+# Serving AX.25 sockets from userspace: the interception in axsock.c, and
+# the backends it hands them to - AGWPE lives in agwpe_client.c, which is
+# always built, WAMPES in wampes.c, which is only useful with axsock.c.
+if USERSPACE_AX25
 USE_LIBAX25_AXSOCK = axsock.c wampes.c wampes.h
 endif
 if !NETROM_H

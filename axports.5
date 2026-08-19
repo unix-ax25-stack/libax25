@@ -151,10 +151,10 @@ its own is accepted and the node's own entry is used \-\- the node then routes
 the call rather than leaving by a named port, and a line on standard error
 says so once.
 .PP
-On platforms with a native kernel AX.25 stack (Linux) the AGWPE shim is
-not built by default and AF_AX25 sockets go to the kernel unchanged.  If
-libax25 was built with the shim as well
-.RB ( --enable-agwpe ),
+On platforms with a native kernel AX.25 stack (Linux) the userspace
+interception is not built by default and AF_AX25 sockets go to the kernel
+unchanged.  If libax25 was built with it as well
+.RB ( --enable-userspace-ax25 ),
 the
 .B AXSOCK_BACKEND
 environment variable selects the backend for a whole process:

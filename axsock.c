@@ -89,8 +89,8 @@ static int	(*real_close)(int);
  * for the lifetime of the program, so a long running service probes at
  * most once): on Linux a single real_socket(AF_AX25, ...) probe checks
  * whether the kernel provides AF_AX25 at all and selects 'kernel' if it
- * does, 'agwpe' if not (EPROTONOSUPPORT).  On platforms without a native
- * stack there is nothing to probe - AF_AX25 as defined by the bundled
+ * does, 'agwpe' if not (EAFNOSUPPORT and friends).  On platforms without
+ * a native stack there is nothing to probe - AF_AX25 as defined by the bundled
  * headers may even collide with a real address family there - so the
  * backend is always 'agwpe'.  'kernel' is only meaningful where
  * HAVE_KERNEL_AX25 is defined.
@@ -136,16 +136,23 @@ static int axsock_backend_now(void)
 	if (axsock_backend < 0) {
 #ifdef HAVE_KERNEL_AX25
 		/* Once per process: does the kernel answer AF_AX25 at all
-		 * (module loaded)?  EPROTONOSUPPORT means there is no
-		 * native stack to fall back to, so use AGWPE.  Any other
-		 * failure (e.g. EPERM) keeps the kernel selected and the
-		 * caller's real socket() surfaces the error unchanged. */
+		 * (module loaded)?  If it does not, there is no native
+		 * stack to fall back to and AGWPE it is.  Linux says
+		 * EAFNOSUPPORT for an address family nobody registered,
+		 * which is the everyday case here - no ax25 module - and
+		 * the one this used to get wrong; EPROTONOSUPPORT and
+		 * EPFNOSUPPORT are the other ways a system says the same
+		 * thing.  Any other failure (e.g. EPERM) keeps the kernel
+		 * selected and the caller's real socket() surfaces the
+		 * error unchanged. */
 		int fd = real_socket(AF_AX25, SOCK_SEQPACKET, 0);
 
 		if (fd >= 0) {
 			real_close(fd);
 			axsock_backend = 1;
-		} else if (errno == EPROTONOSUPPORT) {
+		} else if (errno == EAFNOSUPPORT ||
+			   errno == EPROTONOSUPPORT ||
+			   errno == EPFNOSUPPORT) {
 			axsock_backend = 0;
 		} else {
 			axsock_backend = 1;

@@ -81,7 +81,8 @@ libax25io_la_SOURCES = \
 	netax25/ax25io.h
 libax25io_la_LIBADD = @Z_LIB@
 
-dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5
+dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5 \
+		axsock.7
 
 # Built, never installed, and deliberately not linked against the library:
 # it is the one program here that can show whether preloading reaches a

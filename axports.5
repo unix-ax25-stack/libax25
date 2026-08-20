@@ -72,7 +72,7 @@ ignored for loop ports.
 .PP
 On systems where the AF_AX25 sockets are provided by the userspace AGWPE
 shim of
-.BR ax25 (3)
+.BR axsock (7)
 instead of the kernel, the AGWPE port number is no longer the position of
 the entry in this file: the shim resolves the
 .B name
@@ -200,6 +200,15 @@ the descriptor the application holds becomes the connection itself, so
 and
 .BR close (2)
 reach the kernel with nothing in between.
+.PP
+The interception itself \-\- which calls it answers, how to put it in front of
+a program that was not linked against
+.B libax25
+at all
+.RB ( LD_PRELOAD ,
+and why the macOS equivalent does not work today), what it cannot reach, and
+the environment variables that steer it \-\- is described in
+.BR axsock (7).
 .SH FILES
 .LP
 /etc/ax25/axports
@@ -210,4 +219,5 @@ reach the kernel with nothing in between.
 .BR kissattach (8),
 .BR ax25netd (8),
 .BR agwpe.conf (5),
-.BR wampes.conf (5).
+.BR wampes.conf (5),
+.BR axsock (7).

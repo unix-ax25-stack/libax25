@@ -637,6 +637,20 @@ static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 		return;
 	/* Only reads it, but says otherwise in the header. */
 	name = ax25_config_get_port((ax25_address *) &fsa->fsa_digipeater[0]);
+	if (name == NULL && ax25_config_get_next(NULL) == NULL) {
+		/* The port table belongs to the application: every program in
+		 * the suite calls ax25_config_load_ports() at startup, and a
+		 * program that only had the library preloaded calls nothing at
+		 * all.  With an empty table the port cannot be named, so the
+		 * socket went to AGWPE without a word - and then righted itself
+		 * on the next bind, because the AGWPE path loads the table as a
+		 * side effect.  Load it here, once, rather than leave the
+		 * backend to depend on the order of the binds.
+		 */
+		ax25_config_load_ports();
+		name = ax25_config_get_port(
+			(ax25_address *) &fsa->fsa_digipeater[0]);
+	}
 	if (name == NULL)
 		return;
 	strncpy(port, name, portlen - 1);

@@ -1,0 +1,414 @@
+.TH AXSOCK 7 "20 August 2026" Linux "Linux Programmer's Manual"
+.SH NAME
+axsock \- AX.25 sockets served from userspace by libax25
+.SH DESCRIPTION
+.LP
+The AX.25 stack left the Linux kernel in 7.1.  Programs written against
+.B libax25
+still expect
+.BI socket( AF_AX25 ", \fR\&...)"
+to work.  Where the kernel does not answer any more \-\- or never did, as on
+macOS and BSD \-\-
+.B libax25
+answers instead: it defines the socket calls itself and serves AX.25 from an
+AGWPE server
+.RB ( direwolf ,
+or
+.BR ax25netd (8)
+in front of one) or from a
+.B WAMPES
+node.  Everything that is not AX.25 falls through to the real call.
+.LP
+This page is about the interception itself \-\- which calls it answers, how to
+get it in front of a program that was not built for it, what it cannot reach,
+and which environment variables steer it.  Which backend serves which port is
+a different question, answered by
+.BR axports (5),
+.BR agwpe.conf (5)
+and
+.BR wampes.conf (5).
+.LP
+It is built when
+.B configure
+is given
+.BR \-\-enable\-userspace\-ax25 ,
+which happens by itself where there is no kernel AX.25 stack at all (macOS,
+BSD) and has to be asked for on Linux.  A
+.B libax25
+built without it contains none of this, and preloading it does nothing.
+.SH "THE CALLS IT ANSWERS"
+.LP
+.BR socket (2),
+.BR bind (2),
+.BR connect (2),
+.BR listen (2),
+.BR accept (2),
+.BR send (2),
+.BR sendto (2),
+.BR write (2),
+.BR recv (2),
+.BR recvfrom (2),
+.BR shutdown (2),
+.BR close (2),
+.BR setsockopt (2),
+.BR getsockopt (2),
+.BR ioctl (2),
+.BR getsockname (2)
+and
+.BR getpeername (2)
+are answered by the library.  On ELF they are defined under those very names,
+as ordinary strong symbols \-\- not weak ones, not through a
+.BR dlsym (3)
+trampoline the application has to opt into.  On macOS they carry names of
+their own and are put in front of libSystem by interposing, for the reason
+given under PRELOADING; a caller sees no difference.
+.LP
+Each of them looks the descriptor up in a table of its own and hands
+everything it does not know to the real call, so a program can serve telnet
+over IPv4 or IPv6 and AX.25 side by side in one process, which is exactly
+what a mailbox does.  The lookup is guarded by a counter that is zero until
+the first AX.25 socket exists, so a process that never opens one pays a load
+and a branch.
+.LP
+.BR read (2)
+is deliberately not among them.  The descriptor the application holds is
+readable by itself \-\- the read end of a pipe with the AGWPE backend, the
+connection itself with WAMPES \-\- so
+.BR read (2),
+.BR poll (2),
+.BR select (2)
+and
+.BR fcntl (2)
+reach the kernel with nothing in between.
+.SH PRELOADING
+.LP
+A program
+.B linked
+against
+.B libax25
+needs nothing beyond the configuration files.  A program that opens an AX.25
+socket
+.B without
+ever calling a
+.B libax25
+function \-\- a script, or a daemon written when the kernel still answered \--
+can be made to use this without being recompiled, provided the library is
+loaded before the C library.  On Linux:
+.PP
+.RS
+.nf
+LD_PRELOAD=/usr/local/lib/libax25.so.0 program
+.fi
+.RE
+.LP
+ELF has a flat namespace: the first definition of
+.BR socket (2)
+in the search order is the one every reference binds to, wherever that
+reference comes from, so getting the library loaded first is the whole trick.
+.SS "macOS, and why it is not the same trick"
+.LP
+Mach-O binds two-level.  Every import remembers which library it came from,
+so a library inserted with
+.B DYLD_INSERT_LIBRARIES
+is loaded and then asked nothing.
+.B DYLD_FORCE_FLAT_NAMESPACE
+used to be the answer to that and is not honoured any more \-\- measured on
+macOS 15.7.9: with the variable and without it, with the executable built the
+ordinary way and with
+.BR \-Wl,\-no_fixup_chains ,
+and whether the inserted library is built flat or two-level, the call still
+went to
+.IR libSystem .
+.LP
+So on macOS the library carries an
+.B interposing table
+instead \-\- a
+.B __DATA,__interpose
+section naming pairs of functions, which dyld applies to every image in the
+process.  Nothing has to be said on the command line beyond the insertion
+itself:
+.PP
+.RS
+.nf
+DYLD_INSERT_LIBRARIES=/usr/local/lib/libax25.0.dylib program
+.fi
+.RE
+.LP
+Interposing brings one rule with it, and that rule shapes the library: dyld
+leaves the bindings of the image that
+.I provides
+the interposition alone and rewrites everyone else\(cqs \-\- including what
+.BR dlsym (3)
+hands back, on any handle.  So on macOS the entry points do not carry the
+libc names (they are
+.IR axsock_ep_socket ", " axsock_ep_bind ", \&...),"
+because the table has to be able to name libSystem\(cqs, and the fall-through
+to the real call is a plain call rather than a
+.BR dlsym (3)
+pointer, because a pointer fetched that way comes back as the library\(cqs own
+function.  That was measured before it was written down: a
+.BR dlsym (3)
+fall-through recurses until the stack is gone.
+.LP
+Two consequences worth knowing:
+.TP 3
+\(bu
+a
+.B libax25
+linked
+.I statically
+into a program is not intercepted on macOS \-\- an interpose section in the
+main executable is ignored.  Nothing in this suite links it statically.
+.TP 3
+\(bu
+the libc names are no longer exported, so a program linked against an older
+.B libax25
+on macOS must be relinked: it asks for
+.I _socket
+in this library and no longer finds it.  Build and install
+.BR libax25 ,
+ax25-apps and ax25-tools together.
+.SH "WHAT PRELOADING CANNOT REACH"
+.LP
+On either system:
+.TP 3
+\(bu
+setuid and setgid programs.  The loader drops the variables in secure
+execution mode.  Run them as root without the setuid bit instead.
+.TP 3
+\(bu
+statically linked programs \-\- there is nothing to override.
+.TP 3
+\(bu
+a program calling
+.BI syscall( SYS_socket ", \fR\&...)"
+directly.
+.TP 3
+\(bu
+on macOS additionally anything protected by SIP, which strips every
+.B DYLD_*
+variable from the environment of such a process, and therefore from the
+environment of everything it starts.
+.SH "CHILDREN, AND THE DESCRIPTOR THEY INHERIT"
+.LP
+.BR ax25d (8)
+accepts a call and hands it to a program on descriptor 0.  The program then
+asks
+.BI getpeername( 0 )
+who is calling \-\-
+.BR axspawn (8)
+does exactly that before it picks a unix account, and so do
+.BR rsuplnk (8)
+and
+.BR ttylinkd (8).
+Where the connection is not a kernel socket there is nothing to ask: over a
+socketpair the kernel answers AF_UNIX, and
+.B axspawn
+refuses the call rather than inventing a callsign.
+.LP
+So the parent says who is there, in one variable, and
+.B libax25
+picks it up when it loads, registers the descriptor with both addresses and
+answers for it.  No child has to be changed.
+.PP
+.RS
+.nf
+AXSOCK_INHERIT=<fd> <local callsign> <peer callsign>
+.fi
+.RE
+.LP
+It is removed from the environment once read, because what is true of this
+process is not true of anything it starts in turn.
+.LP
+.BR ax25d (8)
+builds the environment of a service rather than passing its own \-\- a program
+run for a caller on the air has no business inheriting what the daemon was
+started with.  One exception, and it is necessary: the variable that says
+.I which library we are
+is passed on when it is set, or a station running the shim by preloading it
+would lose it at exactly this edge and the child would find no AX.25 at all.
+Only the names of the platform the daemon was built for \-\-
+.B LD_PRELOAD
+and
+.BR LD_LIBRARY_PATH ,
+or
+.B DYLD_INSERT_LIBRARIES
+and
+.B DYLD_LIBRARY_PATH
+on macOS \-\- since the other set would be noise in the environment of every
+service.
+.SH "MONITOR SOCKETS"
+.LP
+.BR listen (1),
+.BR mheardd (8)
+and
+.BR net2kiss (8)
+watch raw frames through a packet socket \-\-
+.BI socket( PF_PACKET ", SOCK_PACKET, \fR\&...)",
+which
+.BR net2kiss (8)
+still spells with
+.BR AF_INET ,
+as one did before Linux 2.2.  Both mean the same thing here, and what they
+get depends on the backend:
+.TP 8
+kernel
+the packet socket is real and the OS delivers the frames.
+.TP 8
+AGWPE
+the server's raw monitor is switched on with the first such socket and off
+again with the last, and every frame it hears arrives.  The AGWPE server has
+to be reachable, or
+.BR socket (2)
+fails.
+.TP 8
+WAMPES
+nothing arrives.  The service protocol has no monitor stream: nothing sends a
+copy of every frame back the way the AGWPE
+.B K
+record does.  Under
+.B AXSOCK_BACKEND=wampes
+the socket is handed out all the same and simply stays quiet, with one line
+on standard error saying so, because a program that opens a monitor beside
+its real work should lose one feature and not its whole run.  Without that
+variable \-\- the ordinary arrangement, where
+.BR wampes.conf (5)
+decides per port \-\- a packet socket is not a WAMPES question at all and takes
+the AGWPE path above, so it wants an AGWPE server like any other.
+.SH ENVIRONMENT
+.TP
+.B AXSOCK_BACKEND
+.BR kernel ,
+.B agwpe
+or
+.BR wampes ,
+forcing one backend for the whole process.  It is an override and not the
+normal way: without it the choice falls per port at
+.BR bind (2)
+for WAMPES ports, and once per process otherwise \-\- a single probe asks
+whether the kernel answers AF_AX25 and takes it if it does, AGWPE if it does
+not.  See
+.BR axports (5).
+.TP
+.B AXSOCK_DEBUG
+Set to anything, and the library reports on standard error what it does with
+each descriptor, including the whole conversation with a WAMPES node.  This
+is the first thing to reach for.
+.TP
+.BR AXSOCK_HOST ", " AXSOCK_PORT
+Where the AGWPE backend looks for its server, by default 127.0.0.1 and 8100.
+A value beginning with
+.B /
+is a path and selects the server's unix socket instead, which is gated by its
+file permissions \-\- an
+.BR ax25netd (8)
+configured with
+.B socket
+and
+.B "group hams"
+is reachable by members of that group and nobody else.
+.TP
+.BR AXSOCK_USER ", " AXSOCK_PASSWORD
+Presented to an AGWPE server that asks for a login \-\-
+.BR ax25netd (8)
+started with
+.BR auth ,
+where they are checked.
+.B direwolf
+ignores the login frame without a word, so against direwolf they are
+decoration and the access rule is whoever can reach its port.
+.TP
+.B AXSOCK_INHERIT
+Set by
+.BR ax25d (8)
+for the program it starts, as described above.  Not for hand use.
+.TP
+.B WAMPES_SOCKET
+Overrides where every WAMPES node is expected to listen, ignoring
+.BR wampes.conf (5).
+Meant for trying something out rather than for running a station.
+.SH "TRYING IT OUT"
+.LP
+.B axprobe
+is built beside the library and never installed.  It is the one program here
+that is
+.B not
+linked against
+.BR libax25 :
+it calls
+.BR socket (2),
+.BR bind (2),
+.BR connect (2),
+.BR listen (2)
+and
+.BR accept (2)
+itself and reads nothing but
+.BR axports (5).
+Everything in ax25-apps and ax25-tools would find AX.25 either way, so none
+of it can show whether preloading reaches anything.
+.PP
+.RS
+.nf
+LD_PRELOAD=/usr/local/lib/libax25.so.0 \\
+    ./axprobe connect wampes:hfb DL1TST-1 DL1AAA DB0BBB
+LD_PRELOAD=/usr/local/lib/libax25.so.0 ./axprobe listen agwpe DL9SAU-13
+.fi
+.RE
+.LP
+A source callsign of
+.B \-
+means the callsign of the
+.BR axports (5)
+entry, as when no
+.B \-s
+is given to
+.BR call (1).
+.B \-d
+reaches the calls through
+.BR dlsym (3)
+instead of calling them straight, and says for each one which library
+answered \-\- the mode in which an inserted library is seen on macOS at all,
+and the difference between the two modes is itself the measurement.
+.SH BUGS
+.LP
+A preloaded program calls nothing of the library on its own, and the port
+table used to depend on that: it is filled by
+.BR ax25_config_load_ports (),
+which every program in the suite calls at startup.  With an empty table
+.BR bind (2)
+could not name the port \-\- the callsign in the first digipeater slot had
+nothing to be looked up in \-\- so a WAMPES port was not recognised as one and
+the socket went to AGWPE without a word.  It then righted itself on the next
+.BR bind (2),
+because the AGWPE path loads the table as a side effect, which made the
+backend depend on the order of the binds.
+.I port_of_bind()
+in
+.I wampes.c
+now loads the table itself when it finds none, and both binds land where they
+belong; it is written down here because a station running an older library
+will meet it.
+.SH FILES
+.LP
+/etc/ax25/axports
+.br
+/etc/ax25/agwpe.conf
+.br
+/etc/ax25/wampes.conf
+.SH "SEE ALSO"
+.BR call (1),
+.BR listen (1),
+.BR ax25 (3),
+.BR ax25 (4),
+.BR axports (5),
+.BR agwpe.conf (5),
+.BR wampes.conf (5),
+.BR ax25d (8),
+.BR ax25netd (8),
+.BR axspawn (8).
+.LP
+The WAMPES service protocol \-\- the grammar the
+.B wampes
+backend speaks, and what a leaner stack would have to offer to take its place
+\-\- is written down in the WAMPES source, in
+.IR doc/LIBAX25\-BRIDGE.md .

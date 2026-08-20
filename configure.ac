@@ -1,10 +1,17 @@
-AC_PREREQ([2.59])
+dnl 2.60 for AC_USE_SYSTEM_EXTENSIONS, which is used below.
+AC_PREREQ([2.60])
 AC_INIT([libax25],[0.0.12-rc5],[linux-hams@vger.kernel.org])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_SRCDIR(axconfig.c)
 AM_INIT_AUTOMAKE([foreign no-define 1.7])
 
 AC_CONFIG_HEADERS(config.h)
+
+dnl dladdr(), Dl_info and RTLD_NEXT are glibc extensions, hidden unless
+dnl _GNU_SOURCE is defined; axsock.c and axprobe.c need all three.  This
+dnl puts the define in config.h, which every file here includes first, and
+dnl asks for the equivalent on the other systems in one go.
+AC_USE_SYSTEM_EXTENSIONS
 
 dnl Checks for programs.
 AC_PROG_CC
@@ -21,6 +28,10 @@ AC_HEADER_STDC
 AC_CHECK_HEADERS(fcntl.h sys/file.h sys/ioctl.h unistd.h)
 AC_CHECK_HEADER([zlib.h], AC_CHECK_LIB(z, zlibVersion,Z_LIB="-lz",Z_LIB=))
 AC_SUBST(Z_LIB, [$Z_LIB])
+
+dnl dlsym() lives in libc on macOS and on glibc 2.34 and later, and in
+dnl libdl before that.  axsock.c and axprobe.c both use it.
+AC_SEARCH_LIBS([dlsym], [dl])
 
 dnl Checks for working glibc 2.1 headers
 dnl

@@ -83,6 +83,19 @@ libax25io_la_LIBADD = @Z_LIB@
 
 dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5
 
+# Built, never installed, and deliberately not linked against the library:
+# it is the one program here that can show whether preloading reaches a
+# program which does not use libax25.  See axsock(7).
+#
+# Only where there is an interception to test.  Without --enable-userspace-ax25
+# the library serves nothing itself, so preloading it does nothing and this
+# would only be one more thing to compile.
+if USERSPACE_AX25
+noinst_PROGRAMS = axprobe
+axprobe_SOURCES = axprobe.c
+axprobe_LDADD =
+endif
+
 
 EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c wampes.c wampes.h
 

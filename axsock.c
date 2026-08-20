@@ -70,8 +70,60 @@
 #define	AXSOCK_MAX_SOCK		128
 #define	AXSOCK_CONNECT_TIMEOUT	60
 
+/*
+ * How the calls below get in front of the application, and why macOS needs
+ * a second answer.
+ *
+ * ELF has a flat namespace: defining socket(), bind() and the rest as
+ * ordinary strong symbols is enough, whether the library is linked in or
+ * only preloaded, and the real call is fetched once with dlsym(RTLD_NEXT).
+ *
+ * Mach-O binds two-level, so a strong symbol is consulted only by whoever
+ * linked against this library on purpose; an inserted library is loaded and
+ * never asked.  DYLD_FORCE_FLAT_NAMESPACE was the answer to that and is not
+ * honoured any more (measured on macOS 15.7.9: the library is loaded and the
+ * call still goes to libSystem, with the variable and without it).  What dyld
+ * does still honour is interposing - a table in __DATA,__interpose naming
+ * pairs of functions, applied to every image in the process.
+ *
+ * Interposing brings one rule with it that decides the shape of everything
+ * below: dyld leaves the bindings of the image that *provides* the
+ * interposition alone, and rewrites everyone else's - including what dlsym
+ * hands back, on any handle.  So the entry points must not be called socket()
+ * here, or the table could not name libSystem's, and the fall-through must be
+ * a plain call rather than a dlsym pointer, or the library would answer
+ * itself.  Both were measured before they were written down; a dlsym
+ * fall-through recurses until the stack is gone.
+ *
+ * The cost is that a libax25 linked statically into a program is not
+ * intercepted on macOS: an interpose section in the main executable is
+ * ignored, which was measured too.  Nothing in this suite links it statically.
+ */
+#ifdef __APPLE__
+#define AXSOCK_ENTRY(name)	axsock_ep_##name
+#define real_socket		socket
+#define real_bind		bind
+#define real_connect		connect
+#define real_send		send
+#define real_sendto		sendto
+#define real_recv		recv
+#define real_recvfrom		recvfrom
+#define real_write		write
+#define real_read		read
+#define real_close		close
+#define real_shutdown		shutdown
+#define real_setsockopt		setsockopt
+#define real_getsockopt		getsockopt
+#define real_ioctl		ioctl
+#define real_getpeername	getpeername
+#define real_getsockname	getsockname
+#define real_listen		listen
+#define real_accept		accept
+#else
+#define AXSOCK_ENTRY(name)	name
 static int	(*real_socket)(int, int, int);
 static int	(*real_close)(int);
+#endif
 
 /*
  * Backend selection.
@@ -196,6 +248,7 @@ static int axsock_backend_now(void)
 #define	AXSOCK_IFR_HWADDR	ifr_addr
 #endif
 
+#ifndef __APPLE__
 static int	(*real_bind)(int, const struct sockaddr *, socklen_t);
 static int	(*real_connect)(int, const struct sockaddr *, socklen_t);
 static ssize_t	(*real_send)(int, const void *, size_t, int);
@@ -214,6 +267,7 @@ static int	(*real_getpeername)(int, struct sockaddr *, socklen_t *);
 static int	(*real_getsockname)(int, struct sockaddr *, socklen_t *);
 static int	(*real_listen)(int, int);
 static int	(*real_accept)(int, struct sockaddr *, socklen_t *);
+#endif
 
 enum axsock_state {
 	AXSOCK_NEW,
@@ -1548,7 +1602,7 @@ int axsock_forget(int fd)
 	return 0;
 }
 
-int socket(int domain, int type, int protocol)
+int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 {
 	struct axsock_sock *s;
 	int fd;
@@ -1669,7 +1723,7 @@ int socket(int domain, int type, int protocol)
 	return axsock_new_sock(type);
 }
 
-int bind(int fd, const struct sockaddr *addr, socklen_t len)
+int AXSOCK_ENTRY(bind)(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	const struct sockaddr_ax25 *sa;
 	struct axsock_sock *s;
@@ -1730,7 +1784,7 @@ int bind(int fd, const struct sockaddr *addr, socklen_t len)
 	return 0;
 }
 
-int connect(int fd, const struct sockaddr *addr, socklen_t len)
+int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	const struct sockaddr_ax25 *sa;
 	struct axsock_sock *s;
@@ -1854,7 +1908,7 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
 	return -1;
 }
 
-ssize_t send(int fd, const void *buf, size_t len, int flags)
+ssize_t AXSOCK_ENTRY(send)(int fd, const void *buf, size_t len, int flags)
 {
 	struct axsock_sock *s;
 	ssize_t r;
@@ -1870,7 +1924,7 @@ ssize_t send(int fd, const void *buf, size_t len, int flags)
 	return r;
 }
 
-ssize_t sendto(int fd, const void *buf, size_t len, int flags,
+ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
 	       const struct sockaddr *to, socklen_t tolen)
 {
 	struct axsock_sock *s;
@@ -1949,7 +2003,7 @@ ssize_t sendto(int fd, const void *buf, size_t len, int flags,
 	return r;
 }
 
-ssize_t write(int fd, const void *buf, size_t len)
+ssize_t AXSOCK_ENTRY(write)(int fd, const void *buf, size_t len)
 {
 	struct axsock_sock *s;
 	ssize_t r;
@@ -1970,7 +2024,7 @@ ssize_t write(int fd, const void *buf, size_t len)
 	return r;
 }
 
-ssize_t recv(int fd, void *buf, size_t len, int flags)
+ssize_t AXSOCK_ENTRY(recv)(int fd, void *buf, size_t len, int flags)
 {
 	struct axsock_sock *s;
 
@@ -1983,7 +2037,7 @@ ssize_t recv(int fd, void *buf, size_t len, int flags)
 	return real_read(fd, buf, len);
 }
 
-ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
+ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
 		 struct sockaddr *addr, socklen_t *addrlen)
 {
 	struct axsock_sock *s;
@@ -2027,7 +2081,7 @@ ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
 	return n;
 }
 
-int shutdown(int fd, int how)
+int AXSOCK_ENTRY(shutdown)(int fd, int how)
 {
 	struct axsock_sock *s;
 
@@ -2042,7 +2096,7 @@ int shutdown(int fd, int how)
 	return 0;
 }
 
-int close(int fd)
+int AXSOCK_ENTRY(close)(int fd)
 {
 	struct axsock_sock *s, **pp;
 	int peer, rfd;
@@ -2118,7 +2172,7 @@ int close(int fd)
 	return 0;
 }
 
-int listen(int fd, int backlog)
+int AXSOCK_ENTRY(listen)(int fd, int backlog)
 {
 	struct axsock_sock *s;
 
@@ -2156,7 +2210,7 @@ int listen(int fd, int backlog)
 	return 0;
 }
 
-int accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
+int AXSOCK_ENTRY(accept)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	struct axsock_sock *s, *p;
 	int afd;
@@ -2252,7 +2306,7 @@ static const char *axsock_opt_name(int optname)
 	}
 }
 
-int setsockopt(int fd, int level, int optname,
+int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
 	       const void *optval, socklen_t optlen)
 {
 	struct axsock_sock *s;
@@ -2309,7 +2363,7 @@ int setsockopt(int fd, int level, int optname,
 	return -1;
 }
 
-int getsockopt(int fd, int level, int optname,
+int AXSOCK_ENTRY(getsockopt)(int fd, int level, int optname,
 	       void *optval, socklen_t *optlen)
 {
 	struct axsock_sock *s;
@@ -2331,7 +2385,7 @@ int getsockopt(int fd, int level, int optname,
 	return -1;
 }
 
-int ioctl(int fd, unsigned long request, ...)
+int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 {
 	va_list ap;
 	void *arg;
@@ -2457,7 +2511,7 @@ int ioctl(int fd, unsigned long request, ...)
 	}
 }
 
-int getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen)
+int AXSOCK_ENTRY(getsockname)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	struct axsock_sock *s;
 
@@ -2490,7 +2544,7 @@ int getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen)
 	return -1;
 }
 
-int getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen)
+int AXSOCK_ENTRY(getpeername)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	struct axsock_sock *s;
 
@@ -2568,6 +2622,10 @@ static void axsock_init(void)
 
 	pthread_atfork(NULL, NULL, axsock_atfork_child);
 
+#ifndef __APPLE__
+	/* Not on macOS: there the real calls are reached by calling them, and
+	 * dlsym() would hand back this library's own - see the note at the top
+	 * about what interposing rewrites. */
 	real_socket = dlsym(RTLD_NEXT, "socket");
 	real_bind = dlsym(RTLD_NEXT, "bind");
 	real_connect = dlsym(RTLD_NEXT, "connect");
@@ -2586,4 +2644,41 @@ static void axsock_init(void)
 	real_getsockname = dlsym(RTLD_NEXT, "getsockname");
 	real_listen = dlsym(RTLD_NEXT, "listen");
 	real_accept = dlsym(RTLD_NEXT, "accept");
+#endif
 }
+
+#ifdef __APPLE__
+/*
+ * The table dyld reads.  Each pair says "wherever anything binds to the
+ * second, call the first instead" - which is how a program that was never
+ * linked against this library reaches it, and how one that was keeps
+ * reaching it now that the entry points no longer carry the libc names.
+ */
+#define AXSOCK_INTERPOSE(name)						\
+	__attribute__((used)) static const struct {			\
+		const void *replacement;				\
+		const void *replacee;					\
+	} axsock_interpose_##name					\
+	__attribute__((section("__DATA,__interpose"))) = {		\
+		(const void *)(unsigned long)&AXSOCK_ENTRY(name),	\
+		(const void *)(unsigned long)&name			\
+	}
+
+AXSOCK_INTERPOSE(socket);
+AXSOCK_INTERPOSE(bind);
+AXSOCK_INTERPOSE(connect);
+AXSOCK_INTERPOSE(listen);
+AXSOCK_INTERPOSE(accept);
+AXSOCK_INTERPOSE(send);
+AXSOCK_INTERPOSE(sendto);
+AXSOCK_INTERPOSE(recv);
+AXSOCK_INTERPOSE(recvfrom);
+AXSOCK_INTERPOSE(write);
+AXSOCK_INTERPOSE(shutdown);
+AXSOCK_INTERPOSE(close);
+AXSOCK_INTERPOSE(setsockopt);
+AXSOCK_INTERPOSE(getsockopt);
+AXSOCK_INTERPOSE(ioctl);
+AXSOCK_INTERPOSE(getsockname);
+AXSOCK_INTERPOSE(getpeername);
+#endif

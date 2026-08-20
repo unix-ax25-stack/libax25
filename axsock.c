@@ -2508,14 +2508,23 @@ int getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen)
 	if (s == NULL)
 		return real_getpeername(fd, addr, addrlen);
 
+	/* No peer, no answer.  Reporting success with an empty callsign told
+	 * the caller there was a station at the other end and left it to
+	 * decide what an empty one means - and the callers that ask this are
+	 * the ones deciding who is logging in.  The WAMPES side has always
+	 * said ENOTCONN here (answer_addr() in wampes.c); say the same. */
+	if (s->remote[0] == '\0') {
+		errno = ENOTCONN;
+		return -1;
+	}
+
 	if (addr != NULL && addrlen != NULL &&
 	    *addrlen >= sizeof(struct sockaddr_ax25)) {
 		struct sockaddr_ax25 *sa = (struct sockaddr_ax25 *)addr;
 
 		memset(sa, 0, sizeof(*sa));
 		sa->sax25_family = AF_AX25;
-		if (s->remote[0] != '\0')
-			ax25_aton_entry(s->remote, sa->sax25_call.ax25_call);
+		ax25_aton_entry(s->remote, sa->sax25_call.ax25_call);
 		*addrlen = sizeof(struct sockaddr_ax25);
 		return 0;
 	}

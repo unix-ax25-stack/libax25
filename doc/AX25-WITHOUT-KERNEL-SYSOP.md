@@ -138,11 +138,20 @@ listen ax25 add ui pid=rose db0fhn-13 client    # another, at the same time
 
 Each frame goes to the entry whose pid it carries.  So a Rose daemon and a
 text application can share a callsign without knowing about each other, while
-two programs wanting the *same* pid cannot — this behaves like a UDP port,
-not like a raw IP protocol where every listener gets a copy.
+two programs wanting the *same* pid cannot.
 
 Writing `add` again with the same callsign, pid and kind does not create a
 second entry; it replaces the first.
+
+**This is stricter than the kernel was**, and a program that relied on the old
+behaviour will notice.  Measured on a machine with the kernel stack: three
+processes bound the same callsign with the same pid, one after another, and
+none of them was refused — kernel AX.25 treats an AX.25 datagram socket the
+way it treats a raw IP protocol, not the way it treats a UDP port.  Whether
+all of them would then have received a copy of an incoming frame is untested,
+and it is the question that decides whether this difference matters in
+practice.  Here, one program holds a callsign and gets the frames; a second is
+told so rather than being left to wonder.
 
 ---
 

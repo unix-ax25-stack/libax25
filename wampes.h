@@ -25,6 +25,9 @@ int wampes_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,
 int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
 		       int *ret);
 int wampes_setsockopt(int fd, int level, int *ret);
+ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
+		      const struct sockaddr *addr, socklen_t alen,
+		      ssize_t *ret);
 int wampes_close(int fd);
 
 #endif

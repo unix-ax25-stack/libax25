@@ -349,6 +349,90 @@ when the answer is no, and say what it costs.
 
 ---
 
+## Not implemented: self-registering listeners
+
+A listener is administrative here.  The sysop writes `listen ax25 add <call>
+client` and a program claims it; the line is the permission and the claim is
+made against it.  That was a decision and not an oversight — one file says
+which callsigns may leave the node's own control, and it is a file the sysop
+reads anyway.
+
+A protocol where the program's `bind()` and `listen()` register the callsign
+by themselves — the node learning what is being listened for, rather than
+being told in advance — is imaginable and may well be wanted (the comparison
+with UPnP is not entirely a compliment, and not entirely unfair either).  If
+somebody builds it, these are the questions it has to answer:
+
+* **Who may register, and what.**  Without the sysop's line, the socket's
+  permissions are the only gate left.  Either that is the answer — whoever may
+  open the socket may register anything — or the node has to ask who is
+  speaking; see the next section.
+* **Which callsigns.**  A program's own with any SSID, a pattern, a range, or
+  anything at all.  The node's own interface callsigns must stay out of reach
+  either way, as they are today.
+* **The settings a static line carries.**  `pid` and connected-or-UI the
+  protocol already sends, but an entry also holds an interface list,
+  binary-or-ascii, silent, and wait.  A registration either carries them or
+  accepts defaults, and the defaults are not the same for every kind of entry.
+* **Precedence.**  A configured entry must win.  A registration that could
+  shadow or replace one would turn a configuration file into a suggestion.
+* **The take-over hole, said out loud.**  A service that is momentarily not
+  running leaves its callsign free.  With static entries the sysop has at
+  least named the set of callsigns that can happen to; with free registration
+  the set is everything.  Either that is acceptable or the identity question
+  has to be answered first.
+* **Lifetime.**  The claim already dies with the connection, which is the
+  right shape; what re-registration means — refuse, replace, or share — is not
+  yet a question anybody has had to answer.
+* **Refusals stay distinguishable.**  They become errnos on the other side,
+  and a client that cannot tell "taken" from "not allowed" cannot report
+  anything useful.
+
+---
+
+## Not implemented: asking who is speaking
+
+The service socket carries no identity.  The node never asks who is at the
+other end, and the file system's permissions are the whole answer — which is
+simple, effective, and slightly blunt: a user who may not open the socket may
+not connect out either.
+
+A unix socket can be asked, and cheaply:
+
+```
+Linux   getsockopt(fd, SOL_SOCKET, SO_PEERCRED, ...)   struct ucred: pid, uid, gid
+macOS   getpeereid(fd, &uid, &gid)
+        getsockopt(fd, SOL_LOCAL, LOCAL_PEERCRED, ...) struct xucred: uid and the
+                                                       full group list — measured,
+                                                       16 groups came back
+```
+
+On Linux only the primary group arrives, so "is this user in group hams"
+needs `getpwuid()` and `getgrouplist()` behind it.  The credentials are fixed
+when the connection is made, so a process cannot change them afterwards.  Over
+TCP there are none at all — that path's only protection is that it binds to
+the loopback.
+
+With that, what a program may do could be graded, which is a different
+question from who may register a listener:
+
+| | connect out as | listen for |
+|---|---|---|
+| a daemon's own uid (conversd) | its callsign | its callsign |
+| group `hams` | own callsign, any SSID | perhaps nothing |
+| group `hamsoft` | anything | anything |
+| anybody else | nothing | nothing |
+
+Worth writing down because today both halves are ungraded, and in opposite
+directions: **any** source callsign may be used on an outgoing call — only its
+spelling is checked — while a listener may only have the callsigns the sysop
+opened.  Kernel AX.25 was the other way round: `axparms --assoc` tied a unix
+user to the callsign it appeared under, and listening needed nobody's
+permission.  Neither shape is wrong; ours simply grew rather than being
+chosen, and a node that asked for credentials could choose.
+
+---
+
 ## What a second node would have to implement
 
 Shorter than it looks:

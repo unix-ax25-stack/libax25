@@ -796,6 +796,15 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 		/* Whoever made the descriptor lets go of it, or we put an
 		 * empty socket behind the number ourselves.
 		 */
+		/* Ask before taking it: socket() decided whether this is a
+		 * datagram socket or a connection, and after the handover
+		 * nobody remembers.  Getting this wrong is quiet - sendto()
+		 * would fall through to the descriptor itself and answer
+		 * EISCONN, which is true of a socketpair end and says nothing
+		 * about AX.25.
+		 */
+		int type = axsock_socktype(fd);
+
 		if (axsock_forget(fd) != 0 && replace_with_placeholder(fd)) {
 			*ret = -1;
 			return 1;
@@ -812,6 +821,7 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 		}
 		s->fd = fd;
 		s->ctl = -1;
+		s->dgram = (type == SOCK_DGRAM);
 		s->pid = protocol_of(fd);
 		s->next = Socks;
 		Socks = s;

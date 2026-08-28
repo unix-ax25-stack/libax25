@@ -1575,6 +1575,26 @@ static void *axsock_peer_reader(void *arg)
  * Returns 0 when the socket was ours and has been let go, -1 otherwise.
  */
 
+/* What kind of AX.25 socket this is, asked by another backend before it takes
+ * the descriptor over.  bind() is the first moment the port is known and thus
+ * the moment of the handover, but the type was decided at socket() and lives
+ * only here - and a datagram socket is served quite differently from a
+ * connection.  Answers -1 for a descriptor this backend does not hold.
+ */
+int axsock_socktype(int fd)
+{
+	struct axsock_sock *s;
+	int type;
+
+	if (!axsock_may_have_sock())
+		return -1;
+	pthread_mutex_lock(&axsock_lock);
+	s = axsock_find_locked(fd);
+	type = (s != NULL) ? s->type : -1;
+	pthread_mutex_unlock(&axsock_lock);
+	return type;
+}
+
 int axsock_forget(int fd)
 {
 	struct axsock_sock *s, **pp;

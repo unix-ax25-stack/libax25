@@ -74,6 +74,11 @@ struct wampes_sock {
 	int listening;                      /* listen() has put the control
 					     * connection behind it, and
 					     * accept() reads calls off it */
+	int dgram;                          /* socket() asked for SOCK_DGRAM:
+					     * UI frames, not a connection */
+	int ctl;                            /* the service connection a
+					     * datagram socket sends over, -1
+					     * until the first sendto() */
 	/* What getsockname() and getpeername() answer.  Both are known - the
 	 * handover line carries the caller and the called callsign, and
 	 * outgoing we have the destination and the bound source - and they
@@ -268,6 +273,7 @@ static void wampes_inherit(void)
 	if ((s = calloc(1, sizeof(*s))) == NULL)
 		return;
 	s->fd = fd;
+	s->ctl = -1;
 	s->connected = 1;
 	s->me.fsa_ax25.sax25_family = AF_AX25;
 	s->him.fsa_ax25.sax25_family = AF_AX25;
@@ -668,6 +674,8 @@ int wampes_socket(int type)
 		return -1;
 	}
 	s->fd = fd;
+	s->ctl = -1;
+	s->dgram = (type == SOCK_DGRAM);
 	s->next = Socks;
 	Socks = s;
 	Nsocks++;
@@ -786,6 +794,7 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 			return 1;
 		}
 		s->fd = fd;
+		s->ctl = -1;
 		s->pid = protocol_of(fd);
 		s->next = Socks;
 		Socks = s;
@@ -1168,6 +1177,7 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 		if (Nsocks < WAMPES_MAX_SOCK &&
 		    (ns = calloc(1, sizeof(*ns))) != NULL) {
 			ns->fd = newfd;
+			ns->ctl = -1;
 			ns->connected = 1;
 			ns->me = me;
 			ns->him = him;
@@ -1180,6 +1190,163 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 		}
 	}
 	*ret = newfd;
+	return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+
+/* Everything or nothing.  A short write on the service socket is not an
+ * error - the node's own handover taught us that the hard way - and half a
+ * counted frame would leave the node reading payload it will never get.
+ */
+
+static int write_all(int fd, const void *data, size_t len)
+{
+	const char *p = data;
+
+	while (len > 0) {
+		ssize_t n;
+
+#ifdef MSG_NOSIGNAL
+		n = send(fd, p, len, MSG_NOSIGNAL);
+#else
+		n = write(fd, p, len);
+#endif
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (n == 0) {
+			errno = EPIPE;
+			return -1;
+		}
+		p += n;
+		len -= (size_t) n;
+	}
+	return 0;
+}
+
+/* Sending a UI frame.
+ *
+ *      -> datagram hfb: --pid 0xf0        once, at the first sendto()
+ *      -> [4]DL9SAU-2>DL1ABC,DB0AAA:abcd  one frame, and no line ending
+ *
+ * The count is what makes this safe on a stream, and it is the node's own
+ * form: it reads exactly n bytes after the colon, so CR and NL in the payload
+ * are content and nothing closes a frame early.  The node answers only when
+ * it refuses something, and the "datagram" command switches itself to binary.
+ *
+ * The path travels as it stands - this is a bridge, not a router: the frame
+ * leaves the port as if the node had sent it there itself.  Receiving UI
+ * frames is not built; the node can deliver them, nothing here asks for them.
+ */
+
+ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
+		      const struct sockaddr *addr, socklen_t alen,
+		      ssize_t *ret)
+{
+	const struct full_sockaddr_ax25 *fsa;
+	const struct sockaddr_ax25 *sa;
+	struct wampes_sock *s;
+	char frame[128];
+	char line[256];
+	int ndigis = 0;
+	int i;
+
+	(void) flags;
+	if ((s = find_sock(fd)) == NULL || !s->dgram)
+		return 0;                   /* not ours, or not a datagram */
+	*ret = -1;
+
+	if (addr == NULL) {
+		errno = EDESTADDRREQ;       /* a UI frame needs somewhere to go */
+		return 1;
+	}
+	if (!is_ax25(addr, alen)) {
+		errno = EAFNOSUPPORT;
+		return 1;
+	}
+	if (len > 256) {                    /* an AX.25 frame is not a stream */
+		errno = EMSGSIZE;
+		return 1;
+	}
+
+	if (s->ctl < 0) {
+		const char *iface = wampes_iface(s->port);
+		int c;
+
+		if ((c = wampes_dial(wampes_address(s->port))) < 0)
+			return 1;
+		/* No port named means every AX.25 port of the node, which is
+		 * what a beacon on a node-wide entry asks for. */
+		snprintf(line, sizeof(line), "datagram %s%s",
+			 iface != NULL ? iface : "", iface != NULL ? ":" : "");
+		if (s->pid) {
+			char opt[24];
+
+			snprintf(opt, sizeof(opt), " --pid 0x%02x", s->pid);
+			strncat(line, opt, sizeof(line) - strlen(line) - 2);
+		}
+		strncat(line, "\n", sizeof(line) - strlen(line) - 1);
+		if (getenv("AXSOCK_DEBUG"))
+			fprintf(stderr, "wampes: -> %s", line);
+		if (write_all(c, line, strlen(line)) != 0) {
+			int save = errno;
+
+			close(c);
+			errno = save;
+			return 1;
+		}
+		s->ctl = c;
+	}
+
+	/* "[n]SRC>DEST[,DIGI...]:" - the source is the bound callsign, or the
+	 * one the port carries when the caller bound none.
+	 */
+	sa = (const struct sockaddr_ax25 *) addr;
+	fsa = (const struct full_sockaddr_ax25 *) addr;
+	if (alen >= (socklen_t) sizeof(*fsa))
+		ndigis = fsa->fsa_ax25.sax25_ndigis;
+	if (ndigis > AX25_MAX_DIGIS)
+		ndigis = AX25_MAX_DIGIS;
+
+	{
+		const char *src = s->local;
+		char *portcall;
+
+		if (*src == '\0' && s->port[0] != '\0' &&
+		    (portcall = ax25_config_get_addr(s->port)) != NULL)
+			src = portcall;
+		if (*src == '\0') {
+			errno = EDESTADDRREQ;   /* nothing to send it from */
+			return 1;
+		}
+		snprintf(frame, sizeof(frame), "%s>%s", src,
+			 ax25_ntoa(&sa->sax25_call));
+	}
+	for (i = 0; i < ndigis; i++) {
+		strncat(frame, ",", sizeof(frame) - strlen(frame) - 2);
+		strncat(frame, ax25_ntoa(&fsa->fsa_digipeater[i]),
+			sizeof(frame) - strlen(frame) - 2);
+	}
+
+	snprintf(line, sizeof(line), "[%zu]%s:", len, frame);
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "wampes: -> %s<%zu bytes>\n", line, len);
+	if (write_all(s->ctl, line, strlen(line)) != 0 ||
+	    write_all(s->ctl, buf, len) != 0) {
+		int save = errno;
+
+		/* The node is gone or refused the command it never answered.
+		 * Let the next frame open a fresh connection rather than
+		 * writing into a dead one for ever. */
+		close(s->ctl);
+		s->ctl = -1;
+		errno = save;
+		return 1;
+	}
+	*ret = (ssize_t) len;
 	return 1;
 }
 
@@ -1257,8 +1424,14 @@ int wampes_setsockopt(int fd, int level, int *ret)
 
 int wampes_close(int fd)
 {
-	if (find_sock(fd) == NULL)
+	struct wampes_sock *s;
+
+	if ((s = find_sock(fd)) == NULL)
 		return 0;
+	/* The service connection a datagram socket sends over is ours, not the
+	 * application's: nothing else will ever close it. */
+	if (s->ctl >= 0)
+		close(s->ctl);
 	drop_sock(fd);
 	return 0;
 }

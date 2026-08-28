@@ -1930,6 +1930,16 @@ ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
 	struct axsock_sock *s;
 	ssize_t r;
 
+	/* Before our own table, as bind() and connect() are: a datagram socket
+	 * that belongs to a WAMPES node is served there, and the descriptor
+	 * was never in this table to begin with. */
+	{
+		ssize_t wret;
+
+		if (wampes_sendto(fd, buf, len, flags, to, tolen, &wret))
+			return wret;
+	}
+
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {

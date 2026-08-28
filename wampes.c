@@ -704,10 +704,26 @@ static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 	char *name;
 
 	*port = '\0';
-	if (len < (socklen_t) sizeof(*fsa) || fsa->fsa_ax25.sax25_ndigis <= 0)
+	if (len < (socklen_t) sizeof(*fsa))
 		return;
-	/* Only reads it, but says otherwise in the header. */
-	name = ax25_config_get_port((ax25_address *) &fsa->fsa_digipeater[0]);
+	/* The port is named by the callsign in the first digipeater slot - but
+	 * only by programs that put it there.  call(1) always does; beacon(8)
+	 * does it only when its -c differs from the port's own callsign, and
+	 * binds the bare callsign otherwise.  A socket bound that way could
+	 * not be recognised as a WAMPES one and stayed with AGWPE without a
+	 * word, which is a quiet way to send a beacon nowhere.  So when there
+	 * is no digipeater, ask the source callsign instead: it resolves only
+	 * if it is a port's callsign, and a user's own callsign has no entry
+	 * and answers nothing, which is the right outcome for it.
+	 *
+	 * Only reads it, but says otherwise in the header.
+	 */
+	if (fsa->fsa_ax25.sax25_ndigis > 0)
+		name = ax25_config_get_port(
+			(ax25_address *) &fsa->fsa_digipeater[0]);
+	else
+		name = ax25_config_get_port(
+			(ax25_address *) &fsa->fsa_ax25.sax25_call);
 	if (name == NULL && ax25_config_get_next(NULL) == NULL) {
 		/* The port table belongs to the application: every program in
 		 * the suite calls ax25_config_load_ports() at startup, and a
@@ -719,8 +735,9 @@ static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 		 * backend to depend on the order of the binds.
 		 */
 		ax25_config_load_ports();
-		name = ax25_config_get_port(
-			(ax25_address *) &fsa->fsa_digipeater[0]);
+		name = ax25_config_get_port(fsa->fsa_ax25.sax25_ndigis > 0
+			? (ax25_address *) &fsa->fsa_digipeater[0]
+			: (ax25_address *) &fsa->fsa_ax25.sax25_call);
 	}
 	if (name == NULL)
 		return;

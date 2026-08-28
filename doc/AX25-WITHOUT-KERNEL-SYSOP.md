@@ -160,21 +160,37 @@ told so rather than being left to wonder.
 
 ## Who may use it
 
-**The permissions on the socket are the whole access control.**  There is no
-login on the service socket, no password, no per-user configuration — whoever
-can open `/tcp/sockets/ax25` may use the node.
+**The file system is the whole access control.**  There is no login on the
+service socket, no password, no per-user configuration — whoever can open
+`/tcp/sockets/ax25` may use the node.
 
 That is deliberate, and it is why the socket is where it is: a unix socket
 carries its rights in the file system, which is a tool you already know.
 
+**Out of the box the gate is the DIRECTORY, not the socket:**
+
 ```
-srw-rw----  1 root hams  0  /tcp/sockets/ax25
+drwxr-x---  2 root staff  /tcp/sockets          0750, and this is the gate
+srw-rw-rw-  1 root staff  /tcp/sockets/ax25     0666, deliberately open
 ```
 
-Mode `0660` and group `hams`: members of the group may use the transmitter,
-nobody else can even connect.  Finer grain is the file system's business, not
-ours — a group per daemon, an ACL for one account, whatever your machine
-already does.
+That looks backwards until you see which one decides.  The directory carries
+the group, so one `chgrp hams /tcp/sockets` moves the whole service from one
+group to another and no socket mode has to be reasoned about.  (The socket is
+`0666` and not `0777` because `connect()` on a unix socket asks for **write**
+and never for execute — measured, and Linux says so in `af_unix.c`.)
+
+If you would rather state the terms on the socket itself, `net.rc` runs after
+it exists:
+
+```
+axsock group hams
+axsock mode 0660          →  srw-rw----  1 root hams  /tcp/sockets/ax25
+```
+
+Then members of the group may use the transmitter and nobody else can even
+connect.  Finer grain is the file system's business, not ours — a group per
+daemon, an ACL for one account, whatever your machine already does.
 
 **Say what that means before you widen it.**  Somebody who can open the socket
 can:
@@ -196,14 +212,16 @@ What that person **cannot** do:
   claimed the callsign.  There is no way to ask for a copy, and no monitor
   stream to listen on.
 
-In short: **the boundary is the socket's mode, and it is a real one — but
-everything inside it is trusted.**  Treat membership in that group as you would
-treat the right to use the transmitter, because that is what it is.
+In short: **the boundary is a file system one, and it is real — but everything
+inside it is trusted.**  Treat membership in that group as you would treat the
+right to use the transmitter, because that is what it is.
 
-The node can also offer the same service over TCP (`start axtcp`, 127.0.0.1
-and ::1 only).  That switch removes the file system from the picture: every
-account on the machine can then reach it.  Turn it on when that is what you
-mean.
+The node can also offer the same service over TCP (`axsock tcp-listen on`,
+127.0.0.1 and ::1 only; `axsock` alone shows whether it is on).  That switch
+removes the file system from the picture: every account on the machine can
+then reach it, and a TCP connection carries no credentials to grade it by.
+Turn it on when that is what you mean.  It is off unless `net.rc` says
+otherwise.
 
 ---
 

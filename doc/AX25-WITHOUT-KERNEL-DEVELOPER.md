@@ -426,10 +426,34 @@ question from who may register a listener:
 Worth writing down because today both halves are ungraded, and in opposite
 directions: **any** source callsign may be used on an outgoing call — only its
 spelling is checked — while a listener may only have the callsigns the sysop
-opened.  Kernel AX.25 was the other way round: `axparms --assoc` tied a unix
-user to the callsign it appeared under, and listening needed nobody's
-permission.  Neither shape is wrong; ours simply grew rather than being
-chosen, and a node that asked for credentials could choose.
+opened.
+
+Kernel AX.25 offers the mirror image of the first half, and it is worth being
+exact about it, because it is *offered* rather than *done*.  `ax25_bind()`:
+
+```c
+user = ax25_findbyuid(current_euid());
+if (user) call = user->call;              /* REPLACES what he asked for */
+else if (ax25_uid_policy && !capable(CAP_NET_ADMIN))
+        return -EACCES;
+else call = addr->fsa_ax25.sax25_call;    /* he may call himself anything */
+```
+
+So the association bites only for users who **have** an entry, and
+`ax25_uid_policy` is **0** by default (`AX25_NOUID_DEFAULT`).  Without
+`axparms --assoc policy deny`, any local user binds any callsign — the kernel
+does not grade outgoing calls, it ships a switch for grading them and leaves
+it off.  Where it does bite it is one uid to exactly one callsign: no SSID
+range, no groups, no difference between connecting out and listening.  And it
+**replaces silently** rather than refusing, which is the one part not worth
+copying: a program that believes it is DL9SAU-7 and is quietly made into
+something else has no way to notice.
+
+Listening needed nobody's permission there at all.  So on that half we are
+already stricter than the kernel's default, and that is an argument for the
+administrative model above rather than against it.  Neither shape is wrong;
+ours simply grew rather than being chosen, and a node that asked for
+credentials could choose.
 
 ---
 

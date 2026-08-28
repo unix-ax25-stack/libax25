@@ -30,11 +30,13 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "netax25/ax25.h"
@@ -413,13 +415,62 @@ static int wampes_dial(const char *addr)
 /* One line, however long, of which we keep the first buflen-1 bytes.  The
  * lines that matter are short; a long one is progress and gets ignored
  * anyway.
+ *
+ * Returns the length, -1 on error with errno set, WAMPES_EOF when the node
+ * closed before finishing a line, or WAMPES_INCOMPLETE when a line began and
+ * did not arrive within msec.  All three are worth telling apart: every line
+ * here ends in a newline, so a line that stops early is not a short answer
+ * but no answer at all.
+ *
+ * msec bounds the wait for the REST of a line, never the wait for its first
+ * byte - a caller waiting for a link to come up may wait minutes, and that
+ * is not this timeout's business.  It exists because a node can hand over a
+ * descriptor and then fail to finish the line describing it: sendmsg() with
+ * MSG_DONTWAIT accepts part of a message when the buffer is nearly full and
+ * reports how much, and a node that mistakes that for success never sends
+ * the remainder.  Without a bound, the caller would wait for a newline that
+ * is not coming - with a blocking listener, that is a daemon that stops
+ * serving.  0 means wait as long as it takes.
  */
 
-static int read_line(int fd, char *buf, size_t buflen, int *fdp)
+#define WAMPES_EOF		(-2)
+#define WAMPES_INCOMPLETE	(-3)
+
+static int msec_left(const struct timespec *deadline)
 {
+	struct timespec now;
+	long ms;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+		return 0;
+	ms = (deadline->tv_sec - now.tv_sec) * 1000 +
+	     (deadline->tv_nsec - now.tv_nsec) / 1000000;
+	return ms > 0 ? (int) ms : 0;
+}
+
+static int read_line(int fd, char *buf, size_t buflen, int *fdp, int msec)
+{
+	struct timespec deadline;
 	size_t n = 0;
+	int started = 0;
 
 	for (;;) {
+		if (msec > 0 && started) {
+			struct pollfd pfd;
+			int r;
+
+			pfd.fd = fd;
+			pfd.events = POLLIN;
+			pfd.revents = 0;
+			r = poll(&pfd, 1, msec_left(&deadline));
+			if (r == 0)
+				return WAMPES_INCOMPLETE;
+			if (r < 0) {
+				if (errno == EINTR)
+					continue;
+				return -1;
+			}
+		}
 		char c;
 		ssize_t got;
 		struct cmsghdr *cm;
@@ -451,11 +502,23 @@ static int read_line(int fd, char *buf, size_t buflen, int *fdp)
 				    cm->cmsg_type == SCM_RIGHTS)
 					memcpy(fdp, CMSG_DATA(cm), sizeof(int));
 		if (got == 0)
-			return n ? (int) n : -1;    /* EOF */
+			return WAMPES_EOF;
 		if (got < 0) {
 			if (errno == EINTR)
 				continue;
 			return -1;
+		}
+		if (!started) {
+			started = 1;
+			if (msec > 0 &&
+			    clock_gettime(CLOCK_MONOTONIC, &deadline) == 0) {
+				deadline.tv_sec += msec / 1000;
+				deadline.tv_nsec += (msec % 1000) * 1000000L;
+				if (deadline.tv_nsec >= 1000000000L) {
+					deadline.tv_sec++;
+					deadline.tv_nsec -= 1000000000L;
+				}
+			}
 		}
 		if (c == '\n')
 			break;
@@ -830,7 +893,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	}
 
 	for (;;) {
-		if (read_line(sock, line, sizeof(line), &handed) < 0) {
+		if (read_line(sock, line, sizeof(line), &handed, 0) < 0) {
 			/* The node closed without a verdict.  It does that
 			 * when the link never came up: WAMPES retried until
 			 * it gave up and dropped the control block.
@@ -938,7 +1001,7 @@ int wampes_listen(int fd, int *ret)
 		return 1;
 	}
 	for (;;) {
-		if (read_line(sock, line, sizeof(line), NULL) < 0) {
+		if (read_line(sock, line, sizeof(line), NULL, 0) < 0) {
 			close(sock);
 			errno = ECONNRESET;
 			return 1;
@@ -968,8 +1031,22 @@ int wampes_listen(int fd, int *ret)
 
 /*---------------------------------------------------------------------------*/
 
-/* accept() is one recvmsg(): the node sends the trace line and the descriptor
- * for the session together, so there is nothing to match up.
+/* How long accept() waits for the rest of a trace line whose first byte has
+ * arrived.
+ *
+ * The two ways of being wrong are not the same size.  Too short and a call
+ * that merely needed two writes is thrown away - which is the fault this
+ * bound was added to prevent.  Too long and a daemon stands still for that
+ * much, once, on an event that should not happen at all.  So it is generous:
+ * what has to fit is the rest of a line on a local socket, and the only
+ * variable is when the node's cooperative scheduler comes round to writing
+ * it.  Two seconds is a long time for that and no time at all for a station
+ * waiting to log in.
+ */
+#define WAMPES_HANDOVER_MSEC	2000
+
+/* accept() takes the trace line and the descriptor the node sends together,
+ * so there is nothing to match up.
  *
  *      hfa DL1TST-1,DB0BBB > DL9SAU-13
  *
@@ -1007,41 +1084,42 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 	char line[256];
 	char *sp;
 	int newfd = -1;
-	struct cmsghdr *cm;
-	struct iovec iov;
-	struct msghdr msg;
 	struct wampes_sock *s;
-	ssize_t n;
-	union {
-		char buf[CMSG_SPACE(sizeof(int))];
-		struct cmsghdr align;
-	} control;
+	int n;
 
 	if ((s = find_sock(fd)) == NULL || !s->listening)
 		return 0;                   /* not ours, or not listening */
 	*ret = -1;
 
-	memset(&msg, 0, sizeof(msg));
-	memset(&control, 0, sizeof(control));
-	iov.iov_base = line;
-	iov.iov_len = sizeof(line) - 1;
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-	msg.msg_control = control.buf;
-	msg.msg_controllen = sizeof(control.buf);
-
-	while ((n = recvmsg(fd, &msg, 0)) < 0 && errno == EINTR)
-		;
-	if (n < 0)
-		return 1;                   /* errno is the caller's answer */
-	if (n == 0) {
-		errno = ECONNABORTED;       /* the node went away */
-		return 1;
+	/* Read to the end of the line rather than trusting one recvmsg() to
+	 * hold it.  This is a stream: the node sends the trace line and the
+	 * descriptor in one sendmsg(), but it sends with MSG_DONTWAIT, and a
+	 * stream socket whose buffer is nearly full accepts part of a message
+	 * and reports that.  The rest then arrives later - the descriptor
+	 * having come with the first byte - and a single recvmsg() here would
+	 * hand up a half-parsed call and leave the remainder for the next
+	 * accept(), which would find a line with no descriptor and answer
+	 * EPROTO.  A session that vanishes without a word, sometimes, when the
+	 * channel is busy: which is exactly when a second station is being
+	 * handed over at the same time.
+	 *
+	 * read_line() collects the descriptor from whichever byte carried it
+	 * and stops at the newline, which is what the connect path has always
+	 * done.
+	 */
+	n = read_line(fd, line, sizeof(line), &newfd, WAMPES_HANDOVER_MSEC);
+	if (n < 0) {
+		/* The session was handed over before the line describing it was
+		 * finished; without the line there is nothing to hand up, and
+		 * holding the descriptor would leak it. */
+		if (newfd >= 0)
+			close(newfd);
+		if (n == WAMPES_EOF)
+			errno = ECONNABORTED;   /* the node went away */
+		else if (n == WAMPES_INCOMPLETE)
+			errno = EPROTO;         /* half a line, and no more */
+		return 1;                   /* otherwise errno is from recvmsg */
 	}
-	line[n] = '\0';
-	for (cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm))
-		if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS)
-			memcpy(&newfd, CMSG_DATA(cm), sizeof(newfd));
 	if (newfd < 0) {
 		errno = EPROTO;             /* a line without a descriptor */
 		return 1;

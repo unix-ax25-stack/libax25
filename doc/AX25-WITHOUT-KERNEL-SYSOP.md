@@ -18,7 +18,8 @@ oddly.
 
 It is also meant as a **reference implementation** rather than a private
 arrangement.  What sits between `libax25` and WAMPES is a small protocol on a
-unix socket, written down in the developer's part beside this file.  Any other
+unix socket, written down in AX25-WITHOUT-KERNEL-DEVELOPER.md beside this
+file.  Any other
 AX.25-capable program can learn it — TheNetNode, an XNET, something of your
 own — and every `libax25` program then reaches it without a line changed.  The
 kernel stack was the meeting point for thirty years; this is a proposal for

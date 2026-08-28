@@ -101,7 +101,8 @@ endif
 EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c wampes.c wampes.h
 
 dist_doc_DATA = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
-		README-linux-systemd.txt
+		README-linux-systemd.txt \
+		doc/AX25-WITHOUT-KERNEL-SYSOP.md
 
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/

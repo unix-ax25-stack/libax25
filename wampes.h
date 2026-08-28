@@ -29,6 +29,9 @@ int wampes_setsockopt(int fd, int level, int *ret);
 ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 		      const struct sockaddr *addr, socklen_t alen,
 		      ssize_t *ret);
+ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
+			struct sockaddr *addr, socklen_t *alen,
+			ssize_t *ret);
 int wampes_close(int fd);
 
 #endif

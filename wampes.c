@@ -76,6 +76,12 @@ struct wampes_sock {
 					     * accept() reads calls off it */
 	int dgram;                          /* socket() asked for SOCK_DGRAM:
 					     * UI frames, not a connection */
+	int rxclaimed;                      /* the node hands us UI frames for
+					     * this callsign, and the
+					     * descriptor is that connection */
+	int rxerr;                          /* why not, kept until somebody
+					     * calls recvfrom() and can be
+					     * told */
 	int ctl;                            /* the service connection a
 					     * datagram socket sends over, -1
 					     * until the first sendto() */
@@ -768,6 +774,9 @@ static int replace_with_placeholder(int fd)
 	return 0;
 }
 
+/* Defined with the rest of the receiving side, below. */
+static void claim_ui(struct wampes_sock *s);
+
 int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 {
 	char port[32];
@@ -839,6 +848,8 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "wampes: bind fd=%d local='%s' port='%s'\n",
 			fd, s->local, s->port);
+	if (s->dgram && !s->rxclaimed)
+		claim_ui(s);
 	*ret = 0;
 	return 1;
 }
@@ -1374,6 +1385,236 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 		return 1;
 	}
 	*ret = (ssize_t) len;
+	return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+
+/* Receiving UI frames.
+ *
+ * The node hands them to whoever claimed the callsign, in the same counted
+ * form the sending direction uses and on the connection the claim was made
+ * on:
+ *
+ *      <- [5]DL1ABC>DB0FHN-13,DB0AAA*:hallo
+ *
+ * So the claim happens at bind(), not at the first recvfrom(): the connection
+ * then takes the descriptor's place, and select() and poll() on it are
+ * readable exactly when a frame has arrived - which is what a program that
+ * waits for one does.  A refusal is not an error at bind(): a program that
+ * only sends beacons binds too, and the callsign it binds is usually a port's
+ * own, which no client may claim.  The reason is kept and handed to whoever
+ * calls recvfrom().
+ */
+
+#define AX25_REPEATED	0x80		/* in the SSID byte, as on the air */
+
+static void claim_ui(struct wampes_sock *s)
+{
+	char cmd[128];
+	char line[256];
+	int c;
+
+	s->rxerr = ENOTCONN;
+	if (s->local[0] == '\0')
+		return;
+	if ((c = wampes_dial(wampes_address(s->port))) < 0) {
+		s->rxerr = errno;
+		return;
+	}
+	if (s->pid)
+		snprintf(cmd, sizeof(cmd), "listen ui %s pid=0x%02x\n",
+			 s->local, s->pid);
+	else
+		snprintf(cmd, sizeof(cmd), "listen ui %s\n", s->local);
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "wampes: -> %s", cmd);
+	if (write_all(c, cmd, strlen(cmd)) != 0) {
+		s->rxerr = errno;
+		close(c);
+		return;
+	}
+	for (;;) {
+		if (read_line(c, line, sizeof(line), NULL, 0) < 0) {
+			s->rxerr = ECONNRESET;
+			close(c);
+			return;
+		}
+		if (getenv("AXSOCK_DEBUG"))
+			fprintf(stderr, "wampes: <- %s\n", line);
+		if (strncmp(line, "*** ", 4) != 0)
+			continue;
+		if (strncmp(line, "*** listening", 13) == 0)
+			break;
+		s->rxerr = listen_errno(line);
+		close(c);
+		return;
+	}
+	/* The connection becomes the descriptor, as it does for a listening
+	 * socket: from here poll() and select() answer for it and nothing of
+	 * ours is asked. */
+	if (dup2(c, s->fd) < 0) {
+		s->rxerr = errno;
+		close(c);
+		return;
+	}
+	close(c);
+	s->rxclaimed = 1;
+	s->rxerr = 0;
+}
+
+/* Exactly n bytes, however they arrive. */
+
+static int read_all(int fd, void *data, size_t len)
+{
+	char *p = data;
+
+	while (len > 0) {
+		ssize_t n = read(fd, p, len);
+
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (n == 0) {
+			errno = ECONNRESET;
+			return -1;
+		}
+		p += n;
+		len -= (size_t) n;
+	}
+	return 0;
+}
+
+/* One byte at a time up to a delimiter.  The header is short and arrives
+ * once per frame; a buffer of our own would have to be drained again by the
+ * next call, and there is no second reader to drain it for. */
+
+static int read_until(int fd, char stop, char *buf, size_t buflen)
+{
+	size_t n = 0;
+
+	for (;;) {
+		char c;
+
+		if (read_all(fd, &c, 1) != 0)
+			return -1;
+		if (c == stop)
+			break;
+		if (n + 1 < buflen)
+			buf[n++] = c;
+	}
+	buf[n] = '\0';
+	return (int) n;
+}
+
+/* "SRC>DEST[,DIGI[*]...]" into the address a caller of recvfrom() gets: the
+ * sending station, and the path it came by.  A "*" marks an element that has
+ * already repeated the frame, which is the has-been-repeated bit on the air
+ * and belongs in the SSID byte here.
+ */
+
+static void parse_ui_header(char *hdr, struct full_sockaddr_ax25 *fsa)
+{
+	char *arrow;
+	char *p;
+	int n = 0;
+
+	memset(fsa, 0, sizeof(*fsa));
+	fsa->fsa_ax25.sax25_family = AF_AX25;
+	if ((arrow = strchr(hdr, '>')) != NULL)
+		*arrow = '\0';
+	ax25_aton_entry(hdr, fsa->fsa_ax25.sax25_call.ax25_call);
+	if (arrow == NULL)
+		return;
+	for (p = strtok(arrow + 1, ","); p != NULL; p = strtok(NULL, ",")) {
+		size_t l = strlen(p);
+		int repeated = 0;
+
+		if (n == 0) {                   /* the destination, not a digi */
+			n++;
+			continue;
+		}
+		if (l > 0 && p[l - 1] == '*') {
+			repeated = 1;
+			p[l - 1] = '\0';
+		}
+		if (n - 1 >= AX25_MAX_DIGIS)
+			break;
+		ax25_aton_entry(p, fsa->fsa_digipeater[n - 1].ax25_call);
+		if (repeated)
+			fsa->fsa_digipeater[n - 1].ax25_call[6] |= AX25_REPEATED;
+		fsa->fsa_ax25.sax25_ndigis = n;
+		n++;
+	}
+}
+
+ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
+			struct sockaddr *addr, socklen_t *alen, ssize_t *ret)
+{
+	struct full_sockaddr_ax25 him;
+	struct wampes_sock *s;
+	char count[16];
+	char hdr[160];
+	char *end;
+	long n;
+
+	(void) flags;
+	if ((s = find_sock(fd)) == NULL || !s->dgram)
+		return 0;                   /* not ours, or not a datagram */
+	*ret = -1;
+	if (!s->rxclaimed) {
+		errno = s->rxerr ? s->rxerr : ENOTCONN;
+		return 1;
+	}
+
+	/* "[n]" first, so the very first byte decides and no payload can be
+	 * read as a length. */
+	if (read_until(fd, '[', hdr, sizeof(hdr)) < 0 ||
+	    read_until(fd, ']', count, sizeof(count)) < 0)
+		return 1;
+	n = strtol(count, &end, 10);
+	if (*end != '\0' || n < 0) {
+		errno = EPROTO;
+		return 1;
+	}
+	if (read_until(fd, ':', hdr, sizeof(hdr)) < 0)
+		return 1;
+
+	if ((size_t) n <= len) {
+		if (read_all(fd, buf, (size_t) n) != 0)
+			return 1;
+		*ret = n;
+	} else {
+		/* A datagram is what it is: keep what fits and drop the rest,
+		 * rather than leave half a frame in the stream for the next
+		 * call to read as a header. */
+		char waste[256];
+		size_t left = (size_t) n - len;
+
+		if (read_all(fd, buf, len) != 0)
+			return 1;
+		while (left > 0) {
+			size_t k = left > sizeof(waste) ? sizeof(waste) : left;
+
+			if (read_all(fd, waste, k) != 0)
+				return 1;
+			left -= k;
+		}
+		*ret = (ssize_t) len;
+	}
+
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "wampes: <- [%ld]%s: %zd bytes\n", n, hdr, *ret);
+
+	parse_ui_header(hdr, &him);
+	if (addr != NULL && alen != NULL &&
+	    *alen >= (socklen_t) sizeof(struct sockaddr_ax25)) {
+		if (*alen > (socklen_t) sizeof(him))
+			*alen = sizeof(him);
+		memcpy(addr, &him, *alen);
+	}
 	return 1;
 }
 

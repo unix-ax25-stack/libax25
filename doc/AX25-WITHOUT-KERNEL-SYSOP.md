@@ -151,7 +151,9 @@ none of them was refused — kernel AX.25 treats an AX.25 datagram socket the
 way it treats a raw IP protocol, not the way it treats a UDP port.  Whether
 all of them would then have received a copy of an incoming frame is untested,
 and it is the question that decides whether this difference matters in
-practice.  Here, one program holds a callsign and gets the frames; a second is
+practice — it needs a frame from another station, since the kernel does not
+hand a machine's own transmissions to its own datagram sockets, not even the
+digipeated repeat.  Here, one program holds a callsign and gets the frames; a second is
 told so rather than being left to wonder.
 
 ---

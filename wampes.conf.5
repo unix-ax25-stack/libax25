@@ -66,12 +66,20 @@ no rights of its own: switching it on is the statement that every account on
 that machine may use the transmitter.  Reaching a node over TCP from
 elsewhere means saying the same about the network in between.
 .LP
-The unix socket is the other way round.  It carries its rights in its mode \-\-
-0660 and group
-.B hams
-where that group exists \-\- so the sysop decides who may use it with the
-tools the file system already has.  Both are set at the node with the same
-command, which also prints what they are:
+The unix socket is the other way round: who may reach it is decided with the
+tools the file system already has.  By default that decision sits on the
+.I directory
+\-\- 
+.I sockets/
+is 0750, so one
+.B chgrp
+moves the whole service from one group to another \-\- and the socket itself is
+created 0666, because for a socket that is what "open" means:
+.BR connect (2)
+asks for write and never for execute.
+.LP
+The node can be told to state the terms on the socket instead, and the same
+command prints what they are:
 .PP
 .RS
 .nf
@@ -87,6 +95,17 @@ It lives there, beside the unix socket it configures, rather than under
 \-\- which is for the node's IP services and its login, and where a name like
 .I axtcp
 would have read as "AX.25 over a TCP socket", which is not what it is.
+.LP
+Why the node has to be told at all, rather than the sysop setting the mode
+once with
+.BR chmod (1):
+the socket file does not survive a restart.  A node that starts finds the old
+one in the way and removes it before binding \-\- carefully, only when it is
+really a socket and only when nothing answers on it, so that a running node is
+never robbed of its own \-\- and what it then creates is a new file with the
+default mode.  Rights set by hand are gone at that moment; rights in
+.I net.rc
+are applied again every time.
 .SH "WITHOUT THIS FILE"
 .LP
 The file is optional.  Without it a single node at

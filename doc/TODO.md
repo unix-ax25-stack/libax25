@@ -74,11 +74,29 @@ The node side is where the work is, and it is not only "parse it too".
 * `DB0AAA-1*` — `atoi("1*")` is 1, so the call is accepted and **the `*` is
   dropped without a word**
 
-The second is the one to fix first, with or without this feature: a path that
-silently loses a mark is worse than one that refuses it.  The `*` has to be
-taken off and interpreted before `setcall()` sees the callsign, in the
-`datagram` parser and anywhere else a path is read, so that both spellings
-behave the same.
+Both parsers refuse the mark now — `setcall()` in the node, and
+`ax25_aton_entry()` here, which had arrived at the same asymmetry by itself.
+So nothing is dropped in silence any more, and the day the bit is carried the
+caller takes the mark off and sets it itself.
+
+**And it need not stop at datagrams.**  A connection can express the same
+thing, and the node is most of the way there already: `nextdigi` is the index
+of the first digipeater that has not repeated yet, `ax25hdr.c` sets the bit
+for everything before it when it writes the header, and it addresses the frame
+to `digis[nextdigi]`.  What is missing is that `ax25_parse_target()` never
+counts a mark, and that the connect path in `ax25user.c` sets `nextdigi = 0`
+outright — it would have to keep what the caller asked for.
+
+Nothing changes on the library side: an application marks a digipeater by
+setting the has-been-repeated bit in its SSID byte, which is exactly what the
+receiving path already produces, and the shim writes the `*` into the header
+it builds anyway.
+
+That gives back something the old world had: a station can emit a connect as
+though the first hops had already happened — which is what a node does when it
+inserts itself into a path.  Worth saying out loud that on a shared channel
+such a frame is indistinguishable from a real digipeat, so it is a tool and a
+footgun in the same hand.
 
 **No monitor through a node.**  `listen(1)` and `mheardd(8)` see nothing: the
 service protocol has no stream that carries a copy of every frame, the way the

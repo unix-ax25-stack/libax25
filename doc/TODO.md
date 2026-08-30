@@ -65,6 +65,21 @@ carries the `*` into the digipeater's SSID byte; a frame sent out drops it,
 because the TNC2 header is written from the address as it stands.  There are
 uses — forwarding a frame, recording that the first hop already happened.
 
+The library side is small: write the `*` into the header it already builds.
+The node side is where the work is, and it is not only "parse it too".
+`setcall()` treats the character inconsistently today:
+
+* `DB0AAA*` — no SSID, so the callsign field is seven characters and it
+  answers `-1`, "invalid call"
+* `DB0AAA-1*` — `atoi("1*")` is 1, so the call is accepted and **the `*` is
+  dropped without a word**
+
+The second is the one to fix first, with or without this feature: a path that
+silently loses a mark is worse than one that refuses it.  The `*` has to be
+taken off and interpreted before `setcall()` sees the callsign, in the
+`datagram` parser and anywhere else a path is read, so that both spellings
+behave the same.
+
 **No monitor through a node.**  `listen(1)` and `mheardd(8)` see nothing: the
 service protocol has no stream that carries a copy of every frame, the way the
 AGWPE `K` record does.  Adding one is a protocol question, not a library one.

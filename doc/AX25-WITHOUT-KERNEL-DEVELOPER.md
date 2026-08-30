@@ -259,10 +259,16 @@ replaces whatever was behind the number.  A program can therefore reach a
 kernel port and a node port in turn, in one process, with nothing configured
 to say so.
 
-The kernel-or-AGWPE question is not there yet: it is answered once per
-process, by a single probe at the first AX.25 socket, and cached.  Making that
-one per port as well is the obvious next step and needs no protocol change —
-only the same lookup, one layer down.
+It holds for every call that names a socket, not only `connect()`: a
+descriptor is what it is from its own `bind()` onwards, so one process can
+listen on a kernel port and on a node port at the same time, each through its
+own machinery.
+
+What is *not* per port yet is the kernel-or-AGWPE question: it is answered
+once per process, by a single probe at the first AX.25 socket, and cached.
+That is why those two are the one pair that cannot be mixed, while either of
+them mixes with node ports.  Making it per port as well is the obvious next
+step and needs no protocol change — only the same lookup, one layer down.
 
 A datagram socket claims its callsign at `bind()` rather than at the first
 `recvfrom()`, so that `select()` is readable when a frame arrives rather than

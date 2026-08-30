@@ -183,10 +183,15 @@ switched.  A mailbox can be moved one callsign at a time, and moved back the
 same way, which is a comfortable position to test from — there is no flag day
 and no rollback plan to write.
 
-One limit, said plainly: **AGWPE is not yet part of this.**  Whether a process
-uses the kernel or an AGWPE server is still decided once, at its first AX.25
-socket, and applies to all of them.  Only node ports are chosen per port.  If
-you serve both, keep them in separate programs for now.
+This holds for listening as well as for dialling out: each socket is decided
+at its own `bind()`, so one `ax25d` can listen on a kernel port through the
+kernel and on `wampes:xnet` through the node at the same time.
+
+One pair does not mix, and it is worth naming: **kernel ports and AGWPE
+ports.**  Which of those two a process uses is still decided once, at its
+first AX.25 socket, and applies to all of them; only node ports are chosen per
+port.  Kernel and node ports mix freely, AGWPE and node ports mix freely — it
+is kernel-against-AGWPE that has to live in separate programs for now.
 
 ---
 

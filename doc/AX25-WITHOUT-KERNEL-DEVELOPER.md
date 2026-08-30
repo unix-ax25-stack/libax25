@@ -439,7 +439,12 @@ somebody builds it, these are the questions it has to answer:
 
 ---
 
-## Not implemented: asking who is speaking
+## Not implemented: access control from the unix side
+
+Which unix identity may use which AX.25 resource — a callsign to call out
+under, a callsign to listen for, a pid, the has-been-repeated mark.  Today
+that question is not asked at all: the socket's mode is one gate, and past it
+everything is allowed.
 
 The service socket carries no identity.  The node never asks who is at the
 other end, and the file system's permissions are the whole answer — which is

@@ -171,12 +171,18 @@ elsewhere.  The order matters: **the identity question first, then
 self-registration.**  Built the other way round, a registration protocol would
 have to be reopened to let credentials into it.
 
-**Asking who is speaking.**  The service socket carries no identity, and a unix
-socket could be asked — `SO_PEERCRED`, `getpeereid`, `LOCAL_PEERCRED`.  With
-that, what a program may do could be graded rather than being all-or-nothing at
-the socket's mode: which source callsigns, whether it may listen, which pids,
-whether it may mark a hop as repeated.  The table is in
-`AX25-WITHOUT-KERNEL-DEVELOPER.md`.
+**Access control from the unix side: which unix identity may use which AX.25
+resource.**  Today the socket's mode is a single gate, and past it everything
+is allowed — any source callsign, any configured callsign to listen for, any
+pid.  A graded model would decide per resource: which callsigns a user may
+call out under, which they may listen for, which pids they may speak, and
+whether they may mark a hop as repeated.
+
+Asking who is at the other end is only the means — `SO_PEERCRED` on Linux,
+`getpeereid` or `LOCAL_PEERCRED` on macOS, the latter returning the whole
+group list.  The policy is the work, and the sketch of one is in
+`AX25-WITHOUT-KERNEL-DEVELOPER.md`.  A callsign filter is one shape it could
+take; a table of unix groups against capabilities is another.
 
 **Self-registering listeners.**  A listener is administrative: the sysop opens
 a callsign, a program claims it.  A protocol where `bind()` and `listen()`

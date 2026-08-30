@@ -14,9 +14,13 @@ without a line changed.
 ## The service socket
 
 A unix stream socket, `/tcp/sockets/ax25` in a default WAMPES installation,
-named for the client side in `wampes.conf(5)`.  Mode `0660` and a group is the
-whole access control; there is no login in the protocol.  The same service may
-be offered over TCP on the loopback, which trades that control away.
+named for the client side in `wampes.conf(5)`.  The file system is the whole
+access control — by default the directory around it, `sockets/` at 0750, while
+the socket itself is created 0666; the node can be told to state the terms on
+the socket instead (`axsock group`, `axsock mode`).  There is no login in the
+protocol and no identity in it either.  The same service may be offered over
+TCP on the loopback (`axsock tcp-listen on`), which trades that control away:
+a TCP connection carries no credentials to grade it by.
 
 **A stream, not a datagram socket.**  That single fact shapes everything
 below: nothing on it has a boundary of its own, so every message either ends

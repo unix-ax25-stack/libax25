@@ -465,12 +465,19 @@ the loopback.
 With that, what a program may do could be graded, which is a different
 question from who may register a listener:
 
-| | connect out as | listen for |
-|---|---|---|
-| a daemon's own uid (conversd) | its callsign | its callsign |
-| group `hams` | own callsign, any SSID | perhaps nothing |
-| group `hamsoft` | anything | anything |
-| anybody else | nothing | nothing |
+| | connect out as | may listen | may choose a pid |
+|---|---|---|---|
+| a service's own uid (conversd) | its callsign | yes | yes |
+| group `hamsoft` | anything | yes | yes |
+| group `hams` — an ordinary licensee | own callsign, any SSID | no | text only |
+| anybody else | nothing | no | no |
+
+The middle row is the interesting one, and it is not hypothetical: a licensed
+operator should be able to call out under their own callsign and nothing else
+— no source of their choosing, no listener, no protocol but text.  That is
+close to what `axparms --assoc` did for the outgoing half, and it is the row
+that makes the difference between "whoever may open the socket is a sysop" and
+"whoever may open the socket may be an ordinary user".
 
 Worth writing down because today both halves are ungraded, and in opposite
 directions: **any** source callsign may be used on an outgoing call — only its

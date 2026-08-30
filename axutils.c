@@ -24,6 +24,19 @@ int ax25_aton_entry(const char *name, char *buf)
 	const char *p = name;
 	char c;
 
+	/* A "*" is not part of a callsign.  It is the has-been-repeated mark of
+	 * the TNC2 notation and belongs in the SSID byte, not in the text - a
+	 * caller that means it takes it off and sets the bit itself.  Refused
+	 * here rather than left to the two parsers below, which disagreed about
+	 * it: the loop calls it an invalid symbol, while sscanf() in the SSID
+	 * stops at it, so "DL1AB*" failed and "DB0AAA-1*" was accepted with the
+	 * mark quietly dropped.  Same word, two answers.
+	 */
+	if (strchr(name, '*') != NULL) {
+		printf("axutils: '*' is not part of a callsign - '%s'\n", name);
+		return -1;
+	}
+
 	while (ct < 6) {
 		c = toupper(*p);
 

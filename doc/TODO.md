@@ -44,6 +44,18 @@ What it buys:
   All three were consequences of "socket() built one thing and bind() wanted
   another"
 
+It is not only about branches, either.  The two backends should **look and
+behave alike**, and today they do not: one is chosen by a probe and the other
+by a file, one steals descriptors and the other cannot.  An asymmetry like
+that reads as if AGWPE were an abandoned corner, which it is not — it was
+tested and working, and it is still the way to a `direwolf` or to AGWPE
+clients on the LAN.  Making the two paths the same shape is as much about not
+letting one of them rot as it is about edge cases.
+
+Which brings an acceptance step with it: **the direwolf tests want repeating
+once the paths are unified.**  They last passed some weeks ago, against code
+that has moved underneath them since.
+
 What has to be answered first — descriptors that are never bound:
 
 * `axctl(8)` and `axkill(8)` open an `AF_AX25` socket and issue

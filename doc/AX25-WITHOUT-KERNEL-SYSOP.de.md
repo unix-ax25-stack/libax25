@@ -380,7 +380,7 @@ Sagt Euch das laut, denn jedes davon ist still und nicht laut:
   der AGWPE-Weg tut.  Der Socket wird herausgegeben und bleibt still, mit einer
   Zeile auf der Standardfehlerausgabe, die es sagt.  Der Knoten schreibt auf
   seiner eigenen Konsole mit; dort ist nachzusehen.
-* **Das Wiederholt-Bit reist nur in eine Richtung.**  Ein ankommender Rahmen
+* **Das repeated-bit reist nur in eine Richtung.**  Ein ankommender Rahmen
   bringt seinen Pfad mitsamt `*` — die Marke wird zum Bit im SSID-Byte des
   Digipeaters, wie auf dem Band.  Hinaus fällt sie weg: der Pfad wird aus der
   Adresse geschrieben, wie sie ist, und nichts trägt die Marke.  Es gibt

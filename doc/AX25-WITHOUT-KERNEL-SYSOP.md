@@ -158,6 +158,38 @@ told so rather than being left to wonder.
 
 ---
 
+## Beside the kernel stack, not instead of it
+
+Nothing here asks a station to switch over.  **The choice is made per port**,
+and a machine that still has a working kernel AX.25 setup can add one node
+port and leave everything else exactly as it is.
+
+It works out that way because of when the decision can be taken.  `socket()`
+has to hand back a descriptor before anybody knows which port is meant — the
+callsign, and with it the port, arrives at `bind()`.  So that is where the
+question is asked: the callsign is looked up in `axports(5)`, and if the entry
+belongs to a node named in `wampes.conf(5)`, the socket changes hands there
+and then.  Anything else stays with the kernel.
+
+For one program that means:
+
+```
+call -r kernelport DL1ABC        goes to the kernel stack
+call -r wampes:xnet DL1ABC       goes to the node
+```
+
+in the same process, one after the other, with nothing set and nothing
+switched.  A mailbox can be moved one callsign at a time, and moved back the
+same way, which is a comfortable position to test from — there is no flag day
+and no rollback plan to write.
+
+One limit, said plainly: **AGWPE is not yet part of this.**  Whether a process
+uses the kernel or an AGWPE server is still decided once, at its first AX.25
+socket, and applies to all of them.  Only node ports are chosen per port.  If
+you serve both, keep them in separate programs for now.
+
+---
+
 ## Who may use it
 
 **The file system is the whole access control.**  There is no login on the

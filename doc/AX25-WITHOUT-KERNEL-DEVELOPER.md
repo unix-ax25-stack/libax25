@@ -93,6 +93,28 @@ passes as 0.
 Every line that does not begin with `***` is progress.  Exactly one does, and
 it is the answer.  End of file before it means the link never came up.
 
+**`connect()` blocks here, and it is worth knowing exactly where.**  The call
+writes the command and then reads lines until the verdict arrives; that read
+is the wait, and it lasts as long as the node takes to bring the link up or to
+give up on it — T1 times N2, which is tens of seconds on a bad channel.  There
+is no timeout of our own: when the node gives up it closes, and end of file
+becomes `ETIMEDOUT`.
+
+`O_NONBLOCK` does not shorten it, and the reason is the order of things.  At
+that moment the application's descriptor is still the placeholder; `fcntl()`
+is not intercepted at all, so a flag set on it says nothing about the service
+connection this is waiting on.  Only after `connect()` returns is the
+descriptor the session itself, and from then on `O_NONBLOCK` does exactly what
+it says — which is when every program in the suite sets it, for its I/O loop.
+
+Answering `EINPROGRESS` honestly would mean making the descriptor writable
+exactly when the link comes up, and it cannot become writable on its own:
+before the call it is a placeholder and afterwards a socket pair end, writable
+at once either way.  Signalling through it would mean intercepting `poll()`
+and `select()` — putting the library back on the data path, which is the one
+thing this design exists to avoid.  So it is not offered rather than missing.
+Kernel AX.25 blocked in the same place, so a program sees no difference.
+
 The refusals carry a reason, which is the whole point of them:
 
 | line | errno |

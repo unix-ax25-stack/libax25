@@ -57,7 +57,7 @@ Terminal.
 Die Vorgabe folgt der *Art* des Eintrags, zu dem eine Sitzung gehört, nicht der
 Verbindung: ein Client bekommt binary, ein aus einem Pfad gestartetes Programm
 oder eine über TCP gewählte Sitzung ascii.  `datagram` schaltet seine
-Verbindung selbst auf binary, weil ein gezählter Rahmen aus Bytes besteht.
+Verbindung selbst auf binary, weil ein counted frame aus Bytes besteht.
 
 ### `handover`
 
@@ -178,11 +178,11 @@ hinaus, was eine Bake auf einem knotenweiten Eintrag verlangt.
 
 Mit einem Ziel auf derselben Zeile steht der Kopf für die ganze Sitzung fest
 und jede Zeile ist Nutzlast.  Ohne eines — die Form, die `libax25` benutzt —
-bringt jeder Rahmen seinen eigenen Kopf mit, in **der gezählten Form**.
+bringt jeder Rahmen seinen eigenen Kopf mit, in **counted form**.
 
 ---
 
-## Die gezählte Form
+## Counted form
 
 Beide Richtungen, und die einzige Gestalt, die beliebige Bytes überlebt:
 
@@ -196,7 +196,7 @@ unmittelbar danach und ist genau n Bytes lang.  **Kein Zeilenende beendet sie**
 — CR, LF und NUL sind gewöhnlicher Inhalt, und das ist der ganze Zweck.
 
 Ein `*` markiert ein Element, das den Rahmen bereits wiederholt hat.  Herein
-trägt es das Wiederholt-Bit ins SSID-Byte des Digipeaters, wohin es gehört.
+trägt es das repeated-bit ins SSID-Byte des Digipeaters, wohin es gehört.
 Hinaus schreibt `libax25` es nicht, was eine Lücke ist und keine Entscheidung.
 
 Senden, ein Rahmen:
@@ -223,8 +223,8 @@ ein Stream nicht hat.
 Diesen Teil liest man zweimal, denn hier wechselt der Deskriptor den Besitzer.
 
 1. Die Anwendung ruft `listen()`.  Der Shim öffnet eine Dienstverbindung,
-   sendet den Anspruch, und — das ist der Kniff — **diese Verbindung wird der
-   Lauschdeskriptor**.  `poll()` und `select()` darauf funktionieren deshalb
+   sendet den Anspruch, und — das ist der Kniff — **diese Verbindung wird zum
+   listening descriptor**.  `poll()` und `select()` darauf funktionieren deshalb
    ohne jedes Zutun von uns: er ist genau dann lesbar, wenn ein Anruf wartet.
 
 2. Je eingehendem Anruf legt der Knoten ein `socketpair` an, gibt ein Ende an
@@ -397,7 +397,7 @@ Bytes und dreht mit 100 % CPU, solange der Prozess lebt, denn Dateiende bleibt
 lesbar.
 
 **Ein Zählwert ist keine Zeile.**  Alles, was Nutzlast trägt, braucht die
-gezählte Form.  Ein Rahmen mit einem CR darin ist nichts Exotisches; es ist
+counted form.  Ein Rahmen mit einem CR darin ist nichts Exotisches; es ist
 das, was eine gewöhnliche AX.25-Station sendet.
 
 **Die Sockelart gehört zur Identität.**  Wenn ein Backend bei `bind()` einen
@@ -463,7 +463,7 @@ muss diese Fragen beantworten:
 ## Nicht gebaut: Zugriffskontrolle von der Unix-Seite
 
 Welche Unix-Identität welche AX.25-Ressource benutzen darf — ein Rufzeichen zum
-Hinausrufen, eines zum Lauschen, eine PID, die Wiederholt-Marke.  Heute wird
+Hinausrufen, eines zum Lauschen, eine PID, das repeated-bit.  Heute wird
 diese Frage gar nicht gestellt: der Modus des Sockets ist ein Tor, und dahinter
 ist alles erlaubt.
 
@@ -502,7 +502,7 @@ und es ist die Zeile, die den Unterschied macht zwischen „wer den Socket öffn
 darf, ist Sysop" und „wer den Socket öffnen darf, darf ein gewöhnlicher
 Benutzer sein".
 
-Die letzte Spalte ist die Wiederholt-Marke, falls sie je getragen wird: einen
+Die letzte Spalte ist das repeated-bit, falls sie je getragen wird: einen
 Rahmen so auszusenden, als hätte ein Sprung schon stattgefunden, ist das, was
 ein Knoten tut, der sich in einen Pfad einfügt, und es ist kein Betriebsverhalten.
 Sie steht deshalb in derselben Rechtezeile wie ein Quellrufzeichen, das einem
@@ -521,7 +521,7 @@ Kürzer, als es aussieht:
 * eine `***`-Zeile je Befehl, mit ausgeschriebenen Gründen, denn daraus wird
   auf der anderen Seite ein errno
 * `SCM_RIGHTS` mit der Zeile und dem Deskriptor in einem `sendmsg()`
-* die gezählte Form für Datagramme, in beide Richtungen
+* die counted form für Datagramme, in beide Richtungen
 * eine Tabelle der Ansprüche, geschlüsselt nach Rufzeichen, PID und
   verbunden-oder-UI
 

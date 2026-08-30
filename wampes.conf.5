@@ -59,10 +59,8 @@ and may answer with either family.
 Free text, ignored.
 .SH "THE TCP SERVICE"
 .LP
-A node keeps its TCP service switched off unless its
-.I net.rc
-says
-.BR "start axtcp" ,
+A node keeps its TCP service switched off unless it is told otherwise with
+.BR "axsock tcp-listen on" ,
 and when it is on it listens on 127.0.0.1 and ::1 only.  A TCP port carries
 no rights of its own: switching it on is the statement that every account on
 that machine may use the transmitter.  Reaching a node over TCP from
@@ -72,7 +70,23 @@ The unix socket is the other way round.  It carries its rights in its mode \-\-
 0660 and group
 .B hams
 where that group exists \-\- so the sysop decides who may use it with the
-tools the file system already has.
+tools the file system already has.  Both are set at the node with the same
+command, which also prints what they are:
+.PP
+.RS
+.nf
+axsock                          path, mode, owner, and the TCP state
+axsock group hams
+axsock mode 0660
+axsock tcp\-listen on|off|port <n>
+.fi
+.RE
+.LP
+It lives there, beside the unix socket it configures, rather than under
+.B start
+\-\- which is for the node's IP services and its login, and where a name like
+.I axtcp
+would have read as "AX.25 over a TCP socket", which is not what it is.
 .SH "WITHOUT THIS FILE"
 .LP
 The file is optional.  Without it a single node at

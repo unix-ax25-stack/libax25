@@ -505,7 +505,7 @@ Benutzer sein".
 Die letzte Spalte ist das repeated-bit, falls es gesetzt wird: einen
 Rahmen so auszusenden, als hätte ein Sprung schon stattgefunden, ist das, was
 ein Knoten tut, der sich in einen Pfad einfügt, und es ist kein Betriebsverhalten.
-Sie steht deshalb in derselben Rechtezeile wie ein Quellrufzeichen, das einem
+Es steht deshalb in derselben Rechtezeile wie ein Quellrufzeichen, das einem
 nicht gehört — beides sind Arten, auf dem Kanal jemand anders zu scheinen, und
 beides gehört zur Software, die die Station betreibt, und nicht zu der Person,
 die sie benutzt.

@@ -72,9 +72,11 @@ written in code.
 
 ## Open
 
-**The has-been-repeated bit, outgoing.**  A frame received through a node
-carries the `*` into the digipeater's SSID byte; a frame sent out drops it,
-because the TNC2 header is written from the address as it stands.  There are
+**The has-been-repeated bit on anything we send — UI frames and I frames
+alike.**  A frame received through a node carries the `*` into the
+digipeater's SSID byte; a frame sent out drops it, in both directions and for
+the same reason: the header is written from the address as it stands, and
+nothing looks at the bit.  There are
 uses — forwarding a frame, recording that the first hop already happened.
 
 The library side is small: write the `*` into the header it already builds.

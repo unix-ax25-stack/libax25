@@ -253,6 +253,14 @@ In short: **the boundary is a file system one, and it is real — but everything
 inside it is trusted.**  Treat membership in that group as you would treat the
 right to use the transmitter, because that is what it is.
 
+Read that list as what is *possible*, not as what is likely.  A service binds
+when the machine starts and holds its callsign for as long as it runs, and
+what is held cannot be taken.  It is the same class of thing as a unix user
+being able to bind TCP port 443: perfectly true, and not how anybody's web
+server gets taken over, because the server got there first and owns the
+socket.  And a claim can only ever match what the sysop already wrote down —
+the callsign, its SSID, and where `pid=` says so, the protocol.
+
 The node can also offer the same service over TCP (`axsock tcp-listen on`,
 127.0.0.1 and ::1 only; `axsock` alone shows whether it is on).  That switch
 removes the file system from the picture: every account on the machine can

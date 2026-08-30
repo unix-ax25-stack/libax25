@@ -502,7 +502,7 @@ und es ist die Zeile, die den Unterschied macht zwischen „wer den Socket öffn
 darf, ist Sysop" und „wer den Socket öffnen darf, darf ein gewöhnlicher
 Benutzer sein".
 
-Die letzte Spalte ist das repeated-bit, falls sie je getragen wird: einen
+Die letzte Spalte ist das repeated-bit, falls es gesetzt wird: einen
 Rahmen so auszusenden, als hätte ein Sprung schon stattgefunden, ist das, was
 ein Knoten tut, der sich in einen Pfad einfügt, und es ist kein Betriebsverhalten.
 Sie steht deshalb in derselben Rechtezeile wie ein Quellrufzeichen, das einem

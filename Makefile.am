@@ -104,7 +104,8 @@ dist_doc_DATA = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
 		README-linux-systemd.txt \
 		doc/AX25-WITHOUT-KERNEL-SYSOP.md \
 		doc/AX25-WITHOUT-KERNEL-DEVELOPER.md \
-		doc/TODO.md
+		doc/TODO.md \
+		doc/AX25-WITHOUT-KERNEL-SYSOP.de.md
 
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/

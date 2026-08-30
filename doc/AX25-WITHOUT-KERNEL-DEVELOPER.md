@@ -227,8 +227,15 @@ the call.
 
 ## What the shim does with a descriptor
 
-`socket()` cannot know the port yet, and the application wants a number now.
-So:
+**The interception decides and then gets out of the way.**  It is not a proxy:
+nothing relays bytes, and no thread sits between the application and its
+session.  Every call is answered as briefly as it can be and handed on — and
+the last one hands the descriptor itself over, after which the library is not
+involved at all.
+
+The order of the calls is what makes that possible, and also what forces the
+one awkward part.  `socket()` cannot know the port yet, and the application
+wants a number now.  So:
 
 ```
 socket()    a placeholder — an unbound unix socket, and a real descriptor
@@ -242,6 +249,20 @@ listen()    the claim, and the connection takes the descriptor's place
 From `connect()` onwards **nothing of ours is on the data path**.  `read()`,
 `write()`, `poll()` and `close()` reach the kernel directly; that is the whole
 reason for handing a descriptor over rather than relaying bytes.
+
+`bind()` being the moment of decision has a consequence worth naming, because
+it is what lets a station try this at all: **the backend is chosen per port,
+not per process.**  The callsign is looked up in `axports(5)`; if its entry
+belongs to a node in `wampes.conf(5)`, the socket changes hands — and it does
+so even when the descriptor came from the kernel stack, because the handover
+replaces whatever was behind the number.  A program can therefore reach a
+kernel port and a node port in turn, in one process, with nothing configured
+to say so.
+
+The kernel-or-AGWPE question is not there yet: it is answered once per
+process, by a single probe at the first AX.25 socket, and cached.  Making that
+one per port as well is the obvious next step and needs no protocol change —
+only the same lookup, one layer down.
 
 A datagram socket claims its callsign at `bind()` rather than at the first
 `recvfrom()`, so that `select()` is readable when a frame arrives rather than

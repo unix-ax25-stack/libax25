@@ -229,6 +229,14 @@ Then members of the group may use the transmitter and nobody else can even
 connect.  Finer grain is the file system's business, not ours — a group per
 daemon, an ACL for one account, whatever your machine already does.
 
+Both of those lines belong in `net.rc` rather than in your fingers, and the
+reason is that **the socket file does not survive a restart**.  A node that
+starts finds the old one in the way and removes it before binding — carefully:
+only if it really is a socket, and only if nothing answers on it, so that a
+running node is never robbed of its own.  What it then creates is a new file
+with the default mode.  A `chmod` you typed is gone at that moment; a line in
+`net.rc` is applied again every time.
+
 **Say what that means before you widen it.**  Somebody who can open the socket
 can:
 

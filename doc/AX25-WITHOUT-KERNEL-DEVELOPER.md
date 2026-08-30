@@ -465,12 +465,20 @@ the loopback.
 With that, what a program may do could be graded, which is a different
 question from who may register a listener:
 
-| | connect out as | may listen | may choose a pid |
-|---|---|---|---|
-| a service's own uid (conversd) | its callsign | yes | yes |
-| group `hamsoft` | anything | yes | yes |
-| group `hams` — an ordinary licensee | own callsign, any SSID | no | text only |
-| anybody else | nothing | no | no |
+| | connect out as | may listen | may choose a pid | may mark a hop `*` |
+|---|---|---|---|---|
+| a service's own uid (conversd) | its callsign | yes | yes | yes |
+| group `hamsoft` | anything | yes | yes | yes |
+| group `hams` — an ordinary licensee | own callsign, any SSID | no | text only | no |
+| anybody else | nothing | no | no | no |
+
+The last column is the has-been-repeated mark, if it is ever carried: emitting
+a frame as though a hop had already happened is what a node does when it
+inserts itself into a path, and it is not ordinary operating.  It therefore
+sits in the same row of rights as choosing a source callsign that is not
+yours — both are ways of appearing to be somebody else on the channel, and
+both belong to the software that runs the station rather than to the person
+using it.
 
 The middle row is the interesting one, and it is not hypothetical: a licensed
 operator should be able to call out under their own callsign and nothing else

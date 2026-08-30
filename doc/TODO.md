@@ -135,32 +135,25 @@ file being ignored.
 
 ## Measurements outstanding
 
-**Does kernel AX.25 deliver a copy to every bound socket?**  Three processes
-bound the same callsign with the same pid on a machine with the kernel stack
-and none was refused, so the kernel is looser than we are.  Whether all of them
-would then have *received* an incoming frame is untested, and it decides
-whether the difference matters: an APRS listener beside an operating program on
-one callsign works there and does not here.
+**Does kernel AX.25 deliver a copy to every bound datagram socket?**  Three
+processes bound the same callsign with the same pid on a machine with the
+kernel stack and none was refused, so the kernel is looser than we are — we
+hold a callsign for one program.  Whether all three would then have *received*
+an incoming UI frame is the open half, and it decides whether the difference
+matters: an APRS listener beside an operating program on one callsign works
+there and does not here.
 
-It needs a frame from another station — a machine's own transmissions do not
-reach its own datagram sockets, not even the digipeated repeat, although
-`listen(1)` shows both.
+The attempt to answer it stopped early, and honestly so: with a frame sent
+from the same machine **none** of the three saw anything, not even one.  The
+likely reason is that a machine's own transmissions do not reach its own
+datagram sockets, not even the digipeated repeat, although `listen(1)` shows
+both — but that was not chased down either.  It wants a frame from a second
+station, addressed to the bound callsign rather than passing through it as a
+digipeater.
 
 ---
 
-## Deliberately not built
-
-Written down so that the next person knows these were considered.
-
-**Self-registering listeners.**  A listener is administrative: the sysop opens
-a callsign, a program claims it.  A protocol where `bind()` and `listen()`
-register it instead is imaginable; the questions it would have to answer are in
-`AX25-WITHOUT-KERNEL-DEVELOPER.md`.
-
-**Asking who is speaking.**  The service socket carries no identity, and a unix
-socket could be asked — `SO_PEERCRED`, `getpeereid`, `LOCAL_PEERCRED`.  With
-that, what a program may do could be graded rather than being all-or-nothing at
-the socket's mode.  Same file, next section.
+## Decided against
 
 **A non-blocking `connect()`.**  Not offered rather than missing.  Answering
 `EINPROGRESS` honestly would mean making the descriptor writable exactly when
@@ -168,3 +161,25 @@ the link comes up, which would mean intercepting `poll()` and `select()` —
 putting the library back on the data path, which is the one thing this design
 exists to avoid.  Every program in the suite that sets `O_NONBLOCK` sets it
 after connecting, for its I/O loop, and that works today.
+
+---
+
+## Not built yet, and in this order
+
+Not decided against — the ideas arrived later, or the priorities were
+elsewhere.  The order matters: **the identity question first, then
+self-registration.**  Built the other way round, a registration protocol would
+have to be reopened to let credentials into it.
+
+**Asking who is speaking.**  The service socket carries no identity, and a unix
+socket could be asked — `SO_PEERCRED`, `getpeereid`, `LOCAL_PEERCRED`.  With
+that, what a program may do could be graded rather than being all-or-nothing at
+the socket's mode: which source callsigns, whether it may listen, which pids,
+whether it may mark a hop as repeated.  The table is in
+`AX25-WITHOUT-KERNEL-DEVELOPER.md`.
+
+**Self-registering listeners.**  A listener is administrative: the sysop opens
+a callsign, a program claims it.  A protocol where `bind()` and `listen()`
+register it instead is imaginable; the questions it would have to answer are in
+`AX25-WITHOUT-KERNEL-DEVELOPER.md`.
+

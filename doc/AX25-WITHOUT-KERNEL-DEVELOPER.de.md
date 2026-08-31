@@ -325,6 +325,49 @@ lesbar.  Wie die Bibliothek auf dem jeweiligen System überhaupt vor ein
 Programm kommt, steht in `axsock(7)` — das unterscheidet sich: starke Symbole
 auf ELF, eine Interpose-Tabelle auf macOS.
 
+### Wenn der Kernel-Stack da ist
+
+Ob es einen gibt, wird einmal gefragt, beim ersten AX.25-Socket, indem einer
+geöffnet wird:
+
+```c
+int fd = real_socket(AF_AX25, SOCK_SEQPACKET, 0);
+```
+
+* er geht auf — das Modul ist geladen, also nimm es
+* `EAFNOSUPPORT`, `EPROTONOSUPPORT`, `EPFNOSUPPORT` — die Familie hat niemand
+  registriert, es gibt also keinen nativen Stack, und dann eben der
+  Userspace-Weg
+* alles andere, etwa `EPERM` — Kernel bleibt gewählt, damit das `socket()` des
+  Aufrufers den echten Grund meldet, statt still umgeleitet zu werden
+
+Gefragt wird eine Tatsache, nicht eine Politik gewählt: *ist das Modul
+geladen*, einmal.
+
+Ein Kernel-Deskriptor steht danach in keiner unserer Tabellen, und jeder
+abgefangene Aufruf fällt sofort zum echten durch — `send`, `sendto`, `write`,
+`recv`, `recvfrom`, `shutdown`, `close`, `setsockopt`, `getsockopt`, `ioctl`,
+`getsockname`, `getpeername`, `listen`, `accept`, `connect`.  Zwei Aufrufe
+stehen nicht auf dieser Liste:
+
+* `socket()`, wo die Frage oben gestellt wird
+* `bind()`, das angesehen wird, weil dort ein Rufzeichen einen Port benennt —
+  und gehört der Port zu einem Knoten, wechselt der Deskriptor genau dort den
+  Besitzer, ein Kernel-Socket eingeschlossen
+
+Eine Folge auf einer Maschine mit beidem, die man wissen sollte, bevor sie
+jemanden ratlos macht: `axctl(8)` und `axkill(8)` öffnen einen Socket und
+setzen ein `ioctl` ab, ohne je zu binden — sie erreichen also die Verbindungen
+des Kernels.  Eine Sitzung, die über einen Knoten läuft, können sie nicht
+steuern.
+
+**Ausblick.**  Verschwindet der Kernel-Stack endgültig, ist der natürliche
+Endzustand, dass er zu einem dritten Backend derselben Gestalt wird wie die
+beiden anderen — ein Dispatch, drei Plugins, nirgends ein Sonderfall.  Heute
+ist er das mit Absicht nicht: ein Kernel-Deskriptor steht in keiner unserer
+Tabellen, und jeder Aufruf darauf fällt sofort durch, was den einen Pfad, der
+nachweislich funktioniert, von allem unberührt lässt, was wir tun.
+
 ### Was ein Kind erbt
 
 `ax25d` gibt einem Dienst die Verbindung auf Deskriptor 0, und das Kind fragt

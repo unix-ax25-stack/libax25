@@ -2190,34 +2190,30 @@ int AXSOCK_ENTRY(shutdown)(int fd, int how)
 	return real_shutdown(fd, how);
 }
 
-int AXSOCK_ENTRY(close)(int fd)
+/*
+ * Fast path: when no AGWPE-backed socket exists, close() is a plain
+ * descriptor release.  This also keeps a signal handler calling close() from
+ * ever taking the lock (and thus from ever waiting on another thread):
+ * listen's SIGINT handler closes the monitor socket this way.  The one call
+ * that cannot be kept out of the lock is closing the monitor socket itself
+ * while the dispatch thread is mid-write - the recursive mutex makes that
+ * safe as long as the lock hold times are short, which the send-without-lock
+ * paths above guarantee.
+ */
+
+static int agwpe_close(int fd, int *ret)
 {
 	struct axsock_sock *s, **pp;
 	int peer, rfd;
 
-	/*
-	 * Fast path: when no AGWPE-backed socket exists, close() is a
-	 * plain descriptor release.  This also keeps a signal handler
-	 * calling close() from ever taking the lock (and thus from ever
-	 * waiting on another thread): listen's SIGINT handler closes the
-	 * monitor socket this way.  The one call that cannot be kept out
-	 * of the lock is closing the monitor socket itself while the
-	 * dispatch thread is mid-write - the recursive mutex makes that
-	 * safe as long as the lock hold times are short, which the
-	 * send-without-lock paths above guarantee.
-	 */
-	/* A WAMPES placeholder that never reached connect() - after connect()
-	 * there is nothing of ours left to forget. */
-	wampes_close(fd);
-
 	if (!axsock_may_have_sock())
-		return real_close(fd);
+		return 0;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
-		return real_close(fd);
+		return 0;
 	}
 
 	/* An accepted socket: its peer reader thread forwards the child's
@@ -2232,7 +2228,8 @@ int AXSOCK_ENTRY(close)(int fd)
 		pthread_mutex_unlock(&axsock_lock);
 		if (rfd_app >= 0)
 			real_close(rfd_app);
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 
 	axsock_disconnect_locked(s);
@@ -2263,7 +2260,23 @@ int AXSOCK_ENTRY(close)(int fd)
 		real_close(peer);
 	real_close(rfd);
 	free(s);
-	return 0;
+	*ret = 0;
+	return 1;
+}
+
+int AXSOCK_ENTRY(close)(int fd)
+{
+	int ret;
+
+	/* A WAMPES placeholder that never reached connect() - after connect()
+	 * there is nothing of ours left to forget.  It answers nothing, so it
+	 * is not asked in the same breath as the others: whatever it held is
+	 * released and the descriptor is still closed below. */
+	wampes_close(fd);
+
+	if (agwpe_close(fd, &ret))
+		return ret;
+	return real_close(fd);
 }
 
 static int agwpe_listen(int fd, int *ret)
@@ -2307,32 +2320,25 @@ int AXSOCK_ENTRY(listen)(int fd, int backlog)
 	return real_listen(fd, backlog);
 }
 
-int AXSOCK_ENTRY(accept)(int fd, struct sockaddr *addr, socklen_t *addrlen)
+static int agwpe_accept(int fd, struct sockaddr *addr, socklen_t *addrlen,
+			int *ret)
 {
 	struct axsock_sock *s, *p;
 	int afd;
-
-	if (getenv("AXSOCK_DEBUG"))
-		fprintf(stderr, "axsock: accept(fd=%d) called\n", fd);
-	{
-		int ret;
-
-		if (wampes_accept(fd, addr, addrlen, &ret))
-			return ret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
-		return real_accept(fd, addr, addrlen);
+		return 0;
 	}
 
 	p = s->pending;
 	if (p == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
 		errno = EAGAIN;
-		return -1;
+		*ret = -1;
+		return 1;
 	}
 	s->pending = p->pend_next;
 	afd = p->fd;
@@ -2379,7 +2385,22 @@ int AXSOCK_ENTRY(accept)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 			ax25_aton_entry(p->remote, sa->sax25_call.ax25_call);
 		*addrlen = sizeof(struct sockaddr_ax25);
 	}
-	return afd;
+	*ret = afd;
+	return 1;
+}
+
+int AXSOCK_ENTRY(accept)(int fd, struct sockaddr *addr, socklen_t *addrlen)
+{
+	int ret;
+
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "axsock: accept(fd=%d) called\n", fd);
+
+	if (wampes_accept(fd, addr, addrlen, &ret))
+		return ret;
+	if (agwpe_accept(fd, addr, addrlen, &ret))
+		return ret;
+	return real_accept(fd, addr, addrlen);
 }
 
 /* AX.25 option names for the stderr warning below.  */

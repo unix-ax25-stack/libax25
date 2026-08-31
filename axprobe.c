@@ -931,6 +931,172 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 	return bad;
 }
 
+/*
+ * A fast sender and a slow reader, which is the pair that used to lose data.
+ *
+ * Every line carries its own number, so the check is not "did roughly the
+ * right amount arrive" but "is line 4711 the one after 4710": a hole in the
+ * middle of the stream is what a dropped frame tail actually looks like, and
+ * counting bytes would not see it.  The reader sleeps first so that the
+ * socketpair fills while nothing is draining it - without that pause the
+ * application keeps up and the interesting path is never taken.
+ */
+
+#define FLOOD_LINE	1024
+
+static int flood(const char *portcall, const char *src, const char *dst,
+		 int count)
+{
+	struct full_sockaddr_ax25 sa;
+	char line[FLOOD_LINE + 1];
+	int fd, i;
+
+	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+		perror("axprobe: socket");
+		return 1;
+	}
+	if (bind_port(fd, portcall, strcmp(src, "-") ? src : portcall) < 0)
+		return 1;
+	memset(&sa, 0, sizeof(sa));
+	sa.fsa_ax25.sax25_family = AF_AX25;
+	if (aton_entry(dst, sa.fsa_ax25.sax25_call.ax25_call) < 0) {
+		fprintf(stderr, "axprobe: invalid destination '%s'\n", dst);
+		return 1;
+	}
+	if (p_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		perror("axprobe: connect");
+		return 1;
+	}
+
+	memset(line, '.', sizeof(line));
+	for (i = 0; i < count; i++) {
+		size_t off = 0;
+
+		snprintf(line, sizeof(line), "SEQ %06d ", i);
+		line[strlen(line)] = '.';	/* undo the terminator */
+		line[FLOOD_LINE - 1] = '\n';
+		while (off < FLOOD_LINE) {
+			ssize_t n = write(fd, line + off, FLOOD_LINE - off);
+
+			if (n < 0) {
+				fprintf(stderr, "axprobe: write at line %d: %s\n",
+					i, strerror(errno));
+				close(fd);
+				return 1;
+			}
+			off += (size_t) n;
+		}
+	}
+	if (verbose)
+		fprintf(stderr, "axprobe: sent %d lines of %d bytes\n", count,
+			FLOOD_LINE);
+	/* Let the far end drain before the close tears the session down. */
+	poll(NULL, 0, 3000);
+	close(fd);
+	return 0;
+}
+
+static int sink(const char *portcall, const char *call, int slow_ms)
+{
+	struct full_sockaddr_ax25 sa;
+	socklen_t alen = sizeof(sa);
+	char buf[65536];
+	char partial[FLOOD_LINE + 1];
+	size_t plen = 0;
+	long long bytes = 0;
+	int fd, nfd, want = 0, holes = 0, disorder = 0;
+
+	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+		perror("axprobe: socket");
+		return 1;
+	}
+	if (bind_port(fd, portcall, call) < 0)
+		return 1;
+	if (p_listen(fd, 1) < 0) {
+		perror("axprobe: listen");
+		return 1;
+	}
+	memset(&sa, 0, sizeof(sa));
+	if ((nfd = p_accept(fd, (struct sockaddr *)&sa, &alen)) < 0) {
+		perror("axprobe: accept");
+		return 1;
+	}
+	if (verbose)
+		fprintf(stderr, "axprobe: call from %s, sleeping %d ms\n",
+			ntoa(sa.fsa_ax25.sax25_call.ax25_call), slow_ms);
+
+	/* Nothing is read while this runs: the socketpair fills up, and the
+	 * library has to hold what it cannot deliver. */
+	poll(NULL, 0, slow_ms);
+
+	for (;;) {
+		struct pollfd pfd;
+		ssize_t n;
+		size_t off = 0;
+
+		pfd.fd = nfd;
+		pfd.events = POLLIN;
+		if (poll(&pfd, 1, 5000) <= 0)
+			break;
+		if ((n = read(nfd, buf, sizeof(buf))) <= 0)
+			break;
+		bytes += n;
+
+		/* Line by line, across read boundaries. */
+		while (off < (size_t) n) {
+			size_t k = off;
+
+			while (k < (size_t) n && buf[k] != '\n')
+				k++;
+			if (k == (size_t) n) {		/* no newline yet */
+				size_t rest = (size_t) n - off;
+
+				if (plen + rest < sizeof(partial)) {
+					memcpy(partial + plen, buf + off, rest);
+					plen += rest;
+				}
+				break;
+			}
+			{
+				char whole[FLOOD_LINE + 1];
+				size_t len = k - off;
+				int got;
+
+				if (plen > 0) {
+					if (plen + len >= sizeof(whole))
+						len = sizeof(whole) - plen - 1;
+					memcpy(whole, partial, plen);
+					memcpy(whole + plen, buf + off, len);
+					whole[plen + len] = '\0';
+					plen = 0;
+				} else {
+					if (len >= sizeof(whole))
+						len = sizeof(whole) - 1;
+					memcpy(whole, buf + off, len);
+					whole[len] = '\0';
+				}
+				if (sscanf(whole, "SEQ %d", &got) == 1) {
+					if (got == want) {
+						want++;
+					} else if (got > want) {
+						holes += got - want;
+						want = got + 1;
+					} else {
+						disorder++;
+					}
+				}
+			}
+			off = k + 1;
+		}
+	}
+
+	printf("sink: %d lines, %lld bytes, %d missing, %d out of order\n",
+	       want, bytes, holes, disorder);
+	close(nfd);
+	close(fd);
+	return (holes != 0 || disorder != 0) ? 1 : 0;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -940,6 +1106,8 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] multi   <port> <src>:<dest>[@<port>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] mlisten <port> <call>[@<port>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] mui     <port> <call>[:<dest>] ...\n"
+		"       axprobe [-d] [-q] [-f axports] flood   <port> <src>:<dest> <lines>\n"
+		"       axprobe [-d] [-q] [-f axports] sink    <port> <call> <sleep-ms>\n"
 		"\n"
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
 		"      calling them directly - the only way an inserted library is seen\n"
@@ -1063,6 +1231,24 @@ int main(int argc, char **argv)
 		if (verbose)
 			report(nfd);
 		return shovel(nfd);
+	}
+
+	if (strcmp(cmd, "flood") == 0) {
+		const char *colon = strchr(call, ':');
+		char src[16];
+
+		close(fd);
+		if (colon == NULL || optind >= argc)
+			usage();
+		snprintf(src, sizeof(src), "%.*s", (int)(colon - call), call);
+		return flood(portcall, src, colon + 1, atoi(argv[optind]));
+	}
+
+	if (strcmp(cmd, "sink") == 0) {
+		close(fd);
+		if (optind >= argc)
+			usage();
+		return sink(portcall, call, atoi(argv[optind]));
 	}
 
 	if (strcmp(cmd, "mui") == 0) {

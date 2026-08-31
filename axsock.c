@@ -45,6 +45,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <time.h>
 #include <dlfcn.h>
@@ -292,6 +293,10 @@ struct axsock_sock {
 	char			bound[16];	/* raw monitor: SOCK_PACKET bind
 					   device name, '' = all ports */
 	int			registered;	/* call registered with the server */
+	unsigned char		*pend;	/* inbound bytes the peer end would
+					 * not take yet, in order */
+	size_t			plen;	/* how many of them are waiting */
+	size_t			pcap;	/* how much pend can hold */
 	int			port_named;	/* bind named the port itself, in
 					 * the digipeater slot - connect()
 					 * must not talk it over */
@@ -323,6 +328,8 @@ static pthread_cond_t	axsock_cond = PTHREAD_COND_INITIALIZER;
 static struct axsock_sock	*axsock_list;
 static int			axsock_nsock;
 static int			axsock_nraw;	/* open SOCK_PACKET monitors */
+static int			axsock_npending; /* sockets with a queue, so the
+					  * reader knows to come back */
 
 /* SOL_AX25 options already warned about (setsockopt: once per process
  * and option, see axsock_setsockopt).  Guarded by axsock_lock.  */
@@ -1097,6 +1104,155 @@ static int axsock_call_match(const char *listener, const char *target)
  * Route one incoming frame to the matching virtual socket.  Runs in the
  * reader thread.
  */
+/*
+ * Getting an inbound frame to the application, without losing any of it.
+ *
+ * The peer end of the socketpair is non-blocking, which it has to be: this
+ * runs on the one reader thread that serves every session, and it holds
+ * axsock_lock, so waiting here would not stall one session but the library -
+ * every close(), connect() and send() the application makes queues behind
+ * the same mutex.
+ *
+ * What it did instead was treat EAGAIN as an answer and throw away the rest
+ * of the frame, which is the one thing that must not happen: EAGAIN says
+ * nothing was taken and to come back, and on a byte-stream socketpair - what
+ * macOS gives, having no SEQPACKET pair - the loss is not a missing frame
+ * but a hole in the middle of the stream, which the application cannot see.
+ *
+ * So keep what the socket would not take and push it later, which is what
+ * ax25netd does for its own clients in loop_send_client().  The reader loop
+ * stops blocking for as long as anything is queued and comes back to flush;
+ * with nothing queued it blocks as it always did, so the cost falls entirely
+ * on the case that used to lose data.
+ *
+ * A ceiling is still needed, because a reader that never reads must not grow
+ * this without end.  Past it the session goes, loudly - a disconnect is
+ * something the application can see and act on, which is exactly what the
+ * silent hole was not.
+ */
+
+#define	AXSOCK_PEND_MAX	(1 * 1024 * 1024)	/* as NETD_OUT_MAX in ax25netd */
+
+static void axsock_peer_drop_locked(struct axsock_sock *s, const char *why)
+{
+	fprintf(stderr, "axsock: %s for %.*s - closing the session\n", why,
+		AGWPE_MAX_CALL, s->remote);
+	free(s->pend);
+	s->pend = NULL;
+	if (s->plen > 0)
+		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
+	s->plen = 0;
+	s->pcap = 0;
+	if (s->peer >= 0) {
+		real_close(s->peer);
+		s->peer = -1;
+	}
+	s->state = AXSOCK_NEW;
+}
+
+/* Push what is waiting.  Called with axsock_lock held; every write here is
+ * non-blocking, so the lock is never held across a wait. */
+static void axsock_peer_flush_locked(struct axsock_sock *s)
+{
+	size_t off = 0;
+
+	if (s->plen == 0 || s->peer < 0)
+		return;
+
+	while (off < s->plen) {
+		ssize_t n = real_write(s->peer, s->pend + off, s->plen - off);
+
+		if (n < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				break;			/* still full */
+			axsock_peer_drop_locked(s, "the peer end is gone");
+			return;
+		}
+		off += (size_t) n;
+	}
+
+	if (off == s->plen) {
+		s->plen = 0;
+		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
+	} else if (off > 0) {
+		memmove(s->pend, s->pend + off, s->plen - off);
+		s->plen -= off;
+	}
+}
+
+/* Everything of it or nothing lost.  Returns 0 when the session lives on,
+ * whether the bytes went out or were put by; -1 when it was torn down. */
+static int axsock_peer_write_locked(struct axsock_sock *s,
+				    const unsigned char *data, size_t len)
+{
+	size_t off = 0;
+
+	if (s->peer < 0)
+		return -1;
+
+	/* Anything already waiting goes first, or the stream would arrive
+	 * out of order - which is worse than arriving late. */
+	axsock_peer_flush_locked(s);
+	if (s->peer < 0)
+		return -1;
+
+	if (s->plen == 0) {
+		while (off < len) {
+			ssize_t n = real_write(s->peer, data + off, len - off);
+
+			if (n < 0) {
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					break;
+				axsock_peer_drop_locked(s,
+					"the peer end is gone");
+				return -1;
+			}
+			off += (size_t) n;
+		}
+		if (off == len)
+			return 0;
+	}
+
+	if (s->plen + (len - off) > AXSOCK_PEND_MAX) {
+		axsock_peer_drop_locked(s,
+			"the application stopped reading and the queue is full");
+		return -1;
+	}
+
+	if (s->plen + (len - off) > s->pcap) {
+		size_t want = s->pcap ? s->pcap : 4096;
+		unsigned char *nb;
+
+		while (want < s->plen + (len - off))
+			want *= 2;
+		if ((nb = realloc(s->pend, want)) == NULL) {
+			axsock_peer_drop_locked(s, "out of memory queueing");
+			return -1;
+		}
+		s->pend = nb;
+		s->pcap = want;
+	}
+
+	if (s->plen == 0)
+		__atomic_add_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
+	memcpy(s->pend + s->plen, data + off, len - off);
+	s->plen += len - off;
+	return 0;
+}
+
+/* Called from the reader thread between frames: whatever became writable
+ * while it was waiting goes out now. */
+static void axsock_flush_pending(void)
+{
+	struct axsock_sock *s;
+
+	pthread_mutex_lock(&axsock_lock);
+	for (s = axsock_list; s != NULL; s = s->next)
+		if (s->plen > 0)
+			axsock_peer_flush_locked(s);
+	pthread_mutex_unlock(&axsock_lock);
+}
+
 static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 			    const unsigned char *data, size_t len)
 {
@@ -1166,36 +1322,13 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 		if (s->state == AXSOCK_CONNECTED &&
 		    strncasecmp(s->remote, hdr->call_from, AGWPE_MAX_CALL) == 0) {
 			if (hdr->datakind == AGWPE_DK_DATA && s->peer >= 0) {
-				size_t off = 0;
-				int err = 0;
-
-				while (off < len) {
-					ssize_t n;
-
-					n = real_write(s->peer, data + off,
-						       len - off);
-					if (n < 0) {
-						err = errno;
-						break;
-					}
-					off += n;
-				}
-				if (off < len && getenv("AXSOCK_DEBUG"))
-					fprintf(stderr,
-						"axsock: dispatch eagain drop %zd of %zd bytes (errno=%d) to %.*s\n",
-						len - off, len, err,
-						AGWPE_MAX_CALL, s->remote);
-				if (off < len && err != EAGAIN &&
-				    err != EWOULDBLOCK) {
-					/* No reader left on the peer end:
-					 * the peer application is gone.
-					 * Wake the peer reader thread by
-					 * closing the router end; it owns
-					 * the teardown.
-					 */
-					if (s->peer >= 0)
-						real_close(s->peer);
-					s->peer = -1;
+				/* Whole or queued, never half: see
+				 * axsock_peer_write_locked() above.  A hard
+				 * error there has already closed the router
+				 * end, which wakes the peer reader thread -
+				 * it owns the teardown. */
+				if (axsock_peer_write_locked(s, data, len)
+				    != 0) {
 					found = 1;
 					break;
 				}
@@ -1282,7 +1415,15 @@ static void *axsock_reader(void *arg)
 	pthread_sigmask(SIG_BLOCK, &set, NULL);
 
 	for (;;) {
-		if (agwpe_client_pump(axsock_agwpe, -1) < 0) {
+		/* Blocking wait as before while nothing is queued.  With a
+		 * queue there is a second thing to wait for - the peer end
+		 * becoming writable - and it is not on this select, so come
+		 * back regularly instead.  The cost falls only on the case
+		 * that used to lose the data. */
+		int wait = __atomic_load_n(&axsock_npending, __ATOMIC_RELAXED)
+			? 20 : -1;
+
+		if (agwpe_client_pump(axsock_agwpe, wait) < 0) {
 			struct axsock_sock *s;
 
 			pthread_mutex_lock(&axsock_lock);
@@ -1303,6 +1444,8 @@ static void *axsock_reader(void *arg)
 			pthread_mutex_unlock(&axsock_lock);
 			return NULL;
 		}
+		if (__atomic_load_n(&axsock_npending, __ATOMIC_RELAXED))
+			axsock_flush_pending();
 	}
 	return NULL;
 }
@@ -1520,6 +1663,7 @@ static void axsock_peer_reader_teardown(struct axsock_sock *s)
 	if (s->fd >= 0)
 		real_close(s->fd);
 	s->fd = -1;
+	free(s->pend);
 	free(s);
 }
 
@@ -1651,6 +1795,9 @@ int axsock_forget(int fd)
 	*pp = s->next;
 	__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
 	peer = s->peer;
+	if (s->plen > 0)
+		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
+	free(s->pend);
 	free(s);
 	pthread_mutex_unlock(&axsock_lock);
 	if (peer >= 0)
@@ -2347,6 +2494,9 @@ static int agwpe_close(int fd, int *ret)
 	if (peer >= 0)
 		real_close(peer);
 	real_close(rfd);
+	if (s->plen > 0)
+		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
+	free(s->pend);
 	free(s);
 	*ret = 0;
 	return 1;
@@ -2414,20 +2564,50 @@ static int agwpe_accept(int fd, struct sockaddr *addr, socklen_t *addrlen,
 	struct axsock_sock *s, *p;
 	int afd;
 
-	pthread_mutex_lock(&axsock_lock);
-	s = axsock_find_locked(fd);
-	if (s == NULL) {
+	/*
+	 * On a blocking socket accept() waits, which it did not: it answered
+	 * EAGAIN whether or not O_NONBLOCK was set.  Every program in the
+	 * suite selects before it accepts, so none of them ever saw it, and
+	 * one that simply calls accept() got an error it had no reason to
+	 * expect.  The WAMPES side has always waited here.
+	 *
+	 * A queued connection also writes a readiness byte to the listening
+	 * descriptor - that is what makes select() work - so waiting for it
+	 * to become readable is the same wait, and the lock is not held
+	 * across it.
+	 */
+	for (;;) {
+		struct pollfd pfd;
+		int lfd, nb;
+
+		pthread_mutex_lock(&axsock_lock);
+		s = axsock_find_locked(fd);
+		if (s == NULL) {
+			pthread_mutex_unlock(&axsock_lock);
+			return 0;
+		}
+		if (s->pending != NULL)
+			break;
+
+		nb = (fcntl(s->fd, F_GETFL, 0) & O_NONBLOCK) != 0;
+		lfd = s->fd;
 		pthread_mutex_unlock(&axsock_lock);
-		return 0;
+
+		if (nb) {
+			errno = EAGAIN;
+			*ret = -1;
+			return 1;
+		}
+
+		pfd.fd = lfd;
+		pfd.events = POLLIN;
+		if (poll(&pfd, 1, -1) < 0 && errno != EAGAIN) {
+			*ret = -1;	/* EINTR belongs to the caller */
+			return 1;
+		}
 	}
 
 	p = s->pending;
-	if (p == NULL) {
-		pthread_mutex_unlock(&axsock_lock);
-		errno = EAGAIN;
-		*ret = -1;
-		return 1;
-	}
 	s->pending = p->pend_next;
 	afd = p->fd;
 
@@ -2864,6 +3044,7 @@ static void axsock_atfork_child(void)
 
 	axsock_list = NULL;
 	axsock_nsock = 0;
+	axsock_npending = 0;
 	axsock_agwpe = NULL;
 	axsock_up = 0;
 	axsock_nregistered = 0;

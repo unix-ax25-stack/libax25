@@ -1928,20 +1928,28 @@ int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
 	return -1;
 }
 
-ssize_t AXSOCK_ENTRY(send)(int fd, const void *buf, size_t len, int flags)
+static int agwpe_send(int fd, const void *buf, size_t len, ssize_t *ret)
 {
 	struct axsock_sock *s;
-	ssize_t r;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
-		return real_send(fd, buf, len, flags);
+		return 0;
 	}
-	r = axsock_send_data(s, buf, len);
+	*ret = axsock_send_data(s, buf, len);
 	pthread_mutex_unlock(&axsock_lock);
-	return r;
+	return 1;
+}
+
+ssize_t AXSOCK_ENTRY(send)(int fd, const void *buf, size_t len, int flags)
+{
+	ssize_t ret;
+
+	if (agwpe_send(fd, buf, len, &ret))
+		return ret;
+	return real_send(fd, buf, len, flags);
 }
 
 ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
@@ -2033,38 +2041,60 @@ ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
 	return r;
 }
 
-ssize_t AXSOCK_ENTRY(write)(int fd, const void *buf, size_t len)
+/* The one on the data path, and the reason for the counter: a process that
+ * never opened an AX.25 socket pays a load and a branch here, not a lock. */
+
+static int agwpe_write(int fd, const void *buf, size_t len, ssize_t *ret)
 {
 	struct axsock_sock *s;
-	ssize_t r;
 
 	if (!axsock_may_have_sock())
-		return real_write(fd, buf, len);
+		return 0;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
-		return real_write(fd, buf, len);
+		return 0;
 	}
 	if (!axsock_up)
 		(void)axsock_ensure_locked();
-	r = axsock_send_data(s, buf, len);
+	*ret = axsock_send_data(s, buf, len);
 	pthread_mutex_unlock(&axsock_lock);
-	return r;
+	return 1;
 }
 
-ssize_t AXSOCK_ENTRY(recv)(int fd, void *buf, size_t len, int flags)
+ssize_t AXSOCK_ENTRY(write)(int fd, const void *buf, size_t len)
+{
+	ssize_t ret;
+
+	if (agwpe_write(fd, buf, len, &ret))
+		return ret;
+	return real_write(fd, buf, len);
+}
+
+static int agwpe_recv(int fd, void *buf, size_t len, ssize_t *ret)
 {
 	struct axsock_sock *s;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
-
 	if (s == NULL)
-		return real_recv(fd, buf, len, flags);
-	return real_read(fd, buf, len);
+		return 0;
+	/* The descriptor is readable by itself; only the flags are ours to
+	 * drop, since the pipe behind it has none of them. */
+	*ret = real_read(fd, buf, len);
+	return 1;
+}
+
+ssize_t AXSOCK_ENTRY(recv)(int fd, void *buf, size_t len, int flags)
+{
+	ssize_t ret;
+
+	if (agwpe_recv(fd, buf, len, &ret))
+		return ret;
+	return real_recv(fd, buf, len, flags);
 }
 
 ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
@@ -2236,24 +2266,15 @@ int AXSOCK_ENTRY(close)(int fd)
 	return 0;
 }
 
-int AXSOCK_ENTRY(listen)(int fd, int backlog)
+static int agwpe_listen(int fd, int *ret)
 {
 	struct axsock_sock *s;
-
-	(void)backlog;
-
-	{
-		int ret;
-
-		if (wampes_listen(fd, &ret))
-			return ret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
-		return real_listen(fd, backlog);
+		return 0;
 	}
 	s->listening = 1;
 	if (s->local[0] != '\0' && !s->registered) {
@@ -2271,7 +2292,19 @@ int AXSOCK_ENTRY(listen)(int fd, int backlog)
 		}
 	}
 	pthread_mutex_unlock(&axsock_lock);
-	return 0;
+	*ret = 0;
+	return 1;
+}
+
+int AXSOCK_ENTRY(listen)(int fd, int backlog)
+{
+	int ret;
+
+	if (wampes_listen(fd, &ret))
+		return ret;
+	if (agwpe_listen(fd, &ret))
+		return ret;
+	return real_listen(fd, backlog);
 }
 
 int AXSOCK_ENTRY(accept)(int fd, struct sockaddr *addr, socklen_t *addrlen)
@@ -2427,26 +2460,37 @@ int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
 	return -1;
 }
 
-int AXSOCK_ENTRY(getsockopt)(int fd, int level, int optname,
-	       void *optval, socklen_t *optlen)
+static int agwpe_getsockopt(int fd, int level, void *optval, socklen_t *optlen,
+			    int *ret)
 {
 	struct axsock_sock *s;
-
-	(void)optname;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
-
 	if (s == NULL)
-		return real_getsockopt(fd, level, optname, optval, optlen);
+		return 0;
 
 	if (level == SOL_AX25 && optval != NULL && optlen != NULL) {
 		memset(optval, 0, *optlen);
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 	errno = ENOPROTOOPT;
-	return -1;
+	*ret = -1;
+	return 1;
+}
+
+int AXSOCK_ENTRY(getsockopt)(int fd, int level, int optname,
+	       void *optval, socklen_t *optlen)
+{
+	int ret;
+
+	(void)optname;
+
+	if (agwpe_getsockopt(fd, level, optval, optlen, &ret))
+		return ret;
+	return real_getsockopt(fd, level, optname, optval, optlen);
 }
 
 int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)

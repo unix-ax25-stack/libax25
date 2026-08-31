@@ -11,6 +11,7 @@
 
 #include <sys/socket.h>
 
+int wampes_configured(void);
 int wampes_enabled(void);
 int axsock_forget(int fd);   /* in axsock.c */
 int axsock_socktype(int fd); /* in axsock.c */

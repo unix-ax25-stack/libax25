@@ -1663,23 +1663,30 @@ int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 		if (axsock_backend_now() == 1)
 			return real_socket(domain, type, protocol);
 
-		/* WAMPES has no monitor stream: nothing feeds a copy of every
-		 * frame back to us the way the AGWPE 'K' record does.  Hand
-		 * out a descriptor that simply stays quiet, rather than
-		 * failing - which is what happened before, because
-		 * axsock_ensure_locked() went looking for an AGWPE server and
-		 * came back with ECONNREFUSED.
+		/* An AGWPE server is what feeds this socket, through its 'K'
+		 * records.  Ask for one first, because a machine can have both
+		 * an AGWPE server and a node, and there a monitor works.
 		 *
-		 * The difference matters for programs that open a monitor
-		 * beside their real work.  A failed socket() takes the whole
-		 * program down with it; a quiet one costs it one feature and
-		 * leaves the rest working.  Say so once, on stderr, so that
-		 * nobody spends an evening wondering why the window is empty.
+		 * Only when none answers does it matter which world we are in.
+		 * WAMPES has no monitor stream at all - nothing carries a copy
+		 * of every frame the way the 'K' record does - so failing there
+		 * would be permanent, and a program that opens a monitor beside
+		 * its real work would be taken down by it.  Hand out a
+		 * descriptor that stays quiet instead: it costs that program one
+		 * feature and leaves the rest working.  Say so once, on stderr,
+		 * so nobody spends an evening wondering why the window is empty.
+		 *
+		 * With no node configured either, the refusal is a configuration
+		 * fault and worth reporting as one.
 		 */
-		if (wampes_enabled()) {
+		pthread_mutex_lock(&axsock_lock);
+		if (axsock_ensure_locked() != 0) {
 			static int said;
 
-			pthread_mutex_lock(&axsock_lock);
+			if (!wampes_configured()) {
+				pthread_mutex_unlock(&axsock_lock);
+				return -1;
+			}
 			s = axsock_alloc_sock_locked(type);
 			if (s == NULL) {
 				pthread_mutex_unlock(&axsock_lock);
@@ -1696,12 +1703,6 @@ int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 			}
 			pthread_mutex_unlock(&axsock_lock);
 			return fd;
-		}
-
-		pthread_mutex_lock(&axsock_lock);
-		if (axsock_ensure_locked() != 0) {
-			pthread_mutex_unlock(&axsock_lock);
-			return -1;
 		}
 		s = axsock_alloc_sock_locked(type);
 		if (s == NULL) {

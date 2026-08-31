@@ -79,6 +79,20 @@ Decided while planning this, so that the next reading does not reopen it:
 * **`AXSOCK_BACKEND` goes.**  It exists to override a per-process choice that
   is sometimes wrong; once the files decide per port there is nothing left to
   override but "force everything to X", which is a test switch.
+
+  What that costs is already known, because `wampes_enabled()` answers the
+  variable and nothing else: delete it and the function is constantly false,
+  and its one remaining caller — the WAMPES arm of the chooser in `socket()` —
+  is dead code.  That is the right outcome and not a loss.  `socket()` builds
+  the default backend, `bind()` hands the descriptor over when the port turns
+  out to belong to a node, and that path is the one every program takes today
+  anyway.  The arm only ever ran under the variable.
+
+  It had a second caller until the monitor socket was fixed, and that one was
+  a real fault: the quiet `SOCK_PACKET` socket was unreachable without the
+  variable set, so `listen -a` died on a node-only machine.  Worth
+  remembering as the shape of the thing — an environment override standing in
+  for a question about the configuration answers correctly only in the test.
 * **The kernel stays "not ours".**  Making it a third backend of the same
   shape would read better and would put every call of every AX.25 program on a
   kernel machine through our lookup — the configuration most people run and
@@ -134,6 +148,17 @@ though the first hops had already happened — which is what a node does when it
 inserts itself into a path.  Worth saying out loud that on a shared channel
 such a frame is indistinguishable from a real digipeat, so it is a tool and a
 footgun in the same hand.
+
+**`bind()` waits on the node without a bound.**  A datagram `bind()` claims
+the callsign for incoming UI frames, and the wait for the node's answer has no
+deadline — none of the service conversations do, except the descriptor
+handover.  Against a running node this is invisible: it is a unix socket on
+the same machine and the answer comes back at once, refusal included.  Against
+a node that has stopped answering, a program that only ever wanted to *send*
+hangs in `bind()`.  The remedy is the one the handover already uses, a
+deadline and a recorded error, with sending left working; what wants deciding
+first is whether a claim that timed out should be retried later or stay
+failed for the life of the socket.
 
 **No monitor through a node.**  `listen(1)` and `mheardd(8)` see nothing: the
 service protocol has no stream that carries a copy of every frame, the way the

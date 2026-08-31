@@ -775,6 +775,162 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 	return bad;
 }
 
+/*
+ * Datagram sockets, several at once.
+ *
+ * A UI frame carries no session, so the only thing that keeps two of them
+ * apart is the callsign each socket bound - which makes this the same
+ * question as the two modes above, asked where there is no connection to
+ * hide behind.  Each socket sends a line naming the pair it belongs to and
+ * every socket reports what reached it, so a frame delivered to the wrong
+ * socket, or to every socket, is visible either way.
+ *
+ * Delivering a copy to everyone is worth telling from crossing: the kernel
+ * may well do that (see doc/TODO.md), and it is not the same fault.
+ */
+
+static int multiui(int argc, char **argv, int optind_, const char *portcall)
+{
+	struct session ses[MULTI_MAX];
+	int n = 0, i, bad = 0;
+
+	memset(ses, 0, sizeof(ses));
+	while (optind_ < argc && n < MULTI_MAX) {
+		const char *spec = argv[optind_++];
+		const char *colon = strchr(spec, ':');
+		size_t len = colon ? (size_t)(colon - spec) : strlen(spec);
+
+		if (len == 0 || len >= sizeof(ses[0].src)) {
+			fprintf(stderr, "axprobe: bad spec '%s'\n", spec);
+			return 1;
+		}
+		memcpy(ses[n].src, spec, len);
+		if (colon != NULL) {
+			if (strlen(colon + 1) >= sizeof(ses[0].dst)) {
+				fprintf(stderr, "axprobe: bad spec '%s'\n",
+					spec);
+				return 1;
+			}
+			strcpy(ses[n].dst, colon + 1);
+		}
+		ses[n].fd = -1;
+		n++;
+	}
+	if (n == 0)
+		usage();
+
+	for (i = 0; i < n; i++) {
+		if ((ses[i].fd = p_socket(AF_AX25, SOCK_DGRAM, 0)) < 0) {
+			perror("axprobe: socket");
+			return 1;
+		}
+		if (bind_port(ses[i].fd, portcall, ses[i].src) < 0)
+			return 1;
+		if (verbose)
+			fprintf(stderr, "axprobe: %s bound on fd %d\n",
+				ses[i].src, ses[i].fd);
+	}
+
+	for (i = 0; i < n; i++) {
+		struct full_sockaddr_ax25 to;
+		char line[80];
+
+		if (ses[i].dst[0] == '\0')
+			continue;
+		pair_tag(ses[i].tag, sizeof(ses[i].tag), ses[i].src,
+			 ses[i].dst);
+		snprintf(line, sizeof(line), "%s\n", ses[i].tag);
+		memset(&to, 0, sizeof(to));
+		to.fsa_ax25.sax25_family = AF_AX25;
+		if (aton_entry(ses[i].dst,
+			       to.fsa_ax25.sax25_call.ax25_call) < 0) {
+			fprintf(stderr, "axprobe: invalid destination '%s'\n",
+				ses[i].dst);
+			return 1;
+		}
+		to.fsa_ax25.sax25_ndigis = 0;
+		if (sendto(ses[i].fd, line, strlen(line), 0,
+			   (struct sockaddr *)&to, sizeof(to)) < 0)
+			fprintf(stderr, "axprobe: %s sendto %s: %s\n",
+				ses[i].src, ses[i].dst, strerror(errno));
+	}
+
+	for (i = 0; i < n; i++) {
+		struct pollfd pfd;
+		ssize_t r;
+
+		pfd.fd = ses[i].fd;
+		pfd.events = POLLIN;
+		if (poll(&pfd, 1, 3000) <= 0) {
+			snprintf(ses[i].got, sizeof(ses[i].got), "(nothing)");
+			continue;
+		}
+		if ((r = recvfrom(ses[i].fd, ses[i].got,
+				  sizeof(ses[i].got) - 1, 0, NULL, NULL)) <= 0) {
+			snprintf(ses[i].got, sizeof(ses[i].got), "(eof)");
+			continue;
+		}
+		ses[i].got[r] = '\0';
+		while (r > 0 && (ses[i].got[r - 1] == '\n' ||
+				 ses[i].got[r - 1] == '\r'))
+			ses[i].got[--r] = '\0';
+	}
+
+	/*
+	 * Who was this frame for?  The mark names the pair, so the tail of it
+	 * is the callsign it was addressed to - and that is the only thing
+	 * worth checking, because the sender may well be in another process.
+	 * A frame is ours when the mark ends in our callsign, someone else's
+	 * when it ends in the callsign of another socket here.
+	 */
+	for (i = 0; i < n; i++) {
+		const char *verdict = "lost";
+		const char *tok = strstr(ses[i].got, "pair-");
+		char end[24];
+		int j;
+
+		if (tok != NULL) {
+			char token[96];
+			size_t k = 0;
+
+			while (tok[k] != '\0' && !isspace((unsigned char)tok[k]) &&
+			       k + 1 < sizeof(token)) {
+				token[k] = tok[k];
+				k++;
+			}
+			token[k] = '\0';
+
+			snprintf(end, sizeof(end), "-%s", ses[i].src);
+			if (k >= strlen(end) &&
+			    strcasecmp(token + k - strlen(end), end) == 0) {
+				verdict = "ok";
+			} else {
+				for (j = 0; j < n; j++) {
+					if (j == i)
+						continue;
+					snprintf(end, sizeof(end), "-%s",
+						 ses[j].src);
+					if (k >= strlen(end) &&
+					    strcasecmp(token + k - strlen(end),
+						       end) == 0) {
+						verdict = "CROSSED";
+						break;
+					}
+				}
+			}
+		}
+		if (strcmp(verdict, "ok") != 0)
+			bad = 1;
+		printf("%d %s <- %s: %s\n", i, ses[i].src, verdict,
+		       ses[i].got);
+	}
+
+	for (i = 0; i < n; i++)
+		if (ses[i].fd >= 0)
+			close(ses[i].fd);
+	return bad;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -783,6 +939,7 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] bind    <port> <call>\n"
 		"       axprobe [-d] [-q] [-f axports] multi   <port> <src>:<dest>[@<port>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] mlisten <port> <call>[@<port>] ...\n"
+		"       axprobe [-d] [-q] [-f axports] mui     <port> <call>[:<dest>] ...\n"
 		"\n"
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
 		"      calling them directly - the only way an inserted library is seen\n"
@@ -906,6 +1063,12 @@ int main(int argc, char **argv)
 		if (verbose)
 			report(nfd);
 		return shovel(nfd);
+	}
+
+	if (strcmp(cmd, "mui") == 0) {
+		close(fd);
+		axports_file = axports;
+		return multiui(argc, argv, optind - 1, portcall);
 	}
 
 	if (strcmp(cmd, "mlisten") == 0) {

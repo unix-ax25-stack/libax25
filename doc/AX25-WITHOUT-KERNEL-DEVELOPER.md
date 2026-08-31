@@ -302,6 +302,13 @@ never.  A refusal there is not an error — a beacon binds too, usually a port's
 own callsign, which no client may claim — so the reason is kept and handed to
 whoever calls `recvfrom()`.
 
+That is the node backend.  **Through AGWPE a datagram socket can send and
+cannot receive**: `bind()` registers no callsign with the server, so nothing
+is routed to it, and the dispatch has no arm for an incoming unproto frame.
+Sending is the half that works, which is why `beacon(8)` has never noticed.
+Said here rather than left to be discovered, and kept in `TODO.md` with what
+the other half would take.
+
 ### Which calls are intercepted
 
 `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `sendto`, `write`,

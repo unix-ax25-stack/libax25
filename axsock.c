@@ -292,6 +292,9 @@ struct axsock_sock {
 	char			bound[16];	/* raw monitor: SOCK_PACKET bind
 					   device name, '' = all ports */
 	int			registered;	/* call registered with the server */
+	int			port_named;	/* bind named the port itself, in
+					 * the digipeater slot - connect()
+					 * must not talk it over */
 	int			has_peer_thread; /* accepted: a reader thread
 						   * forwards outbound data and
 						   * owns the teardown */
@@ -809,6 +812,41 @@ static unsigned char axsock_port_for(const char *call)
 	if (idx >= 0)
 		return (unsigned char)(pos * 16 + idx);
 	return (unsigned char)pos;
+}
+
+/*
+ * Which port a bind names.  The callsign in the address is the source; the
+ * port is named by the first digipeater slot, which is what ax25_aton()
+ * builds from an axports entry and what every program in the suite passes.
+ * Only when no slot is given does the source callsign have to answer for
+ * both, and it can answer only when it is itself a port's callsign.
+ *
+ * Reading the source alone was wrong in the case that matters most.  A
+ * service callsign is not in axports - that is the whole point of one - so
+ * it mapped to port 0, and a listener bound to the port it had named ended
+ * up on the first port instead.  It went unnoticed because every test used
+ * a callsign that was in axports, where the two answers agree.
+ *
+ * wampes.c arrives at the same rule in port_of_bind().  They are two
+ * lookups because the results are different things - a flat AGWPE port
+ * number against a node's interface name - not because the question
+ * differs.
+ */
+
+static unsigned char axsock_bind_port(const struct sockaddr *addr,
+				      socklen_t len, const char *local,
+				      int *named)
+{
+	const struct full_sockaddr_ax25 *fsa =
+		(const struct full_sockaddr_ax25 *) addr;
+
+	if (len >= sizeof(struct full_sockaddr_ax25) &&
+	    fsa->fsa_ax25.sax25_ndigis > 0) {
+		*named = 1;
+		return axsock_port_for(ax25_ntoa(&fsa->fsa_digipeater[0]));
+	}
+	*named = 0;
+	return axsock_port_for(local);
 }
 
 /* Reverse of axsock_port_for(): the configured port name for an AGWPE
@@ -1792,7 +1830,7 @@ static int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 
 	sa = (const struct sockaddr_ax25 *)addr;
 	axsock_copy_call(s->local, ax25_ntoa(&sa->sax25_call));
-	s->port = axsock_port_for(s->local);
+	s->port = axsock_bind_port(addr, len, s->local, &s->port_named);
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "axsock: bind fd=%d local='%s' port=%d\n",
 			fd, s->local, s->port);
@@ -1852,10 +1890,16 @@ static int agwpe_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		return 1;
 	}
 
-	/* The outgoing port follows the remote callsign, exactly as the
-	 * kernel picks the AX.25 device from the destination in
-	 * ax25_connect().  The local bind only names the source call.  */
-	s->port = axsock_port_for(s->remote);
+	/* With no port named at bind time the outgoing one follows the
+	 * remote callsign, as the kernel picks the AX.25 device from the
+	 * destination in ax25_connect().  A bind that did name a port has
+	 * said where this goes, and saying it again from the destination
+	 * can only be worse: the destination of an outgoing call is a
+	 * station, and a station is not in axports, so the lookup fails
+	 * and lands the call on port 0.
+	 */
+	if (!s->port_named)
+		s->port = axsock_port_for(s->remote);
 
 	axsock_register_locked(s->local, s->port, 0);
 	s->registered = 1;

@@ -368,6 +368,24 @@ static int multi_open(struct session *ses, const char *portcall)
 
 static const char *axports_file;
 
+/*
+ * What the far end is.  An echo sends back what it was given, so a session
+ * expects its own line; a bridge - the "loop" port of ax25netd(8), or a real
+ * link with the other side of this same program on it - hands each session
+ * the line of its partner.  Both are worth testing and they are not the same
+ * check, so it is said rather than guessed.
+ *
+ * Both lines are built the same way, from the pair of callsigns and nothing
+ * else, so each side can name what it expects without being told.
+ */
+static int peer_mode;
+
+static void pair_tag(char *out, size_t len, const char *from, const char *to)
+{
+	snprintf(out, len, "pair-%s-%s", from, to);
+}
+
+
 static int multi(int argc, char **argv, int optind_, const char *portcall)
 {
 	struct session ses[MULTI_MAX];
@@ -414,8 +432,8 @@ static int multi(int argc, char **argv, int optind_, const char *portcall)
 
 	/* All of them up first, then all of them spoken to. */
 	for (i = 0; i < n; i++) {
-		snprintf(ses[i].tag, sizeof(ses[i].tag), "session-%d-%s-%s",
-			 i, ses[i].src, ses[i].dst);
+		pair_tag(ses[i].tag, sizeof(ses[i].tag), ses[i].src,
+			 ses[i].dst);
 		if (ses[i].port[0] != '\0') {
 			char own[16];
 
@@ -479,19 +497,38 @@ static int multi(int argc, char **argv, int optind_, const char *portcall)
 			       ses[i].src, ses[i].dst, strerror(ses[i].err));
 			continue;
 		}
-		if (strstr(ses[i].got, ses[i].tag) != NULL) {
-			verdict = "own";
-		} else {
-			int j;
+		{
+			char want[64];
 
-			verdict = "lost";
-			for (j = 0; j < n; j++)
-				if (j != i && ses[j].err == 0 &&
-				    strstr(ses[i].got, ses[j].tag) != NULL) {
-					verdict = "CROSSED";
-					break;
+			if (peer_mode)
+				pair_tag(want, sizeof(want), ses[i].dst,
+					 ses[i].src);
+			else
+				strcpy(want, ses[i].tag);
+			if (strstr(ses[i].got, want) != NULL) {
+				verdict = "ok";
+			} else {
+				int j;
+
+				verdict = "lost";
+				for (j = 0; j < n; j++) {
+					char other[64];
+
+					if (j == i || ses[j].err != 0)
+						continue;
+					if (peer_mode)
+						pair_tag(other, sizeof(other),
+							 ses[j].dst,
+							 ses[j].src);
+					else
+						strcpy(other, ses[j].tag);
+					if (strstr(ses[i].got, other) != NULL) {
+						verdict = "CROSSED";
+						break;
+					}
 				}
-			bad = 1;
+				bad = 1;
+			}
 		}
 		printf("%d %s %s>%s %s: %s\n", i,
 		       ses[i].port[0] ? ses[i].port : "-",
@@ -640,19 +677,27 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 
 		if (ses[i].fd < 0)
 			continue;
-		snprintf(ses[i].tag, sizeof(ses[i].tag), "listen-%d-%s", i,
-			 ses[i].src);
+		pair_tag(ses[i].tag, sizeof(ses[i].tag), ses[i].src,
+			 ses[i].dst);
 		snprintf(line, sizeof(line), "%s\n", ses[i].tag);
 		if (write(ses[i].fd, line, strlen(line)) < 0)
 			fprintf(stderr, "axprobe: %d write: %s\n", i,
 				strerror(errno));
 	}
 
-	for (i = 0; i < n; i++)
-		if (ses[i].fd >= 0 &&
-		    !gather(ses[i].fd, ses[i].got, sizeof(ses[i].got),
-			    ses[i].tag, 3000) && ses[i].got[0] == '\0')
+	for (i = 0; i < n; i++) {
+		char want[64];
+
+		if (ses[i].fd < 0)
+			continue;
+		if (peer_mode)
+			pair_tag(want, sizeof(want), ses[i].dst, ses[i].src);
+		else
+			strcpy(want, ses[i].tag);
+		if (!gather(ses[i].fd, ses[i].got, sizeof(ses[i].got), want,
+			    3000) && ses[i].got[0] == '\0')
 			snprintf(ses[i].got, sizeof(ses[i].got), "(nothing)");
+	}
 
 	for (i = 0; i < n; i++) {
 		const char *verdict;
@@ -666,19 +711,38 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 		}
 		while ((nl = strchr(ses[i].got, '\n')) != NULL)
 			*nl = '|';
-		if (strstr(ses[i].got, ses[i].tag) != NULL) {
-			verdict = "own";
-		} else {
-			int j;
+		{
+			char want[64];
 
-			verdict = "lost";
-			for (j = 0; j < n; j++)
-				if (j != i && ses[j].tag[0] != '\0' &&
-				    strstr(ses[i].got, ses[j].tag) != NULL) {
-					verdict = "CROSSED";
-					break;
+			if (peer_mode)
+				pair_tag(want, sizeof(want), ses[i].dst,
+					 ses[i].src);
+			else
+				strcpy(want, ses[i].tag);
+			if (strstr(ses[i].got, want) != NULL) {
+				verdict = "ok";
+			} else {
+				int j;
+
+				verdict = "lost";
+				for (j = 0; j < n; j++) {
+					char other[64];
+
+					if (j == i || ses[j].fd < 0)
+						continue;
+					if (peer_mode)
+						pair_tag(other, sizeof(other),
+							 ses[j].dst,
+							 ses[j].src);
+					else
+						strcpy(other, ses[j].tag);
+					if (strstr(ses[i].got, other) != NULL) {
+						verdict = "CROSSED";
+						break;
+					}
 				}
-			bad = 1;
+				bad = 1;
+			}
 		}
 		printf("%d %s <- %s %s: %s\n", i, ses[i].src, ses[i].dst,
 		       verdict, ses[i].got);
@@ -705,6 +769,9 @@ static void usage(void)
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
 		"      calling them directly - the only way an inserted library is seen\n"
 		"      on macOS, and it says where each call came from\n"
+		"  -p  the far end is a partner, not an echo: each session expects\n"
+		"      the line of the station it is talking to (ax25netd loop port,\n"
+		"      or the other half of this same test)\n"
 		"  -q  no commentary on stderr\n"
 		"  -f  axports to read instead of " CONF_AXPORTS_FILE "\n"
 		"\n"
@@ -720,13 +787,16 @@ int main(int argc, char **argv)
 	int use_dlsym = 0;
 	int fd, c;
 
-	while ((c = getopt(argc, argv, "df:q")) != -1) {
+	while ((c = getopt(argc, argv, "df:pq")) != -1) {
 		switch (c) {
 		case 'd':
 			use_dlsym = 1;
 			break;
 		case 'f':
 			axports = optarg;
+			break;
+		case 'p':
+			peer_mode = 1;
 			break;
 		case 'q':
 			verbose = 0;

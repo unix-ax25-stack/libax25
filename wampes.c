@@ -133,10 +133,11 @@ static void drop_sock(int fd)
  * TCP service.  The name is what stands before the colon in an axports entry,
  * so "wampes:hfb" and "wampes:70cm" are two interfaces of the node "wampes".
  *
- * Read once, on first use.  A missing file is not an error: without one the
- * single node at the compiled-in place is assumed, which is what a machine
- * with one WAMPES on it wants and saves it a configuration file that would
- * only ever hold one line.
+ * Read once, on first use.  A missing file is not an error, but it does mean
+ * no port is ever claimed here: the lookup below answers NULL for every
+ * name, so a machine without the file keeps whatever backend it had.  The
+ * compiled-in place is the fallback for a node already known to serve a
+ * port, and for WAMPES_SOCKET - not a node assumed into existence.
  */
 
 #define WAMPES_MAX_NODE 16
@@ -599,6 +600,17 @@ static int is_ax25(const struct sockaddr *addr, socklen_t len)
 }
 
 /*---------------------------------------------------------------------------*/
+
+/* Is any node configured at all - the same register bind() consults, asked
+ * without a port in hand.  A caller that has one should ask about that port
+ * instead; this is for the questions that come before a port is known.
+ */
+int wampes_configured(void)
+{
+	if (!Nodes_read)
+		wampes_config_load();
+	return Nnodes > 0;
+}
 
 int wampes_enabled(void)
 {

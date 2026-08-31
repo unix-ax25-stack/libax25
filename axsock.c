@@ -1952,27 +1952,18 @@ ssize_t AXSOCK_ENTRY(send)(int fd, const void *buf, size_t len, int flags)
 	return real_send(fd, buf, len, flags);
 }
 
-ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
-	       const struct sockaddr *to, socklen_t tolen)
+static int agwpe_sendto(int fd, const void *buf, size_t len,
+			const struct sockaddr *to, socklen_t tolen,
+			ssize_t *ret)
 {
 	struct axsock_sock *s;
 	ssize_t r;
-
-	/* Before our own table, as bind() and connect() are: a datagram socket
-	 * that belongs to a WAMPES node is served there, and the descriptor
-	 * was never in this table to begin with. */
-	{
-		ssize_t wret;
-
-		if (wampes_sendto(fd, buf, len, flags, to, tolen, &wret))
-			return wret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
-		return real_sendto(fd, buf, len, flags, to, tolen);
+		return 0;
 	}
 
 	if (s->type == SOCK_DGRAM && axsock_is_ax25(to, tolen) &&
@@ -1998,7 +1989,8 @@ ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
 		 */
 		if (axsock_ensure_locked() != 0) {
 			pthread_mutex_unlock(&axsock_lock);
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 
 		{
@@ -2030,7 +2022,8 @@ ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
 			if (axsock_send_unproto(s, target, digis, ndigis,
 						buf, len) != 0) {
 				pthread_mutex_unlock(&axsock_lock);
-				return -1;
+				*ret = -1;
+				return 1;
 			}
 		}
 		r = (ssize_t)len;
@@ -2038,7 +2031,20 @@ ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
 		r = axsock_send_data(s, buf, len);
 	}
 	pthread_mutex_unlock(&axsock_lock);
-	return r;
+	*ret = r;
+	return 1;
+}
+
+ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
+	       const struct sockaddr *to, socklen_t tolen)
+{
+	ssize_t ret;
+
+	if (wampes_sendto(fd, buf, len, flags, to, tolen, &ret))
+		return ret;
+	if (agwpe_sendto(fd, buf, len, to, tolen, &ret))
+		return ret;
+	return real_sendto(fd, buf, len, flags, to, tolen);
 }
 
 /* The one on the data path, and the reason for the counter: a process that

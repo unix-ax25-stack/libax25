@@ -149,6 +149,49 @@ inserts itself into a path.  Worth saying out loud that on a shared channel
 such a frame is indistinguishable from a real digipeat, so it is a tool and a
 footgun in the same hand.
 
+**No UI reception through AGWPE.**  Sending works — `sendto()` goes out as
+an unproto frame — but nothing comes back.  Two halves are missing and
+neither is hard: `bind()` on a datagram socket registers no callsign with the
+server, so `ax25netd` has nobody to route an incoming frame to; and
+`axsock_dispatch()` has arms for `C`, `D`, `d` and `K` and none for `M`, so a
+frame that did arrive would be dropped without a word.  The WAMPES side of
+exactly this was built last week — `claim_ui()` at `bind()`, `wampes_recvfrom()`,
+`parse_ui_header()` — and the two documents describe UI reception as a
+property of the library rather than of one backend, which is now half true.
+
+Worth knowing while testing: `ax25netd` routes a loop frame to the owner of
+the destination callsign and skips the client that sent it, so a station does
+not hear itself.  Two datagram sockets in one process cannot reach each other
+through the loop port, and that is correct — it wants two processes.
+
+**Data dropped on a full socketpair, and the lock is why.**
+`axsock_dispatch()` writes an inbound frame into the socketpair without
+blocking; on `EAGAIN` it stops and discards the rest of the frame, announcing
+it only under `AXSOCK_DEBUG`.  `EAGAIN` says "nothing was taken, come back" —
+it is an invitation, not a refusal, and treating it as one costs the
+application the tail of a frame with no way to know.  On a byte-stream
+socketpair, which is what macOS gives, the loss is not even a lost frame but a
+hole in the middle of the stream.
+
+Measured: the 1 MB the code asks for is granted here (the default is 8 KB, the
+system ceiling 8 MB), and `EAGAIN` arrives exactly at it.  So it takes a
+megabyte of unread data — a wedged reader, or a fast path like the loop port —
+and it has never been seen in the field.
+
+The obvious fix is to wait for writability and carry on, and it cannot go
+where the drop is: `axsock_dispatch()` holds `axsock_lock` across the write.
+Waiting there would not stall one session but the whole library — every
+`close()`, `connect()` and `send()` the application makes queues behind the
+same mutex.
+
+What fits is what `ax25netd` already does for its own clients, in
+`loop_send_client()`: put what the socket would not take on a per-client
+queue, push it from the main loop when the descriptor is writable again, and
+kill the client only when the queue passes a hard ceiling.  Nothing is
+dropped, nothing blocks, and the failure that remains is loud.  Here the
+queue would hang on `struct axsock_sock` and the reader thread would carry
+the pending descriptors in its poll set.
+
 **`bind()` waits on the node without a bound.**  A datagram `bind()` claims
 the callsign for incoming UI frames, and the wait for the node's answer has no
 deadline — none of the service conversations do, except the descriptor

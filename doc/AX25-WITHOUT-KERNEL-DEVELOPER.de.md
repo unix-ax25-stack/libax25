@@ -312,6 +312,19 @@ mischen lässt, während jedes von beiden sich mit Knoten-Ports mischt.  Auch da
 je Port zu machen ist der naheliegende nächste Schritt und braucht keine
 Protokolländerung — nur dieselbe Nachschlagerei eine Schicht tiefer.
 
+Ein Datagrammsocket beansprucht sein Rufzeichen bei `bind()` und nicht erst
+beim ersten `recvfrom()`, damit `select()` lesbar wird, wenn ein Rahmen
+ankommt, statt nie.  Eine Ablehnung dort ist kein Fehler — ein Beacon bindet
+auch, meist das Rufzeichen eines Ports, das kein Client beanspruchen darf —,
+also wird der Grund aufgehoben und dem gegeben, der `recvfrom()` ruft.
+
+Das ist das Knoten-Backend.  **Über AGWPE kann ein Datagrammsocket senden und
+nicht empfangen**: `bind()` meldet dem Server kein Rufzeichen an, es wird ihm
+also nichts zugestellt, und der Zustellweg hat keinen Zweig für einen
+eingehenden Unproto-Rahmen.  Senden ist die Hälfte, die geht — deshalb ist es
+`beacon(8)` nie aufgefallen.  Hier gesagt, statt es finden zu lassen; was die
+andere Hälfte kostet, steht in `TODO.md`.
+
 ### Welche Aufrufe abgefangen werden
 
 `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `sendto`, `write`,

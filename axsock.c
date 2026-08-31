@@ -2103,32 +2103,24 @@ ssize_t AXSOCK_ENTRY(recv)(int fd, void *buf, size_t len, int flags)
 	return real_recv(fd, buf, len, flags);
 }
 
-ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
-		 struct sockaddr *addr, socklen_t *addrlen)
+static int agwpe_recvfrom(int fd, void *buf, size_t len,
+			struct sockaddr *addr, socklen_t *addrlen, ssize_t *ret)
 {
 	struct axsock_sock *s;
 	ssize_t n;
-
-	/* Before our own table, as bind() and sendto() are: a datagram socket
-	 * that belongs to a WAMPES node is served there, and the descriptor
-	 * was never in this table. */
-	{
-		ssize_t wret;
-
-		if (wampes_recvfrom(fd, buf, len, flags, addr, addrlen, &wret))
-			return wret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
 
 	if (s == NULL)
-		return real_recvfrom(fd, buf, len, flags, addr, addrlen);
+		return 0;
 
 	n = real_read(fd, buf, len);
-	if (n < 0)
-		return n;
+	if (n < 0) {
+		*ret = n;
+		return 1;
+	}
 	if (addr != NULL && addrlen != NULL && s->raw) {
 		struct sockaddr *sa = addr;
 		const char *name;
@@ -2142,7 +2134,8 @@ ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
 		if (name != NULL)
 			strncpy(sa->sa_data, name, sizeof(sa->sa_data) - 1);
 		*addrlen = sizeof(struct sockaddr);
-		return n;
+		*ret = n;
+		return 1;
 	}
 	if (addr != NULL && addrlen != NULL &&
 	    *addrlen >= sizeof(struct sockaddr_ax25)) {
@@ -2154,7 +2147,20 @@ ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
 			ax25_aton_entry(s->remote, sa->sax25_call.ax25_call);
 		*addrlen = sizeof(struct sockaddr_ax25);
 	}
-	return n;
+	*ret = n;
+	return 1;
+}
+
+ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
+		 struct sockaddr *addr, socklen_t *addrlen)
+{
+	ssize_t ret;
+
+	if (wampes_recvfrom(fd, buf, len, flags, addr, addrlen, &ret))
+		return ret;
+	if (agwpe_recvfrom(fd, buf, len, addr, addrlen, &ret))
+		return ret;
+	return real_recvfrom(fd, buf, len, flags, addr, addrlen);
 }
 
 /*
@@ -2430,22 +2436,11 @@ static const char *axsock_opt_name(int optname)
 	}
 }
 
-int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
-	       const void *optval, socklen_t optlen)
+static int agwpe_setsockopt(int fd, int level, int optname, int *ret)
 {
 	struct axsock_sock *s;
 	int warn = 0;
 	int i;
-
-	(void)optval;
-	(void)optlen;
-
-	{
-		int ret;
-
-		if (wampes_setsockopt(fd, level, &ret))
-			return ret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
@@ -2467,7 +2462,7 @@ int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
 	pthread_mutex_unlock(&axsock_lock);
 
 	if (s == NULL)
-		return real_setsockopt(fd, level, optname, optval, optlen);
+		return 0;
 
 	if (warn) {
 		const char *name = axsock_opt_name(optname);
@@ -2481,10 +2476,25 @@ int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
 			"ignored: the AGWPE server owns the channel "
 			"parameters\n", name);
 	}
-	if (level == SOL_AX25 || level == SOL_SOCKET)
-		return 0;
+	if (level == SOL_AX25 || level == SOL_SOCKET) {
+		*ret = 0;
+		return 1;
+	}
 	errno = ENOPROTOOPT;
-	return -1;
+	*ret = -1;
+	return 1;
+}
+
+int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
+	       const void *optval, socklen_t optlen)
+{
+	int ret;
+
+	if (wampes_setsockopt(fd, level, &ret))
+		return ret;
+	if (agwpe_setsockopt(fd, level, optname, &ret))
+		return ret;
+	return real_setsockopt(fd, level, optname, optval, optlen);
 }
 
 static int agwpe_getsockopt(int fd, int level, void *optval, socklen_t *optlen,
@@ -2520,33 +2530,34 @@ int AXSOCK_ENTRY(getsockopt)(int fd, int level, int optname,
 	return real_getsockopt(fd, level, optname, optval, optlen);
 }
 
-int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
+/*
+ * No WAMPES half: a descriptor served by a node is an ordinary socketpair
+ * end, so FIONREAD and friends work on it as they are, and the node has no
+ * equivalent of SIOCAX25CTLCON - axctl(8) and axkill(8) reach AGWPE only.
+ */
+static int agwpe_ioctl(int fd, unsigned long request, void *arg, int *ret)
 {
-	va_list ap;
-	void *arg;
 	struct axsock_sock *s;
-
-	va_start(ap, request);
-	arg = va_arg(ap, void *);
-	va_end(ap);
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
 
 	if (s == NULL)
-		return real_ioctl(fd, request, arg);
+		return 0;
 
 	switch (request) {
 	case FIONREAD:
-		return real_ioctl(s->fd, request, arg);
+		*ret = real_ioctl(s->fd, request, arg);
+		return 1;
 	case SIOCGSTAMP: {
 		struct timeval tv;
 
 		gettimeofday(&tv, NULL);
 		if (arg != NULL)
 			memcpy(arg, &tv, sizeof(tv));
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 	case SIOCGIFHWADDR: {
 		/* ax25-apps/listen -a (ETH_P_ALL) fetches the interface
@@ -2558,12 +2569,14 @@ int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 
 		if (ifr == NULL) {
 			errno = EFAULT;
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 		memset(&ifr->AXSOCK_IFR_HWADDR, 0,
 		       sizeof(ifr->AXSOCK_IFR_HWADDR));
 		ifr->AXSOCK_IFR_HWADDR.sa_family = AF_AX25;
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 	case SIOCGIFFLAGS:
 	case SIOCSIFFLAGS: {
@@ -2578,11 +2591,13 @@ int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 
 		if (ifr == NULL) {
 			errno = EFAULT;
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 		if (request == SIOCGIFFLAGS)
 			ifr->ifr_flags = IFF_UP | IFF_RUNNING;
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 	case SIOCAX25CTLCON: {
 		/*
@@ -2599,13 +2614,15 @@ int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 
 		if (ctl == NULL) {
 			errno = EFAULT;
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 
 		pthread_mutex_lock(&axsock_lock);
 		if (axsock_ensure_locked() != 0) {
 			pthread_mutex_unlock(&axsock_lock);
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 
 		snprintf(portcall, sizeof(portcall), "%s",
@@ -2635,15 +2652,33 @@ int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 
 			pthread_mutex_unlock(&axsock_lock);
 			errno = (e != 0) ? e : EIO;
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 		pthread_mutex_unlock(&axsock_lock);
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 	default:
 		errno = ENOTTY;
-		return -1;
+		*ret = -1;
+		return 1;
 	}
+}
+
+int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
+{
+	va_list ap;
+	void *arg;
+	int ret;
+
+	va_start(ap, request);
+	arg = va_arg(ap, void *);
+	va_end(ap);
+
+	if (agwpe_ioctl(fd, request, arg, &ret))
+		return ret;
+	return real_ioctl(fd, request, arg);
 }
 
 static int agwpe_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,

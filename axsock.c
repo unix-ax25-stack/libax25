@@ -1743,29 +1743,18 @@ int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 	return axsock_new_sock(type);
 }
 
-int AXSOCK_ENTRY(bind)(int fd, const struct sockaddr *addr, socklen_t len)
+static int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
+		      int *ret)
 {
 	const struct sockaddr_ax25 *sa;
 	struct axsock_sock *s;
-
-	/* Before our own table: bind() is the first moment the port is known,
-	 * and therefore the first moment the backend can be chosen per port
-	 * rather than per process.  A socket made here is handed over if the
-	 * port turns out to belong to a WAMPES node.
-	 */
-	{
-		int ret;
-
-		if (wampes_bind(fd, addr, len, &ret))
-			return ret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
 
 	if (s == NULL)
-		return real_bind(fd, addr, len);
+		return 0;
 
 	/* SOCK_PACKET monitor (ax25-apps/listen -p, net2kiss -i): the app
 	 * binds it to a device name (the name sits in sa_data; the family is
@@ -1779,7 +1768,8 @@ int AXSOCK_ENTRY(bind)(int fd, const struct sockaddr *addr, socklen_t len)
 		    (sa0->sa_family != AF_PACKET &&
 		     sa0->sa_family != AF_INET)) {
 			errno = EAFNOSUPPORT;
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 		memcpy(s->bound, sa0->sa_data,
 		       sizeof(s->bound) - 1);
@@ -1787,12 +1777,14 @@ int AXSOCK_ENTRY(bind)(int fd, const struct sockaddr *addr, socklen_t len)
 		if (getenv("AXSOCK_DEBUG"))
 			fprintf(stderr, "axsock: bind fd=%d raw dev='%s'\n",
 				fd, s->bound);
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 
 	if (!axsock_is_ax25(addr, len)) {
 		errno = EAFNOSUPPORT;
-		return -1;
+		*ret = -1;
+		return 1;
 	}
 
 	sa = (const struct sockaddr_ax25 *)addr;
@@ -1801,34 +1793,50 @@ int AXSOCK_ENTRY(bind)(int fd, const struct sockaddr *addr, socklen_t len)
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "axsock: bind fd=%d local='%s' port=%d\n",
 			fd, s->local, s->port);
-	return 0;
+	*ret = 0;
+	return 1;
 }
 
-int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
+int AXSOCK_ENTRY(bind)(int fd, const struct sockaddr *addr, socklen_t len)
+{
+	int ret;
+
+	/* bind() is the first moment the port is known, and therefore the
+	 * first moment the backend can be chosen per port rather than per
+	 * process.  A socket made in socket() is handed over here if the port
+	 * turns out to belong to a WAMPES node - which is why WAMPES is asked
+	 * before the AGWPE table, not after it.
+	 */
+	if (wampes_bind(fd, addr, len, &ret))
+		return ret;
+	if (agwpe_bind(fd, addr, len, &ret))
+		return ret;
+	return real_bind(fd, addr, len);
+}
+
+static int agwpe_connect(int fd, const struct sockaddr *addr, socklen_t len,
+			 int *ret)
 {
 	const struct sockaddr_ax25 *sa;
 	struct axsock_sock *s;
-	int ret;
+	int err;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
 
-	if (s == NULL) {
-		int ret;
-
-		if (wampes_connect(fd, addr, len, &ret))
-			return ret;
-		return real_connect(fd, addr, len);
-	}
+	if (s == NULL)
+		return 0;
 
 	if (!axsock_is_ax25(addr, len)) {
 		errno = EAFNOSUPPORT;
-		return -1;
+		*ret = -1;
+		return 1;
 	}
 	if (s->local[0] == '\0') {
 		errno = EDESTADDRREQ;
-		return -1;
+		*ret = -1;
+		return 1;
 	}
 
 	sa = (const struct sockaddr_ax25 *)addr;
@@ -1837,7 +1845,8 @@ int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
 	pthread_mutex_lock(&axsock_lock);
 	if (axsock_ensure_locked() != 0) {
 		pthread_mutex_unlock(&axsock_lock);
-		return -1;
+		*ret = -1;
+		return 1;
 	}
 
 	/* The outgoing port follows the remote callsign, exactly as the
@@ -1892,7 +1901,8 @@ int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
 					agwpe_client_err(axsock_agwpe) : EIO;
 				s->state = AXSOCK_NEW;
 				pthread_mutex_unlock(&axsock_lock);
-				return -1;
+				*ret = -1;
+				return 1;
 			}
 		} else if (agwpe_client_connect(axsock_agwpe, s->port, s->pid,
 					       s->local, s->remote) != 0) {
@@ -1900,7 +1910,8 @@ int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
 				agwpe_client_err(axsock_agwpe) : EIO;
 			s->state = AXSOCK_NEW;
 			pthread_mutex_unlock(&axsock_lock);
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 	}
 
@@ -1917,15 +1928,28 @@ int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
 
 	if (s->state == AXSOCK_CONNECTED) {
 		pthread_mutex_unlock(&axsock_lock);
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 
-	ret = (s->connect_err != 0) ? s->connect_err : ETIMEDOUT;
+	err = (s->connect_err != 0) ? s->connect_err : ETIMEDOUT;
 	if (s->state == AXSOCK_CONNECTING)
 		s->state = AXSOCK_NEW;
 	pthread_mutex_unlock(&axsock_lock);
-	errno = ret;
-	return -1;
+	errno = err;
+	*ret = -1;
+	return 1;
+}
+
+int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
+{
+	int ret;
+
+	if (wampes_connect(fd, addr, len, &ret))
+		return ret;
+	if (agwpe_connect(fd, addr, len, &ret))
+		return ret;
+	return real_connect(fd, addr, len);
 }
 
 static int agwpe_send(int fd, const void *buf, size_t len, ssize_t *ret)

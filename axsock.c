@@ -2045,10 +2045,15 @@ static int agwpe_sendto(int fd, const void *buf, size_t len,
 
 		axsock_copy_call(target, ax25_ntoa(&sa->sax25_call));
 
-		/* DGRAM (unproto) sockets address a port by the destination
-		 * callsign, like the kernel picks the device by the remote
-		 * call in ax25_sendmsg().  */
-		s->port = axsock_port_for(target);
+		/* The port a bind named stands, here as at connect().  Only
+		 * a socket that named none has to find one from the target,
+		 * and that lookup answers 0 for any real station - it can
+		 * only recognise a callsign that is itself a port's.  A
+		 * beacon addressed to a station therefore left on port 0
+		 * whatever port it had been bound to.
+		 */
+		if (!s->port_named)
+			s->port = axsock_port_for(target);
 
 		if (getenv("AXSOCK_DEBUG"))
 			fprintf(stderr, "axsock: sendto fd=%d type=%d local='%s' port=%d target='%s' len=%zd\n",

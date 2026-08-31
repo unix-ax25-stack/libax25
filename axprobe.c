@@ -945,7 +945,7 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 #define FLOOD_LINE	1024
 
 static int flood(const char *portcall, const char *src, const char *dst,
-		 int count)
+		 int count, int linger_ms)
 {
 	struct full_sockaddr_ax25 sa;
 	char line[FLOOD_LINE + 1];
@@ -990,8 +990,13 @@ static int flood(const char *portcall, const char *src, const char *dst,
 	if (verbose)
 		fprintf(stderr, "axprobe: sent %d lines of %d bytes\n", count,
 			FLOOD_LINE);
-	/* Let the far end drain before the close tears the session down. */
-	poll(NULL, 0, 3000);
+	/* How long to wait before closing.  Zero is the case that matters:
+	 * the disconnect arrives right behind the last frame, while the far
+	 * end is still working through what it was sent.  DISC says "done,
+	 * all of it delivered" - so everything sent before it has to reach
+	 * the application, and closing on the spot is what proves it. */
+	if (linger_ms > 0)
+		poll(NULL, 0, linger_ms);
 	close(fd);
 	return 0;
 }
@@ -1106,7 +1111,7 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] multi   <port> <src>:<dest>[@<port>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] mlisten <port> <call>[@<port>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] mui     <port> <call>[:<dest>] ...\n"
-		"       axprobe [-d] [-q] [-f axports] flood   <port> <src>:<dest> <lines>\n"
+		"       axprobe [-d] [-q] [-f axports] flood   <port> <src>:<dest> <lines> [<linger-ms>]\n"
 		"       axprobe [-d] [-q] [-f axports] sink    <port> <call> <sleep-ms>\n"
 		"\n"
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
@@ -1241,7 +1246,8 @@ int main(int argc, char **argv)
 		if (colon == NULL || optind >= argc)
 			usage();
 		snprintf(src, sizeof(src), "%.*s", (int)(colon - call), call);
-		return flood(portcall, src, colon + 1, atoi(argv[optind]));
+		return flood(portcall, src, colon + 1, atoi(argv[optind]),
+			     optind + 1 < argc ? atoi(argv[optind + 1]) : 3000);
 	}
 
 	if (strcmp(cmd, "sink") == 0) {

@@ -297,6 +297,9 @@ struct axsock_sock {
 					 * not take yet, in order */
 	size_t			plen;	/* how many of them are waiting */
 	size_t			pcap;	/* how much pend can hold */
+	int			peer_eof;	/* the session ended with the
+						 * queue not yet empty: close
+						 * the router end once it is */
 	int			port_named;	/* bind named the port itself, in
 					 * the digipeater slot - connect()
 					 * must not talk it over */
@@ -1133,16 +1136,22 @@ static int axsock_call_match(const char *listener, const char *target)
 
 #define	AXSOCK_PEND_MAX	(1 * 1024 * 1024)	/* as NETD_OUT_MAX in ax25netd */
 
+/* Let the queue go and stop the reader coming back for it. */
+static void axsock_peer_discard_locked(struct axsock_sock *s)
+{
+	if (s->plen > 0)
+		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
+	free(s->pend);
+	s->pend = NULL;
+	s->plen = 0;
+	s->pcap = 0;
+}
+
 static void axsock_peer_drop_locked(struct axsock_sock *s, const char *why)
 {
 	fprintf(stderr, "axsock: %s for %.*s - closing the session\n", why,
 		AGWPE_MAX_CALL, s->remote);
-	free(s->pend);
-	s->pend = NULL;
-	if (s->plen > 0)
-		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
-	s->plen = 0;
-	s->pcap = 0;
+	axsock_peer_discard_locked(s);
 	if (s->peer >= 0) {
 		real_close(s->peer);
 		s->peer = -1;
@@ -1156,8 +1165,19 @@ static void axsock_peer_flush_locked(struct axsock_sock *s)
 {
 	size_t off = 0;
 
-	if (s->plen == 0 || s->peer < 0)
+	if (s->plen == 0)
 		return;
+
+	/* The peer end can be closed from elsewhere - a DISCONNECT frame, or
+	 * the teardown when the AGWPE link drops - and those paths do not
+	 * know about this queue.  Letting it lie would leave axsock_npending
+	 * standing, and the reader thread would come back every 20 ms for
+	 * the rest of the process's life, looking at something nobody will
+	 * ever read. */
+	if (s->peer < 0) {
+		axsock_peer_discard_locked(s);
+		return;
+	}
 
 	while (off < s->plen) {
 		ssize_t n = real_write(s->peer, s->pend + off, s->plen - off);
@@ -1174,10 +1194,38 @@ static void axsock_peer_flush_locked(struct axsock_sock *s)
 	if (off == s->plen) {
 		s->plen = 0;
 		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
+		if (s->peer_eof) {
+			real_close(s->peer);
+			s->peer = -1;
+			s->peer_eof = 0;
+		}
 	} else if (off > 0) {
 		memmove(s->pend, s->pend + off, s->plen - off);
 		s->plen -= off;
 	}
+}
+
+/*
+ * The far end hung up, or the link to the server did.  Whatever already
+ * arrived is still the application's to read - it was received before the
+ * session ended - so the router end is closed only once the queue is empty.
+ * Closing it now would throw that away, which is the same loss this file
+ * just stopped making, only at the end of a session instead of the middle.
+ */
+static void axsock_peer_close_locked(struct axsock_sock *s)
+{
+	if (s->peer < 0)
+		return;
+	axsock_peer_flush_locked(s);
+	if (s->plen > 0 && s->peer >= 0) {
+		s->peer_eof = 1;	/* the flush loop finishes the job */
+		return;
+	}
+	if (s->peer >= 0) {
+		real_close(s->peer);
+		s->peer = -1;
+	}
+	s->peer_eof = 0;
 }
 
 /* Everything of it or nothing lost.  Returns 0 when the session lives on,
@@ -1333,10 +1381,7 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 					break;
 				}
 			} else if (hdr->datakind == AGWPE_DK_DISCONNECT) {
-				if (s->peer >= 0) {
-					real_close(s->peer);
-					s->peer = -1;
-				}
+				axsock_peer_close_locked(s);
 				s->state = AXSOCK_NEW;
 			}
 			found = 1;
@@ -1433,6 +1478,21 @@ static void *axsock_reader(void *arg)
 					s->connect_err = ECONNRESET;
 					s->state = AXSOCK_NEW;
 				} else if (s->state == AXSOCK_CONNECTED) {
+					/* Not axsock_peer_close_locked(): this
+					 * thread is the one that would come
+					 * back to finish the queue, and it is
+					 * about to return.  Push what fits,
+					 * let the rest go, and close - a
+					 * socket that never reaches EOF would
+					 * be worse than a short one. */
+					axsock_peer_flush_locked(s);
+					if (s->plen > 0)
+						fprintf(stderr,
+							"axsock: link to the server lost with %zu bytes still undelivered to %.*s\n",
+							s->plen,
+							AGWPE_MAX_CALL,
+							s->remote);
+					axsock_peer_discard_locked(s);
 					if (s->peer >= 0) {
 						real_close(s->peer);
 						s->peer = -1;
@@ -1660,10 +1720,23 @@ static void axsock_peer_reader_teardown(struct axsock_sock *s)
 	if (s->peer >= 0)
 		real_close(s->peer);
 	s->peer = -1;
-	if (s->fd >= 0)
-		real_close(s->fd);
-	s->fd = -1;
-	free(s->pend);
+
+	/*
+	 * The application's end is not ours to close, and this closed it -
+	 * against what the comment above has always said.  Two things came
+	 * of that.  Whatever the application had not read yet went with the
+	 * descriptor, so a session that ended while the reader was behind
+	 * lost its tail; and the number was handed back to the process while
+	 * the application still held it, so the next open() could be given
+	 * the same one and the application would then be reading somebody
+	 * else's file.
+	 *
+	 * Closing only the router end gives the application EOF once it has
+	 * read what arrived, which is what a socket does.  Its own close()
+	 * finds nothing in the table by then and falls through to the real
+	 * one, which is right: there is nothing left here to clean up.
+	 */
+	axsock_peer_discard_locked(s);
 	free(s);
 }
 
@@ -1795,9 +1868,7 @@ int axsock_forget(int fd)
 	*pp = s->next;
 	__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
 	peer = s->peer;
-	if (s->plen > 0)
-		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
-	free(s->pend);
+	axsock_peer_discard_locked(s);
 	free(s);
 	pthread_mutex_unlock(&axsock_lock);
 	if (peer >= 0)
@@ -2494,9 +2565,7 @@ static int agwpe_close(int fd, int *ret)
 	if (peer >= 0)
 		real_close(peer);
 	real_close(rfd);
-	if (s->plen > 0)
-		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
-	free(s->pend);
+	axsock_peer_discard_locked(s);
 	free(s);
 	*ret = 0;
 	return 1;

@@ -380,9 +380,27 @@ static const char *axports_file;
  */
 static int peer_mode;
 
+/* DL9SAU and DL9SAU-0 are one callsign written two ways.  The library knows
+ * that; a string compare does not, so the mark is built from the written-out
+ * form and a session is not accused of crossing over a hyphen. */
+static const char *nossid0(const char *call, char *buf, size_t len)
+{
+	size_t n = strlen(call);
+
+	if (n > 2 && strcmp(call + n - 2, "-0") == 0 && n - 2 < len) {
+		memcpy(buf, call, n - 2);
+		buf[n - 2] = '\0';
+		return buf;
+	}
+	return call;
+}
+
 static void pair_tag(char *out, size_t len, const char *from, const char *to)
 {
-	snprintf(out, len, "pair-%s-%s", from, to);
+	char fb[16], tb[16];
+
+	snprintf(out, len, "pair-%s-%s", nossid0(from, fb, sizeof(fb)),
+		 nossid0(to, tb, sizeof(tb)));
 }
 
 

@@ -22,6 +22,7 @@ int ax25_aton_entry(const char *name, char *buf)
 	int ct   = 0;
 	int ssid = 0;
 	const char *p = name;
+	const char *end;
 	char c;
 
 	/* A "*" is not part of a callsign.  It is the has-been-repeated mark of
@@ -33,18 +34,29 @@ int ax25_aton_entry(const char *name, char *buf)
 	 * mark quietly dropped.  Same word, two answers.
 	 */
 	if (strchr(name, '*') != NULL) {
-		printf("axutils: '*' is not part of a callsign - '%s'\n", name);
+		fprintf(stderr, "axutils: '*' is not part of a callsign - '%s'\n", name);
 		return -1;
 	}
 
-	while (ct < 6) {
+	/* Trailing blanks end the callsign.  A configuration file hands them
+	 * over often enough, they change nothing, and refusing them would only
+	 * make a whitespace character the difference between a station and an
+	 * error.  Leading ones are a different matter and stay an error below:
+	 * " DL1AA" is not a callsign written badly, it is a field that starts
+	 * in the wrong column.
+	 */
+	end = name + strlen(name);
+	while (end > name && isspace((unsigned char) end[-1]))
+		end--;
+
+	while (ct < 6 && p < end) {
 		c = toupper(*p);
 
-		if (c == '-' || c == '\0')
+		if (c == '-')
 			break;
 
 		if (!isalnum(c)) {
-			printf("axutils: invalid symbol in callsign '%s'\n", name);
+			fprintf(stderr, "axutils: invalid symbol in callsign '%s'\n", name);
 			return -1;
 		}
 
@@ -54,16 +66,50 @@ int ax25_aton_entry(const char *name, char *buf)
 		ct++;
 	}
 
+	/* Six characters is the whole callsign field.  What follows has to be
+	 * the '-' of an SSID or the end of it; anything else means the text was
+	 * never a callsign.  Skipping one character here without looking at it
+	 * - which is what this did - accepted "DL9SAU12" as DL9SAU-2 and
+	 * "DL9SAU 1" as DL9SAU-1, taking the eighth character for an SSID.
+	 * Both are typos of a real callsign, and both went through in silence.
+	 */
+	if (p < end && *p != '-') {
+		fprintf(stderr, "axutils: callsign is longer than six characters - '%s'\n", name);
+		return -1;
+	}
+
 	while (ct < 6) {
 		buf[ct] = ' ' << 1;
 		ct++;
 	}
 
-	if (*p != '\0') {
+	if (p < end) {
+		const char *d;
+
 		p++;
 
-		if (sscanf(p, "%d", &ssid) != 1 || ssid < 0 || ssid > 15) {
-			printf("axutils: SSID must follow '-' and be numeric in the range 0-15 - '%s'\n", name);
+		/* Digits, at least one, and nothing behind them.  sscanf("%d")
+		 * stopped at the first character it could not use and called
+		 * that a success, so "DL9SAU-1x" and "DL9SAU-1-2" were read as
+		 * DL9SAU-1 and the rest was dropped without a word - the same
+		 * shape of fault as the '*' above, and found the same way.
+		 */
+		for (d = p; d < end; d++)
+			if (!isdigit((unsigned char) *d)) {
+				fprintf(stderr, "axutils: SSID must follow '-' and be numeric in the range 0-15 - '%s'\n", name);
+				return -1;
+			}
+		if (d == p || (ssid = atoi(p)) < 0 || ssid > 15) {
+			fprintf(stderr, "axutils: SSID must follow '-' and be numeric in the range 0-15 - '%s'\n", name);
+			return -1;
+		}
+
+		/* An SSID wants a callsign in front of it: "-10" is not a
+		 * station.  A bare empty string still passes, as it always
+		 * has - that one has callers and wants looking at separately.
+		 */
+		if (buf[0] == (' ' << 1)) {
+			fprintf(stderr, "axutils: an SSID needs a callsign in front of it - '%s'\n", name);
 			return -1;
 		}
 	}
@@ -179,13 +225,13 @@ int rose_aton(const char *addr, char *buf)
 	int i, n;
 
 	if (strlen(addr) != 10) {
-		printf("axutils: invalid rose address '%s' length = %zd\n",
+		fprintf(stderr, "axutils: invalid rose address '%s' length = %zd\n",
 		       addr, strlen(addr));
 		return -1;
 	}
 
 	if (strspn(addr, "0123456789") != 10) {
-		printf("axutils: invalid characters in address\n");
+		fprintf(stderr, "axutils: invalid characters in address\n");
 		return -1;
 	}
 

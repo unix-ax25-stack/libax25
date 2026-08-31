@@ -2121,19 +2121,43 @@ ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
 	return n;
 }
 
-int AXSOCK_ENTRY(shutdown)(int fd, int how)
+/*
+ * The AGWPE backend, in the shape the WAMPES one has: it answers 0 for a
+ * descriptor that is not its own and 1 with the answer in *ret for one that
+ * is.  An entry point below then reads the same way for both backends,
+ * instead of one of them being the case that falls out at the end - which is
+ * what let the two drift apart, and what let a datagram socket fall through
+ * to the descriptor itself and answer EISCONN.
+ *
+ * The table and the lock stay behind these functions.  They are what a file
+ * of its own would have to export otherwise, and exporting a mutex is not a
+ * module boundary.
+ */
+
+static int agwpe_shutdown(int fd, int how, int *ret)
 {
 	struct axsock_sock *s;
 
+	(void) how;
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
-		return real_shutdown(fd, how);
+		return 0;
 	}
 	axsock_disconnect_locked(s);
 	pthread_mutex_unlock(&axsock_lock);
-	return 0;
+	*ret = 0;
+	return 1;
+}
+
+int AXSOCK_ENTRY(shutdown)(int fd, int how)
+{
+	int ret;
+
+	if (agwpe_shutdown(fd, how, &ret))
+		return ret;
+	return real_shutdown(fd, how);
 }
 
 int AXSOCK_ENTRY(close)(int fd)
@@ -2551,23 +2575,16 @@ int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 	}
 }
 
-int AXSOCK_ENTRY(getsockname)(int fd, struct sockaddr *addr, socklen_t *addrlen)
+static int agwpe_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,
+			     int *ret)
 {
 	struct axsock_sock *s;
-
-	{
-		int ret;
-
-		if (wampes_getsockname(fd, addr, addrlen, &ret))
-			return ret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
-
 	if (s == NULL)
-		return real_getsockname(fd, addr, addrlen);
+		return 0;
 
 	if (addr != NULL && addrlen != NULL &&
 	    *addrlen >= sizeof(struct sockaddr_ax25)) {
@@ -2578,29 +2595,35 @@ int AXSOCK_ENTRY(getsockname)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 		if (s->local[0] != '\0')
 			ax25_aton_entry(s->local, sa->sax25_call.ax25_call);
 		*addrlen = sizeof(struct sockaddr_ax25);
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 	errno = EINVAL;
-	return -1;
+	*ret = -1;
+	return 1;
 }
 
-int AXSOCK_ENTRY(getpeername)(int fd, struct sockaddr *addr, socklen_t *addrlen)
+int AXSOCK_ENTRY(getsockname)(int fd, struct sockaddr *addr, socklen_t *addrlen)
+{
+	int ret;
+
+	if (wampes_getsockname(fd, addr, addrlen, &ret))
+		return ret;
+	if (agwpe_getsockname(fd, addr, addrlen, &ret))
+		return ret;
+	return real_getsockname(fd, addr, addrlen);
+}
+
+static int agwpe_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
+			     int *ret)
 {
 	struct axsock_sock *s;
-
-	{
-		int ret;
-
-		if (wampes_getpeername(fd, addr, addrlen, &ret))
-			return ret;
-	}
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
-
 	if (s == NULL)
-		return real_getpeername(fd, addr, addrlen);
+		return 0;
 
 	/* No peer, no answer.  Reporting success with an empty callsign told
 	 * the caller there was a station at the other end and left it to
@@ -2609,7 +2632,8 @@ int AXSOCK_ENTRY(getpeername)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 	 * said ENOTCONN here (answer_addr() in wampes.c); say the same. */
 	if (s->remote[0] == '\0') {
 		errno = ENOTCONN;
-		return -1;
+		*ret = -1;
+		return 1;
 	}
 
 	if (addr != NULL && addrlen != NULL &&
@@ -2620,10 +2644,23 @@ int AXSOCK_ENTRY(getpeername)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 		sa->sax25_family = AF_AX25;
 		ax25_aton_entry(s->remote, sa->sax25_call.ax25_call);
 		*addrlen = sizeof(struct sockaddr_ax25);
-		return 0;
+		*ret = 0;
+		return 1;
 	}
 	errno = EINVAL;
-	return -1;
+	*ret = -1;
+	return 1;
+}
+
+int AXSOCK_ENTRY(getpeername)(int fd, struct sockaddr *addr, socklen_t *addrlen)
+{
+	int ret;
+
+	if (wampes_getpeername(fd, addr, addrlen, &ret))
+		return ret;
+	if (agwpe_getpeername(fd, addr, addrlen, &ret))
+		return ret;
+	return real_getpeername(fd, addr, addrlen);
 }
 
 /*

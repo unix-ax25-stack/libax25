@@ -315,6 +315,47 @@ itself.  See `axsock(7)` for how the library gets in front of a program on
 each platform, which differs — strong symbols on ELF, an interposing table on
 macOS.
 
+### When the kernel stack is there
+
+Whether there is one is asked once, at the first AX.25 socket, by opening one:
+
+```c
+int fd = real_socket(AF_AX25, SOCK_SEQPACKET, 0);
+```
+
+* it opens — the module is loaded, use it
+* `EAFNOSUPPORT`, `EPROTONOSUPPORT`, `EPFNOSUPPORT` — nobody registered the
+  family, so there is no native stack and the userspace path it is
+* anything else, `EPERM` for instance — keep the kernel selected, so that the
+  caller's own `socket()` reports the real reason rather than being quietly
+  rerouted
+
+It is a fact that is asked, not a policy that is chosen: *is the module
+loaded*, once.
+
+A kernel descriptor is then in none of our tables, and every intercepted call
+falls through to the real one at once — `send`, `sendto`, `write`, `recv`,
+`recvfrom`, `shutdown`, `close`, `setsockopt`, `getsockopt`, `ioctl`,
+`getsockname`, `getpeername`, `listen`, `accept`, `connect`.  Two calls are
+not in that list:
+
+* `socket()`, which is where the question above is asked
+* `bind()`, which is looked at because that is where a callsign names a port —
+  and if the port belongs to a node, the descriptor changes hands there, a
+  kernel socket included
+
+One consequence on a machine with both, worth knowing before it puzzles
+somebody: `axctl(8)` and `axkill(8)` open a socket and issue an `ioctl`
+without ever binding, so they reach the kernel's connections.  A session
+running over a node is not theirs to control.
+
+**Outlook.**  If the kernel stack disappears for good, the natural end state
+is that it becomes a third backend of the same shape as the other two — one
+dispatch, three plugins, no special case anywhere.  It is deliberately not
+that today: a kernel descriptor is in no table of ours and every call on it
+falls through immediately, which keeps the one path that demonstrably works
+untouched by anything we do.
+
 ### What a child inherits
 
 `ax25d` hands a service the connection on descriptor 0, and the child asks

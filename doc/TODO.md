@@ -62,11 +62,34 @@ What has to be answered first — descriptors that are never bound:
   `ioctl(SIOCAX25CTLCON)` immediately, with no `bind()` in between
 * a program may `connect()` without binding, and then no port is named at all
 
-So the rule cannot be "decide at `bind()`"; it has to be **decide at the first
-call that determines it, and fall back to the process default for the calls
-that cannot**.  That is a short list — `ioctl`, `connect` without a bound
-callsign, `setsockopt(SOL_AX25)` — and it should be written down before it is
-written in code.
+So the rule cannot be "decide at `bind()`".  What settles it is cheaper than a
+new rule: **the placeholder is the default backend's real socket**, not an
+empty one.  `socket()` then behaves exactly as it does today, an `ioctl` before
+any `bind()` finds the same thing it finds now, and `bind()` is where a
+descriptor can still change hands.  The question does not have to be answered,
+it disappears.
+
+Decided while planning this, so that the next reading does not reopen it:
+
+* **`agwpe.conf` becomes the register, the way `wampes.conf` already is.**  A
+  port belongs to AGWPE when its name is in that file.  The `agwpe-` prefix
+  stays a naming convention — it is decoration today too, stripped at one
+  place before the name is matched against the upstream, and it never decided
+  anything.
+* **`AXSOCK_BACKEND` goes.**  It exists to override a per-process choice that
+  is sometimes wrong; once the files decide per port there is nothing left to
+  override but "force everything to X", which is a test switch.
+* **The kernel stays "not ours".**  Making it a third backend of the same
+  shape would read better and would put every call of every AX.25 program on a
+  kernel machine through our lookup — the configuration most people run and
+  the one we can test least.  The symmetry is worth having between the two
+  backends we actually serve.  If the kernel stack disappears for good, that
+  is the moment to make it the third one.
+
+And the acceptance it has to pass, because the last rebuild found its fault
+only at the end: **three cases at run time** — kernel only, both, userspace
+only — **and both build variants**, with and without
+`--enable-userspace-ax25`.
 
 ---
 

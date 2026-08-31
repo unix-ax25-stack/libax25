@@ -164,34 +164,6 @@ the destination callsign and skips the client that sent it, so a station does
 not hear itself.  Two datagram sockets in one process cannot reach each other
 through the loop port, and that is correct — it wants two processes.
 
-**Data dropped on a full socketpair, and the lock is why.**
-`axsock_dispatch()` writes an inbound frame into the socketpair without
-blocking; on `EAGAIN` it stops and discards the rest of the frame, announcing
-it only under `AXSOCK_DEBUG`.  `EAGAIN` says "nothing was taken, come back" —
-it is an invitation, not a refusal, and treating it as one costs the
-application the tail of a frame with no way to know.  On a byte-stream
-socketpair, which is what macOS gives, the loss is not even a lost frame but a
-hole in the middle of the stream.
-
-Measured: the 1 MB the code asks for is granted here (the default is 8 KB, the
-system ceiling 8 MB), and `EAGAIN` arrives exactly at it.  So it takes a
-megabyte of unread data — a wedged reader, or a fast path like the loop port —
-and it has never been seen in the field.
-
-The obvious fix is to wait for writability and carry on, and it cannot go
-where the drop is: `axsock_dispatch()` holds `axsock_lock` across the write.
-Waiting there would not stall one session but the whole library — every
-`close()`, `connect()` and `send()` the application makes queues behind the
-same mutex.
-
-What fits is what `ax25netd` already does for its own clients, in
-`loop_send_client()`: put what the socket would not take on a per-client
-queue, push it from the main loop when the descriptor is writable again, and
-kill the client only when the queue passes a hard ceiling.  Nothing is
-dropped, nothing blocks, and the failure that remains is loud.  Here the
-queue would hang on `struct axsock_sock` and the reader thread would carry
-the pending descriptors in its poll set.
-
 **`bind()` waits on the node without a bound.**  A datagram `bind()` claims
 the callsign for incoming UI frames, and the wait for the node's answer has no
 deadline — none of the service conversations do, except the descriptor

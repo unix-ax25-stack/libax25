@@ -2522,12 +2522,25 @@ static int agwpe_close(int fd, int *ret)
 		return 0;
 	}
 
-	/* An accepted socket: its peer reader thread forwards the child's
+	/*
+	 * An accepted socket: its peer reader thread forwards the child's
 	 * outbound data and owns the teardown once the socketpair closes.
 	 * Releasing our app-end copy keeps the child's dup2()'d copies
 	 * alive; when the last one goes away the thread sees EOF.
+	 *
+	 * Owns it whenever the thread exists, which is not what the
+	 * condition said: it also asked for the session to still be up, so
+	 * a socket closed after the far end had already hung up went the
+	 * other way and was freed here - while the thread still held it and
+	 * would later tear it down again.  That is the abort in
+	 * axsock_peer_reader_teardown() that shows up when a program takes
+	 * one call after another, as ax25d(8) does, and it is older than
+	 * the queue below.
+	 *
+	 * The state does not have to be tested for the thread to wake
+	 * either: closing our copy is what puts EOF on the router end.
 	 */
-	if (s->has_peer_thread && s->state == AXSOCK_CONNECTED) {
+	if (s->has_peer_thread) {
 		int rfd_app = s->fd;
 
 		s->fd = -1;

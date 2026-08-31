@@ -1102,6 +1102,147 @@ static int sink(const char *portcall, const char *call, int slow_ms)
 	return (holes != 0 || disorder != 0) ? 1 : 0;
 }
 
+/*
+ * The same descriptor number, again and again.
+ *
+ *	fd = socket(); bind(); connect(); ... ; close(fd); fd = socket();
+ *
+ * The kernel hands back the lowest free number, so the second socket is
+ * usually the first one's number over again.  If anything of the old session
+ * is still in the table under that number - or worse, still matching on the
+ * callsigns it was using - the new session inherits it, and the symptom is
+ * traffic surfacing where it does not belong.
+ *
+ * Each round says who it is, so an echo from the round before would be
+ * recognised as such rather than counted as success.  The descriptor number
+ * is printed with it: rounds that do not reuse the number never asked the
+ * question.
+ */
+
+static int churn(const char *portcall, const char *src, const char *dst,
+		 int rounds)
+{
+	int r, bad = 0, first_fd = -1, reused = 0;
+
+	for (r = 0; r < rounds; r++) {
+		struct full_sockaddr_ax25 sa;
+		char tag[64], line[80], got[256];
+		int fd;
+
+		snprintf(tag, sizeof(tag), "round-%d-%s-%s", r, src, dst);
+
+		if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+			perror("axprobe: socket");
+			return 1;
+		}
+		if (r == 0)
+			first_fd = fd;
+		else if (fd == first_fd)
+			reused++;
+
+		if (bind_port(fd, portcall, strcmp(src, "-") ? src : portcall)
+		    < 0)
+			return 1;
+		memset(&sa, 0, sizeof(sa));
+		sa.fsa_ax25.sax25_family = AF_AX25;
+		if (aton_entry(dst, sa.fsa_ax25.sax25_call.ax25_call) < 0) {
+			fprintf(stderr, "axprobe: invalid destination\n");
+			return 1;
+		}
+		if (p_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+			printf("%d fd=%d connect: %s\n", r, fd,
+			       strerror(errno));
+			close(fd);
+			bad = 1;
+			continue;
+		}
+
+		snprintf(line, sizeof(line), "%s\n", tag);
+		if (write(fd, line, strlen(line)) < 0) {
+			printf("%d fd=%d write: %s\n", r, fd, strerror(errno));
+			close(fd);
+			bad = 1;
+			continue;
+		}
+
+		if (!gather(fd, got, sizeof(got), tag, 3000)) {
+			char *nl;
+
+			while ((nl = strchr(got, '\n')) != NULL)
+				*nl = '|';
+			printf("%d fd=%d STALE-OR-LOST: %s\n", r, fd,
+			       got[0] ? got : "(nothing)");
+			bad = 1;
+		} else {
+			printf("%d fd=%d ok\n", r, fd);
+		}
+		close(fd);
+	}
+
+	printf("churn: %d rounds, %d reused fd %d\n", rounds, reused,
+	       first_fd);
+	if (reused == 0)
+		printf("churn: the number was never reused - "
+		       "this run proves nothing\n");
+	return bad;
+}
+
+/* The other half of churn: take one call after another and echo. */
+static int echoserver(const char *portcall, const char *call, int rounds)
+{
+	int fd, r;
+
+	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+		perror("axprobe: socket");
+		return 1;
+	}
+	if (bind_port(fd, portcall, call) < 0)
+		return 1;
+	if (p_listen(fd, 1) < 0) {
+		perror("axprobe: listen");
+		return 1;
+	}
+
+	for (r = 0; r < rounds; r++) {
+		struct full_sockaddr_ax25 sa;
+		socklen_t alen = sizeof(sa);
+		char buf[4096];
+		int nfd;
+
+		struct pollfd lp;
+
+		/* Poll first, so this works against a build whose accept()
+		 * answers EAGAIN instead of waiting. */
+		lp.fd = fd;
+		lp.events = POLLIN;
+		if (poll(&lp, 1, 15000) <= 0)
+			break;
+		memset(&sa, 0, sizeof(sa));
+		if ((nfd = p_accept(fd, (struct sockaddr *)&sa, &alen)) < 0) {
+			perror("axprobe: accept");
+			break;
+		}
+		for (;;) {
+			struct pollfd pfd;
+			ssize_t n;
+
+			pfd.fd = nfd;
+			pfd.events = POLLIN;
+			if (poll(&pfd, 1, 4000) <= 0)
+				break;
+			if ((n = read(nfd, buf, sizeof(buf))) <= 0)
+				break;
+			if (write(nfd, buf, (size_t) n) < 0)
+				break;
+		}
+		close(nfd);
+		if (verbose)
+			fprintf(stderr, "axprobe: round %d served\n", r);
+	}
+	close(fd);
+	return 0;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -1113,6 +1254,8 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] mui     <port> <call>[:<dest>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] flood   <port> <src>:<dest> <lines> [<linger-ms>]\n"
 		"       axprobe [-d] [-q] [-f axports] sink    <port> <call> <sleep-ms>\n"
+		"       axprobe [-d] [-q] [-f axports] churn   <port> <src>:<dest> <rounds>\n"
+		"       axprobe [-d] [-q] [-f axports] echo    <port> <call> <rounds>\n"
 		"\n"
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
 		"      calling them directly - the only way an inserted library is seen\n"
@@ -1236,6 +1379,24 @@ int main(int argc, char **argv)
 		if (verbose)
 			report(nfd);
 		return shovel(nfd);
+	}
+
+	if (strcmp(cmd, "churn") == 0) {
+		const char *colon = strchr(call, ':');
+		char src[16];
+
+		close(fd);
+		if (colon == NULL || optind >= argc)
+			usage();
+		snprintf(src, sizeof(src), "%.*s", (int)(colon - call), call);
+		return churn(portcall, src, colon + 1, atoi(argv[optind]));
+	}
+
+	if (strcmp(cmd, "echo") == 0) {
+		close(fd);
+		if (optind >= argc)
+			usage();
+		return echoserver(portcall, call, atoi(argv[optind]));
 	}
 
 	if (strcmp(cmd, "flood") == 0) {

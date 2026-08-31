@@ -1622,6 +1622,24 @@ int axsock_forget(int fd)
 	return 0;
 }
 
+/*
+ * socket() is the one entry point that cannot ask "is this yours?": there
+ * is no descriptor yet, and no callsign, so no port and no backend either.
+ * It chooses instead, and the two backends are constructors here rather
+ * than the pair of askers they are everywhere else.  What would remove the
+ * exception is described in doc/TODO.md - hand out a placeholder here and
+ * let bind() put the real descriptor over it - and it is not this step.
+ */
+static int agwpe_socket(int type)
+{
+	if (type != SOCK_SEQPACKET && type != SOCK_DGRAM &&
+	    type != SOCK_RAW) {
+		errno = EPROTONOSUPPORT;
+		return -1;
+	}
+	return axsock_new_sock(type);
+}
+
 int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 {
 	struct axsock_sock *s;
@@ -1707,40 +1725,24 @@ int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 	if (domain != AF_AX25)
 		return real_socket(domain, type, protocol);
 
-	/* Whoever ends up owning this descriptor, the protocol id was said
-	 * here and nowhere else; bind() is too late to ask.
+	/* One chooser, not two.  The protocol id was said here and nowhere
+	 * else - bind() is too late to ask - so it is noted afterwards, on
+	 * whichever descriptor the chooser handed back, instead of the
+	 * choice being written out a second time for protocol != 0.
 	 */
-	if (protocol != 0) {
-		int nfd = -1;
-
-		if (wampes_enabled())
-			nfd = wampes_socket(type);
-		else if (axsock_backend_now() == 1)
-			nfd = real_socket(domain, type, protocol);
-		else
-			nfd = axsock_new_sock(type);
-		if (nfd >= 0)
-			wampes_note_protocol(nfd, protocol);
-		return nfd;
-	}
-
-	/* WAMPES: the node runs the AX.25 machine, one socket per connection.
-	 * Nothing is tracked here - see wampes.c. */
 	if (wampes_enabled())
-		return wampes_socket(type);
-
-	/* Kernel backend: hand AF_AX25 to the kernel stack unchanged.  The
-	 * resulting fd is not tracked in the axsock table, so every other
-	 * interceptor falls through to its real_* counterpart. */
-	if (axsock_backend_now() == 1)
-		return real_socket(domain, type, protocol);
-
-	if (type != SOCK_SEQPACKET && type != SOCK_DGRAM &&
-	    type != SOCK_RAW) {
-		errno = EPROTONOSUPPORT;
-		return -1;
-	}
-	return axsock_new_sock(type);
+		fd = wampes_socket(type);
+	else if (axsock_backend_now() == 1)
+		/* Kernel backend: hand AF_AX25 to the kernel stack unchanged.
+		 * The resulting fd is not tracked in the axsock table, so
+		 * every other interceptor falls through to its real_*
+		 * counterpart. */
+		fd = real_socket(domain, type, protocol);
+	else
+		fd = agwpe_socket(type);
+	if (fd >= 0 && protocol != 0)
+		wampes_note_protocol(fd, protocol);
+	return fd;
 }
 
 static int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,

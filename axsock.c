@@ -1349,6 +1349,19 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 		goto out;
 	}
 
+	/*
+	 * Matched on the callsigns, not on a descriptor - which means a
+	 * socket the application has closed can still be in this list and
+	 * still carry the pair a new one is using.  It has to be: ax25d(8)
+	 * hands the accepted descriptor to a forked child as stdin and
+	 * stdout, closes its own copy, and the child reads on through the
+	 * dup2()'d ones, so an entry with fd == -1 is a live session.
+	 *
+	 * What keeps the two apart is the order: a new socket goes on the
+	 * front of the list, so the newest holder of a pair is found first,
+	 * and that is the right precedence anyway - a session opened after
+	 * another supersedes it.
+	 */
 	for (s = axsock_list; s != NULL; s = s->next) {
 		if (strncasecmp(s->local, hdr->call_to, AGWPE_MAX_CALL) != 0)
 			continue;

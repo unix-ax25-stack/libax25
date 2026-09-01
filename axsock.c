@@ -1309,16 +1309,21 @@ static void axsock_flush_pending(void)
 }
 
 /*
- * A connection coming up, said either way.  The server reports one with 'C',
- * but a connect that named a protocol id went out as 'c'
- * (AGWPE_CMD_CONNECT_PID) and comes back as 'c' - ax25netd hands the frame on
- * as it got it rather than normalising it.  Knowing only 'C' meant a connect
- * with any pid but text was not recognised at all: the caller waited out its
- * timeout and the listener never saw the call.
+ * A connection coming up, however it is spelled.  A connect has three
+ * spellings on the way out - 'C' plain, 'v' through digipeaters, 'c' with a
+ * protocol id that is not text - and ax25netd hands the frame on as it got it
+ * rather than normalising it to the 'C' a server would report.  Knowing only
+ * 'C' meant neither a digipeated connect nor one with a pid was recognised at
+ * all: the caller sat out its timeout and the callee never saw the call.
+ *
+ * Both directions, because the caller reads its own confirmation from the
+ * same dispatch.
  */
 static int agwpe_is_connect(unsigned char kind)
 {
-	return kind == AGWPE_DK_CONNECT || kind == AGWPE_CMD_CONNECT_PID;
+	return kind == AGWPE_DK_CONNECT ||
+	       kind == AGWPE_CMD_CONNECT_VIA ||
+	       kind == AGWPE_CMD_CONNECT_PID;
 }
 
 static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,

@@ -59,9 +59,17 @@ AGWPE were an abandoned corner, which it is not — it is the way to a
 where the faults of the last few days had been sitting, some since the first
 commit.
 
-Which brings an acceptance step with it: **the direwolf tests want repeating.**
-They last passed some weeks ago, against code that has moved a long way
-underneath them since — most of it in the AGWPE path.
+The acceptance step that went with it — **the direwolf tests want repeating** —
+is done.  Against a real direwolf, fed audio over UDP so a client can be
+connected before anything arrives, all four frame kinds leave correctly:
+
+  connect            'C'   DL9SAU-9 > DB0AAA
+  connect via        'v'   ndigis 2, DB0BBB and DB0CCC
+  connect with pid   'c'   what direwolf calls a non-standard connection
+  unproto via        'V'   pid 0xf0, two digipeaters, payload intact
+
+and a UI frame is received through the monitor stream, which is the half that
+did not exist when those tests were last run.
 
 What has to be answered first — descriptors that are never bound:
 

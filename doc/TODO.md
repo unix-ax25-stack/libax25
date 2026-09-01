@@ -204,27 +204,25 @@ the bytes.  It would want the counted form, the way the datagram path already
 works — so it is not one line in `axlisten_find()` but a different kind of
 client.  Worth deciding in the WAMPES tree before it is built here.
 
-**`AX25_WINDOW` and friends are accepted and dropped, differently.**  A
-program that has read `window` from `axports(5)` — `call(1)` does — sets it
-with `setsockopt(SOL_AX25, AX25_WINDOW)` before connecting.  Neither backend
-carries it: the AGWPE connect frames have no field for it and the node's
-`connect` line has no room for it.  AGWPE says so once per option on stderr;
-the node backend accepts it in silence.  `getsockopt(SOL_AX25)` differs too —
-AGWPE answers success with a zeroed value, the node path falls through to the
-real call and fails.
+**`getsockopt(SOL_AX25)` still answers two different things.**  `setsockopt()`
+is aligned — both backends accept a channel parameter, both say once per option
+that it went nowhere, and both refuse the two that change what the bytes mean.
+Reading one back was not touched: the AGWPE path answers success with a zeroed
+value and the node path falls through to the real call and fails.  Nothing in
+the suite reads one back, which is why it has not bitten, and also why fixing
+it is cheap: pick one answer.  Zeroes-and-success is the friendlier lie and
+`ENOPROTOOPT` is the true one; a value kept from the `setsockopt` would be
+better than either, and is the most work.
 
-There is a mechanism on the AGWPE side that looks like the answer and is not:
-`AGWPE_CTL_PARAM_WINDOW` reaches `ax25netd`, which stores it in `s->window`
-and never reads it again, and does not pass it upstream.  So routing
-`setsockopt` into a control frame would achieve nothing until the daemon uses
-the value.
+The parameters themselves stay where they are.  Neither backend carries them —
+the AGWPE connect frames have no field and the node's `connect` line has no
+room — and the far side would ignore them anyway, taking its window and timers
+from its own interface configuration.  There is a mechanism on the AGWPE side
+that looks like the answer and is not: `AGWPE_CTL_PARAM_WINDOW` reaches
+`ax25netd`, which stores it in `s->window`, never reads it again and does not
+pass it upstream.
 
-For an incoming connection the question does not arise: the AX.25 machine is
-in the node or in direwolf and takes its parameters from its own interface
-configuration.  Worth aligning anyway — one warning on both sides, and one
-answer from `getsockopt`.
-
-**UI reception off the monitor stream: built, and one condition untested.**
+**UI reception off the monitor stream: built and measured.**
 It works through `ax25netd(8)` both ways now — the direct route on its loop
 port, and the monitor stream on every other port, which is the only way a real
 AGWPE server has and is what a monitor channel is for.  Measured on a radio

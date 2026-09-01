@@ -149,64 +149,36 @@ inserts itself into a path.  Worth saying out loud that on a shared channel
 such a frame is indistinguishable from a real digipeat, so it is a tool and a
 footgun in the same hand.
 
-**The protocol id is not part of a listener's identity on the AGWPE side.**
+**What is left of the protocol id on the AGWPE side.**  Most of it is done —
+`socket()` carries the pid through, frames go out with it, the inbound match
+prefers a listener that claims it, `listen()` refuses a second one on the same
+callsign and pid, and a connect spelled `c` is recognised.  Two things remain,
+and both are outside this file.
 
-What the pid *is*, first, because it is not "another connection": on the air
-there is one link between two stations, and the I frames inside it carry a pid
-each.  The node splits them by that pid — when a link comes up it walks its
-entries for the callsign and starts a service for **every** configured pid
-(`axserver.c`, the loop calling `axserv_start(axp, lp->pid)`), and each service
-gets the frames of its own pid.  One link, several clients.  That maps onto
-`socket(AF_AX25, SOCK_SEQPACKET, protocol)` exactly: one socket per pid, all
-of them fed by the same link.
+**Two processes cannot divide one callsign by pid.**  AGWPE registers a
+callsign with `X`, and `X` carries no pid, so the server hands its one owner
+everything addressed to it.  Sorting therefore happens in the client, which
+can only sort what reaches it.  The node backend has no such limit: its
+`listen ax25` entries are per pid and the node splits the link into one stream
+per pid before anything reaches us — which is the better division of labour
+and the reason not to build a multiplexer here.  Giving AGWPE the same would
+mean a pid on the registration, which is a change to `ax25netd(8)` and to what
+it can claim to be.
 
-The key is `(callsign, pid, ui)` — `axlisten_find()` compares the pid exactly,
-there is no wildcard — so one callsign carries one listener per pid, a second
-claim on the same three is refused with `already taken`, and the library maps
-that to `EADDRINUSE`.  Measured, both halves: a second listener for the same
-pid is refused, and one for `pid=0xcf` beside one for `pid=0xf0` is not.
+**`ax25netd` passes a connect on as it received it.**  A connect that named a
+pid arrives at the listener as `c` rather than `C`.  The library copes with
+both now, but a client that knows only the AGWPE spelling would not, and the
+daemon is the one place that could normalise it while keeping the pid in the
+header where it belongs.
 
-Through AGWPE none of that happens.  Measured on the same test:
-
-* `agwpe_listen()` checks nothing.  A second listener on the same callsign
-  becomes `listening` and is registered like the first.
-* `ax25netd(8)` does not refuse it either; `loop_call_by_call()` returns the
-  first registration it finds.
-* the inbound match in `axsock_dispatch()` takes the first `listening` socket
-  whose callsign fits and **never looks at the pid at all**
-* and there is nothing to look at: the `protocol` argument of `socket()` is
-  recorded only for the node backend (`wampes_note_protocol()`); on the AGWPE
-  path `s->pid` stays `AGWPE_PID_AX25`
-
-So the second listener is not refused, it simply never hears anything — and a
-NET/ROM listener that registered first would swallow a text connect.  Nobody
-is at fault by itself: the library does not check, and the daemon does not
-either.
-
-**And it goes out wrong as well.**  `axsock_send_unproto()` writes `s->pid`
-into the frame, and on the AGWPE path `s->pid` is assigned in exactly one
-place — `AGWPE_PID_AX25` when the socket is made.  A program that asks for
-`socket(AF_AX25, SOCK_DGRAM, AX25_P_NETROM)` therefore transmits **text**.
-That is the harmless direction, in that nothing can be injected into a
-neighbour's NET/ROM or IP parser by accident, but it also means NET/ROM over
-the AGWPE backend cannot work: its NODES broadcasts would leave as text and
-no neighbour would recognise them.
-
-Worth keeping in view while fixing it, because the pid is a promise about the
-payload and not a label.  `0xF0` promises text and is what an announcement
-wants.  `0xCF` promises a NET/ROM network header — the NODES broadcasts a node
-sends itself are exactly that, so arbitrary bytes under it are garbage in a
-routing protocol.  `0xCC` promises an IP datagram, and a receiver with IP over
-AX.25 configured hands the payload to its IP stack.  Carrying the pid faithfully
-is the fix; letting a program choose one it does not honour is a different
-question, and belongs with the access control further down.
-
-What it takes, smallest first: carry the pid on the AGWPE path the way the
-node backend already does; compare it in the inbound match; have
-`agwpe_listen()` answer `EADDRINUSE` for a second listener on the same
-`(callsign, pid)` in this process, the same answer the node gives.  Across
-processes it wants `ax25netd` to key its registrations on `(call, pid)` and
-refuse a duplicate, which is a change to the daemon rather than here.
+**And a question for the node, not for here:** whether `listen ax25 <call>
+client pid=any` would be worth having.  It would save a sysop an entry per pid
+and let one program take everything on a callsign.  What speaks against it is
+that the session is handed over as a raw descriptor: with several pids on one
+stream the client cannot tell which frame was which, because the pid is not in
+the bytes.  It would want the counted form, the way the datagram path already
+works — so it is not one line in `axlisten_find()` but a different kind of
+client.  Worth deciding in the WAMPES tree before it is built here.
 
 **The same situation, two error numbers.**  A connect that cannot be made
 because the link already exists answers `EADDRINUSE` through the node — it

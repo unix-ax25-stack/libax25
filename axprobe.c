@@ -948,6 +948,8 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 	}
 
 	for (i = 0; i < n; i++) {
+		struct full_sockaddr_ax25 who;
+		socklen_t wlen;
 		struct pollfd pfd;
 		ssize_t r;
 
@@ -957,8 +959,11 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 			snprintf(ses[i].got, sizeof(ses[i].got), "(nothing)");
 			continue;
 		}
+		memset(&who, 0, sizeof(who));
+		wlen = sizeof(who);
 		if ((r = recvfrom(ses[i].fd, ses[i].got,
-				  sizeof(ses[i].got) - 1, 0, NULL, NULL)) <= 0) {
+				  sizeof(ses[i].got) - 1, 0,
+				  (struct sockaddr *)&who, &wlen)) <= 0) {
 			/* A claim the node refused is kept and handed over
 			 * here, so the reason is worth printing rather than
 			 * flattening to "(eof)". */
@@ -970,6 +975,10 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 		while (r > 0 && (ses[i].got[r - 1] == '\n' ||
 				 ses[i].got[r - 1] == '\r'))
 			ses[i].got[--r] = '\0';
+		if (wlen >= sizeof(struct sockaddr_ax25) &&
+		    who.fsa_ax25.sax25_family == AF_AX25)
+			snprintf(ses[i].dst, sizeof(ses[i].dst), "%s",
+				 ntoa(who.fsa_ax25.sax25_call.ax25_call));
 	}
 
 	/*
@@ -1017,8 +1026,8 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 		}
 		if (strcmp(verdict, "ok") != 0)
 			bad = 1;
-		printf("%d %s <- %s: %s\n", i, ses[i].src, verdict,
-		       ses[i].got);
+		printf("%d %s <- %s %s: %s\n", i, ses[i].src,
+		       ses[i].dst[0] ? ses[i].dst : "?", verdict, ses[i].got);
 	}
 
 	for (i = 0; i < n; i++)
@@ -1378,6 +1387,13 @@ static int read_exactly(int fd, char *buf, size_t want, int msec)
 	return 0;
 }
 
+/*
+ * The receiving half of evil, for datagrams: the same list in the same order,
+ * compared as it arrives.  A length-prefixed record is where a NUL or a zero
+ * length goes wrong, and reading it back is the only way to know it did not.
+ */
+static int evil_rx(const char *portcall, const char *call);
+
 static int evil(const char *portcall, const char *src, const char *dst,
 		int dgram)
 {
@@ -1634,6 +1650,89 @@ static int mixed(const char *portcall, const char *listencall,
 	return bad;
 }
 
+static int evil_rx(const char *portcall, const char *call)
+{
+	static char every[256], boundary[256];
+	struct evilcase cases[] = {
+		{ "plain",		"hello",		5 },
+		{ "LF in the middle",	"one\ntwo",		7 },
+		{ "CR in the middle",	"one\rtwo",		7 },
+		{ "CRLF",		"one\r\ntwo",		8 },
+		{ "NUL in the middle",	"one\0two",		7 },
+		{ "leading LF",		"\nafter",		6 },
+		{ "trailing LF",	"before\n",		7 },
+		{ "only a LF",		"\n",			1 },
+		{ "a node answer",	"*** connected to DB0XXX\n", 24 },
+		{ "a link failure",	"*** link failure with X - busy\n", 31 },
+		{ "a counted header",	"[5]DL1ABC>DB0AAA:12345", 22 },
+		{ "brackets and colon",	"]:[99]x:y",		9 },
+		{ "every byte value",	every,			sizeof(every) },
+		{ "256 bytes",		boundary,		sizeof(boundary) },
+	};
+	struct full_sockaddr_ax25 sa;
+	int fd, i, bad = 0;
+	size_t k;
+
+	for (k = 0; k < sizeof(every); k++)
+		every[k] = (char) k;
+	memset(boundary, 'B', sizeof(boundary));
+
+	if ((fd = p_socket(AF_AX25, SOCK_DGRAM, want_pid)) < 0) {
+		perror("axprobe: socket");
+		return 1;
+	}
+	if (bind_port(fd, portcall, call) < 0)
+		return 1;
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+		char back[700];
+		struct full_sockaddr_ax25 who;
+		socklen_t wlen = sizeof(who);
+		struct pollfd pfd;
+		ssize_t r;
+
+		pfd.fd = fd;
+		pfd.events = POLLIN;
+		if (poll(&pfd, 1, 6000) <= 0) {
+			printf("%-20s nothing arrived\n", cases[i].what);
+			bad = 1;
+			continue;
+		}
+		memset(&who, 0, sizeof(who));
+		r = recvfrom(fd, back, sizeof(back), 0,
+			     (struct sockaddr *)&who, &wlen);
+		if (r < 0) {
+			printf("%-20s recvfrom: %s\n", cases[i].what,
+			       strerror(errno));
+			bad = 1;
+			continue;
+		}
+		if ((size_t) r != cases[i].len) {
+			printf("%-20s %zu bytes sent, %zd arrived\n",
+			       cases[i].what, cases[i].len, r);
+			bad = 1;
+			continue;
+		}
+		if (memcmp(back, cases[i].data, cases[i].len) != 0) {
+			size_t j;
+
+			for (j = 0; j < cases[i].len; j++)
+				if (back[j] != cases[i].data[j])
+					break;
+			printf("%-20s CHANGED at byte %zu\n", cases[i].what, j);
+			bad = 1;
+			continue;
+		}
+		printf("%-20s %zu bytes from %s, identical\n", cases[i].what,
+		       cases[i].len,
+		       ntoa(who.fsa_ax25.sax25_call.ax25_call));
+	}
+
+	(void) sa;
+	close(fd);
+	return bad;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -1648,6 +1747,7 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] churn   <port> <src>:<dest> <rounds>\n"
 		"       axprobe [-d] [-q] [-f axports] echo    <port> <call> <rounds>\n"
 		"       axprobe [-d] [-q] [-f axports] evil    <port> <src>:<dest> [ui]\n"
+		"       axprobe [-d] [-q] [-f axports] evilrx  <port> <call>\n"
 		"       axprobe [-d] [-q] [-f axports] mixed   <port> <listen> <src>:<dest>\n"
 		"\n"
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
@@ -1811,6 +1911,11 @@ int main(int argc, char **argv)
 		snprintf(src, sizeof(src), "%.*s", (int)(colon - call), call);
 		return evil(portcall, src, colon + 1,
 			    optind < argc && !strcmp(argv[optind], "ui"));
+	}
+
+	if (strcmp(cmd, "evilrx") == 0) {
+		close(fd);
+		return evil_rx(portcall, call);
 	}
 
 	if (strcmp(cmd, "churn") == 0) {

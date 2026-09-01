@@ -766,28 +766,6 @@ static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 	port[portlen - 1] = '\0';
 }
 
-/* Put an unbound unix socket behind a descriptor the application already
- * holds.  Used when a port turns out to be a WAMPES one after the socket was
- * made by somebody else - a kernel AF_AX25 socket, say.  The number survives,
- * which is all the application knows about it.
- */
-
-static int replace_with_placeholder(int fd)
-{
-	int ph;
-
-	if ((ph = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
-		return -1;
-	if (dup2(ph, fd) < 0) {
-		int save = errno;
-
-		close(ph);
-		errno = save;
-		return -1;
-	}
-	close(ph);
-	return 0;
-}
 
 /* Defined with the rest of the receiving side, below. */
 static void claim_ui(struct wampes_sock *s);
@@ -827,9 +805,9 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 		 * EISCONN, which is true of a socketpair end and says nothing
 		 * about AX.25.
 		 */
-		int type = axsock_socktype(fd);
+		int type = agwpe_socktype(fd);
 
-		if (axsock_forget(fd) != 0 && replace_with_placeholder(fd)) {
+		if (agwpe_forget(fd) != 0 && axsock_placeholder(fd)) {
 			*ret = -1;
 			return 1;
 		}
@@ -992,14 +970,8 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		close(sock);
 		sock = handed;
 	}
-	if (dup2(sock, fd) < 0) {
-		int save = errno;
-
-		close(sock);
-		errno = save;
+	if (axsock_replace(fd, sock) < 0)
 		return 1;
-	}
-	close(sock);
 	s->connected = 1;
 	/* ax25d and axspawn ask afterwards who is at each end; answer from
 	 * what we already had rather than from the unix socket underneath,
@@ -1078,14 +1050,8 @@ int wampes_listen(int fd, int *ret)
 		errno = listen_errno(line);
 		return 1;
 	}
-	if (dup2(sock, fd) < 0) {
-		int save = errno;
-
-		close(sock);
-		errno = save;
+	if (axsock_replace(fd, sock) < 0)
 		return 1;
-	}
-	close(sock);
 	s->listening = 1;
 	*ret = 0;
 	return 1;
@@ -1468,12 +1434,10 @@ static void claim_ui(struct wampes_sock *s)
 	/* The connection becomes the descriptor, as it does for a listening
 	 * socket: from here poll() and select() answer for it and nothing of
 	 * ours is asked. */
-	if (dup2(c, s->fd) < 0) {
+	if (axsock_replace(s->fd, c) < 0) {
 		s->rxerr = errno;
-		close(c);
 		return;
 	}
-	close(c);
 	s->rxclaimed = 1;
 	s->rxerr = 0;
 }

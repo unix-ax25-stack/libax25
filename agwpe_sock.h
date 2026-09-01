@@ -54,7 +54,11 @@ int agwpe_write(int fd, const void *buf, size_t len, ssize_t *ret);
  * is and then takes it away.  Two calls, one direction, and the only edge
  * between the two backends themselves.
  */
-int axsock_socktype(int fd);
-int axsock_forget(int fd);
+int agwpe_socktype(int fd);
+int agwpe_forget(int fd);
+
+/* Named agwpe_* since the split, because that is what they are: this
+ * backend letting go.  They used to be axsock_*, from when everything lived
+ * in one file and the prefix said nothing. */
 
 #endif /* AGWPE_SOCK_H */

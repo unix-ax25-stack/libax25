@@ -84,6 +84,15 @@ static int	verbose = 1;
  */
 static int want_pid;
 
+/*
+ * How long to wait for something to arrive, in seconds.  Six was enough for
+ * a node on a unix socket and is not enough for a link over the air: a 1200
+ * baud SABME with its fallback to SABM takes tens of seconds before the far
+ * end has even been asked.  A test that gives up first reports a fault that
+ * is its own.
+ */
+static int patience = 6;
+
 static void *lookup(const char *name)
 {
 	void *f = dlsym(RTLD_DEFAULT, name);
@@ -513,7 +522,7 @@ static int multi(int argc, char **argv, int optind_, const char *portcall)
 			continue;
 		pfd.fd = ses[i].fd;
 		pfd.events = POLLIN;
-		if (poll(&pfd, 1, 3000) <= 0) {
+		if (poll(&pfd, 1, patience * 1000) <= 0) {
 			snprintf(ses[i].got, sizeof(ses[i].got), "(nothing)");
 			continue;
 		}
@@ -758,7 +767,7 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 		}
 		if (np == 0)
 			break;
-		if (poll(pfd, (nfds_t) np, 6000) <= 0)
+		if (poll(pfd, (nfds_t) np, patience * 1000) <= 0)
 			break;
 		for (i = 0; i < np; i++) {
 			struct full_sockaddr_ax25 sa;
@@ -804,7 +813,7 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 		else
 			strcpy(want, ses[i].tag);
 		if (!gather(ses[i].fd, ses[i].got, sizeof(ses[i].got), want,
-			    3000) && ses[i].got[0] == '\0')
+			    patience * 1000) && ses[i].got[0] == '\0')
 			snprintf(ses[i].got, sizeof(ses[i].got), "(nothing)");
 	}
 
@@ -955,7 +964,7 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 
 		pfd.fd = ses[i].fd;
 		pfd.events = POLLIN;
-		if (poll(&pfd, 1, 3000) <= 0) {
+		if (poll(&pfd, 1, patience * 1000) <= 0) {
 			snprintf(ses[i].got, sizeof(ses[i].got), "(nothing)");
 			continue;
 		}
@@ -1580,7 +1589,7 @@ static int mixed(const char *portcall, const char *listencall,
 	/* Now the call from the other side. */
 	pfd.fd = lfd;
 	pfd.events = POLLIN;
-	if (poll(&pfd, 1, 8000) > 0) {
+	if (poll(&pfd, 1, patience * 1000) > 0) {
 		memset(&sa, 0, sizeof(sa));
 		ifd = p_accept(lfd, (struct sockaddr *)&sa, &alen);
 	}
@@ -1605,7 +1614,7 @@ static int mixed(const char *portcall, const char *listencall,
 			pair_tag(owant, sizeof(owant), dst, src);
 		else
 			strcpy(owant, otag);
-		if (gather(ofd, got, sizeof(got), owant, 5000)) {
+		if (gather(ofd, got, sizeof(got), owant, patience * 1000)) {
 			printf("out %s>%s ok\n", src, dst);
 		} else {
 			char *nl;
@@ -1626,7 +1635,7 @@ static int mixed(const char *portcall, const char *listencall,
 			pair_tag(iwant, sizeof(iwant), peer, listencall);
 		else
 			strcpy(iwant, itag);
-		if (gather(ifd, got, sizeof(got), iwant, 5000)) {
+		if (gather(ifd, got, sizeof(got), iwant, patience * 1000)) {
 			printf("in  %s<%s ok\n", listencall, peer);
 		} else {
 			char *nl;
@@ -1693,7 +1702,7 @@ static int evil_rx(const char *portcall, const char *call)
 
 		pfd.fd = fd;
 		pfd.events = POLLIN;
-		if (poll(&pfd, 1, 6000) <= 0) {
+		if (poll(&pfd, 1, patience * 1000) <= 0) {
 			printf("%-20s nothing arrived\n", cases[i].what);
 			bad = 1;
 			continue;
@@ -1759,6 +1768,8 @@ static void usage(void)
 		"  -z  multi: close this session after the first exchange and ask the\n"
 		"      others again - 0 is the one opened first\n"
 		"  -P  protocol id for socket(), e.g. 0xf0 text or 0xcf NET/ROM\n"
+		"  -w  seconds to wait for something to arrive (default 6; a link\n"
+		"      over the air wants far more than a node on a unix socket)\n"
 		"  -q  no commentary on stderr\n"
 		"  -f  axports to read instead of " CONF_AXPORTS_FILE "\n"
 		"\n"
@@ -1778,7 +1789,7 @@ int main(int argc, char **argv)
 	 * still have said how far it got. */
 	setvbuf(stdout, NULL, _IONBF, 0);
 
-	while ((c = getopt(argc, argv, "dP:f:pqz:")) != -1) {
+	while ((c = getopt(argc, argv, "dP:f:pqw:z:")) != -1) {
 		switch (c) {
 		case 'd':
 			use_dlsym = 1;
@@ -1788,6 +1799,9 @@ int main(int argc, char **argv)
 			break;
 		case 'z':
 			close_which = atoi(optarg);
+			break;
+		case 'w':
+			patience = atoi(optarg);
 			break;
 		case 'P':
 			want_pid = (int) strtol(optarg, NULL, 0);

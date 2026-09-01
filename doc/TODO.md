@@ -223,28 +223,29 @@ AGWPE server has and is what a monitor channel is for.  Measured on a radio
 port across two processes, byte-identical for the same fourteen payloads that
 torture the loop path.
 
-**What the has-been-repeated condition in the echo filter is actually for**,
-which is worth stating because it is not what it looks like.  Against
-`ax25netd` it never decides anything: the daemon mirrors a client's own
-transmission back at once — its transmit leg — so the echo entry is consumed
-by that copy long before any digipeat could arrive over the air, and every
-later frame is delivered whether the mark is set or not.  Which is also why it
-cannot be exercised here: there is no lage in which it changes the outcome.
+**Measured against direwolf, and the answer settles the echo filter.**
+direwolf does **not** mirror a client's own transmission into the raw monitor
+stream - zero `K` frames come back for a UI frame sent through it, where
+`ax25netd` mirrors one at once.  So the two behave oppositely, and the
+has-been-repeated condition is not a belt-and-braces on the AGWPE path but the
+thing that carries it: with no mirror the echo entry stays unused, and the
+first frame to match it is the digipeat.
 
-It matters if a server does **not** mirror what we transmit.  Then the entry
-stays unused, and the first frame to match it is the digipeat — which without
-the condition would be taken for our own echo and dropped, losing exactly the
-frame that proves the hop happened.  Whether `direwolf` mirrors its own
-transmissions is not known here, so that is a concrete thing to establish on
-the `direwolf` run: send a UI frame with a datagram socket bound, and see
-whether the copy comes back.  If it does not, this condition is the only thing
-between a digipeat and the wastebasket.
+Driven end to end, over real audio, on the two cases that differ only in the
+mark:
 
-Worth remembering what the filter must *not* do, because the obvious version
-gets both wrong: a digipeater repeating us is the same source callsign and a
-different frame, and our own frame heard back on another port is information
-about the network.  Only all three together — same port, nothing repeated,
-same frame — is an echo.
+  same payload, no mark   suppressed as our own echo
+  same payload, DB0XYZ*   delivered, sender named
+
+which is what it is for.  Without the condition the second would have gone in
+the bin - and it is the frame that proves the hop happened.
+
+The rig is two things direwolf already ships plus one script: `gen_packets`
+turns TNC2 lines into audio and keeps the `*`, and `ADEVICE udp:7355` lets the
+audio in whenever we like rather than only at startup, where no client is
+connected yet.  `dwaudio.py` in the test tools is the feeder.  No patch, and
+the frame stays a received one - through modulator and demodulator - rather
+than something handed in at the side.
 
 **What must not be filtered out.**  The monitor copy of our own transmission
 has to be suppressed for a datagram socket — the kernel does not deliver a

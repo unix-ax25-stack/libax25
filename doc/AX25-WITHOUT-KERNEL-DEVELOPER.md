@@ -155,6 +155,24 @@ connection it was made on, so a client that dies leaves nothing behind.
 same thing — while the answer keeps the number, because a client may be
 reading it.
 
+There is no `pid=any`, and adding one is less obvious than it looks.  It would
+save a sysop an entry per pid and let one program take everything on a
+callsign, which is a fair wish.  What stands in the way is the handover: the
+session arrives as a raw descriptor, so with several protocol ids on one
+stream the client cannot tell which frame was which — the pid is not in the
+bytes.  Carrying it would mean the counted form instead, the way the datagram
+direction already works, and that is a different kind of client rather than a
+looser lookup.  Noted as an outlook; the decision belongs in the node.
+
+On the AGWPE side the same question has a harder answer.  `X` registers a
+callsign and carries no pid at all, so the server hands its one owner
+everything addressed to that callsign and the sorting has to happen in the
+client.  The shim does sort — a listener that claims the frame's pid is
+preferred — but two *processes* cannot divide one callsign that way, because
+only one of them can own it at the server.  Through a node they can, which is
+the sharper reason to prefer the node backend for anything that runs several
+services on one callsign.
+
 ### `datagram`
 
 ```

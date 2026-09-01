@@ -166,6 +166,25 @@ stirbt, hinterlässt nichts.
 `pid=` nimmt Namen wie Zahlen — `pid=netrom` und `pid=0xcf` sind dasselbe —,
 während die Antwort die Zahl behält, weil ein Client sie liest.
 
+Ein `pid=any` gibt es nicht, und es einzuführen ist weniger naheliegend, als
+es aussieht.  Es spart dem Sysop einen Eintrag je PID und lässt ein Programm
+alles auf einem Rufzeichen nehmen — ein berechtigter Wunsch.  Im Weg steht die
+Übergabe: die Sitzung kommt als roher Deskriptor, und liegen mehrere
+Protokoll-IDs auf einem Strom, kann der Client sie nicht auseinanderhalten,
+denn die PID steht nicht in den Bytes.  Sie mitzuführen hieße gezählte Form
+statt Übergabe, so wie es in der Datagrammrichtung schon ist — also eine
+andere Art von Client und nicht bloß eine lockerere Suche.  Als Aussicht
+vermerkt; entschieden wird es im Knoten.
+
+Auf der AGWPE-Seite hat dieselbe Frage eine härtere Antwort.  `X` meldet ein
+Rufzeichen an und trägt gar keine PID, der Server gibt seinem einen Besitzer
+also alles, was an dieses Rufzeichen geht, und sortieren muss der Client.  Der
+Shim sortiert auch — ein Lauscher, der die PID des Rahmens beansprucht, hat
+Vorrang —, aber zwei *Prozesse* können ein Rufzeichen so nicht teilen, weil
+nur einer es beim Server besitzen kann.  Über einen Knoten geht das, und das
+ist der schärfere Grund, für mehrere Dienste auf einem Rufzeichen das
+Knoten-Backend zu nehmen.
+
 ### `datagram`
 
 ```

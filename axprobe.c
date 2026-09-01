@@ -943,7 +943,11 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 		}
 		if ((r = recvfrom(ses[i].fd, ses[i].got,
 				  sizeof(ses[i].got) - 1, 0, NULL, NULL)) <= 0) {
-			snprintf(ses[i].got, sizeof(ses[i].got), "(eof)");
+			/* A claim the node refused is kept and handed over
+			 * here, so the reason is worth printing rather than
+			 * flattening to "(eof)". */
+			snprintf(ses[i].got, sizeof(ses[i].got), "%s",
+				 r == 0 ? "(eof)" : strerror(errno));
 			continue;
 		}
 		ses[i].got[r] = '\0';
@@ -1653,6 +1657,10 @@ int main(int argc, char **argv)
 	char portcall[16];
 	int use_dlsym = 0;
 	int fd, c;
+
+	/* Unbuffered: a test tool that is killed for taking too long must
+	 * still have said how far it got. */
+	setvbuf(stdout, NULL, _IONBF, 0);
 
 	while ((c = getopt(argc, argv, "dP:f:pqz:")) != -1) {
 		switch (c) {

@@ -344,11 +344,20 @@ Rahmung auf dem Weg zur Anwendung — der Deskriptor ist eine Socketpaar-Hälfte
 und damit ein Bytestrom, also kommt jeder Rahmen hinter einer Länge und dem
 Rufzeichen des Absenders, und genau daraus kann `recvfrom()` ihn benennen.
 
-Eine Grenze gehört dazu: das geht über `ax25netd(8)`, das einen UI-Rahmen auf
-seinem Loop-Port an den zustellt, der das Zielrufzeichen angemeldet hat.
-AGWPE selbst kennt keine UI-Zustellung je Rufzeichen — nur den Mitschnittstrom
-—, gegen einen `direwolf` müssten die Rahmen also von dort geholt werden.
-Diese Hälfte ist nicht gebaut, siehe `TODO.md`.
+Beide Wege gibt es, und welcher gilt, folgt dem Port.  Auf dem Loop-Port von
+`ax25netd(8)` stellt der Daemon einen UI-Rahmen dem zu, der das Zielrufzeichen
+angemeldet hat — er kommt direkt an.  Überall sonst tut das niemand: AGWPE
+kennt keine UI-Zustellung je Rufzeichen, nur den Mitschnittstrom.  Ein
+Datagrammsocket dort bittet also um Rohmitschnitt und holt sich heraus, was er
+will.  Das ist kein Umweg — jeden Rahmen zu tragen ist der Sinn eines
+Monitorkanals.
+
+Die Kopie der eigenen Aussendung wird unterdrückt, denn einer Station werden
+ihre eigenen Rahmen nicht zugestellt.  Nur die: ein Digipeater, der uns
+wiederholt, trägt dasselbe Quellrufzeichen und ist ein anderer Rahmen — der
+Beweis, dass der Hop stattfand —, und derselbe Rahmen auf einem anderen Port
+gehört sagt etwas über das Netz.  Ein Echo ist alles drei zugleich: gleicher
+Port, nichts wiederholt, gleicher Rahmen.
 
 ### Welche Aufrufe abgefangen werden
 

@@ -216,23 +216,26 @@ in the node or in direwolf and takes its parameters from its own interface
 configuration.  Worth aligning anyway — one warning on both sides, and one
 answer from `getsockopt`.
 
-**UI reception through a real AGWPE server.**  Through `ax25netd(8)` it works:
-its loop port routes a UI frame to whoever registered the destination
-callsign, and the library binds, matches and frames it.  AGWPE itself has no
-such delivery — a registered callsign gets connections, and UI frames appear
-only in the monitor stream — so against a `direwolf` they have to come out of
-that.  That is not a price, it is what a monitor channel is for.
+**UI reception off the monitor stream: built, and one condition untested.**
+It works through `ax25netd(8)` both ways now — the direct route on its loop
+port, and the monitor stream on every other port, which is the only way a real
+AGWPE server has and is what a monitor channel is for.  Measured on a radio
+port across two processes, byte-identical for the same fourteen payloads that
+torture the loop path.
 
-Testable here, which was not obvious: `ax25netd` mirrors frames to its raw
-monitor clients and rebuilds them KISS encapsulated *the way direwolf
-transmits them*, so the path can be built and measured against it and the
-direwolf run becomes confirmation rather than discovery.
+What is reasoned rather than driven is the has-been-repeated condition in the
+echo filter.  It guards one ordering: a digipeat arriving *before* the copy of
+our own transmission would otherwise consume the echo entry and be swallowed.
+The entry is taken by whichever matching frame comes first, so the window
+cannot be opened deliberately from here — a real digipeater opens it by
+itself, which makes it something to watch for on the `direwolf` run rather
+than something to arrange.
 
-The rule that avoids delivering anything twice falls out of how the daemon
-works.  `loop_unproto()` routes `M`/`V` to the owner **on the loop port only**;
-a UI frame from a radio upstream arrives as `K` and goes to raw monitors and
-nowhere else.  So: the direct path on the loop, the monitor feed on every
-other port, and no correlation needed between them.
+Worth remembering what the filter must *not* do, because the obvious version
+gets both wrong: a digipeater repeating us is the same source callsign and a
+different frame, and our own frame heard back on another port is information
+about the network.  Only all three together — same port, nothing repeated,
+same frame — is an echo.
 
 **What must not be filtered out.**  The monitor copy of our own transmission
 has to be suppressed for a datagram socket — the kernel does not deliver a

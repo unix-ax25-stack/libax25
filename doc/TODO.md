@@ -183,6 +183,24 @@ NET/ROM listener that registered first would swallow a text connect.  Nobody
 is at fault by itself: the library does not check, and the daemon does not
 either.
 
+**And it goes out wrong as well.**  `axsock_send_unproto()` writes `s->pid`
+into the frame, and on the AGWPE path `s->pid` is assigned in exactly one
+place — `AGWPE_PID_AX25` when the socket is made.  A program that asks for
+`socket(AF_AX25, SOCK_DGRAM, AX25_P_NETROM)` therefore transmits **text**.
+That is the harmless direction, in that nothing can be injected into a
+neighbour's NET/ROM or IP parser by accident, but it also means NET/ROM over
+the AGWPE backend cannot work: its NODES broadcasts would leave as text and
+no neighbour would recognise them.
+
+Worth keeping in view while fixing it, because the pid is a promise about the
+payload and not a label.  `0xF0` promises text and is what an announcement
+wants.  `0xCF` promises a NET/ROM network header — the NODES broadcasts a node
+sends itself are exactly that, so arbitrary bytes under it are garbage in a
+routing protocol.  `0xCC` promises an IP datagram, and a receiver with IP over
+AX.25 configured hands the payload to its IP stack.  Carrying the pid faithfully
+is the fix; letting a program choose one it does not honour is a different
+question, and belongs with the access control further down.
+
 What it takes, smallest first: carry the pid on the AGWPE path the way the
 node backend already does; compare it in the inbound match; have
 `agwpe_listen()` answer `EADDRINUSE` for a second listener on the same

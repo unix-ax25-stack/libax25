@@ -470,6 +470,43 @@ eine Zeile, reicht einen halb geparsten Anruf nach oben und lässt den Rest für
 das nächste `accept()` liegen, das dann eine Zeile ohne Deskriptor findet.
 Lies bis zum Zeilenende; schreib zu Ende, was Du angefangen hast.
 
+**`EAGAIN` ist eine Aufforderung, keine Absage.**  Es sagt: nichts genommen,
+komm wieder — und ein nichtblockierendes Schreiben, das darin eine Antwort
+sieht und den Rest des Rahmens wegwirft, verliert Daten, ohne dass es jemand
+merken könnte.  Auf einem Bytestrom-Socketpaar ist der Verlust nicht einmal
+ein fehlender Rahmen, sondern ein Loch mitten im Strom.  Gemessen: mit einem
+Leser, der drei Sekunden schlief, kam genau der Puffer an und ein Drittel der
+Übertragung war weg.  Behalte, was nicht hineinpasste, und schiebe nach, wenn
+der Deskriptor wieder nimmt; eine Obergrenze, hinter der die Sitzung laut
+geschlossen wird, ist das ehrliche Ende dieses Wegs — und genau das tut
+`ax25netd(8)` für seine eigenen Clients längst.
+
+**Ein Deskriptor, den die Anwendung hält, gehört nicht Dir.**  Ihn früh zu
+schließen kostet, was sie noch nicht gelesen hat — und, schlimmer und leiser,
+gibt die Nummer an den Prozess zurück, während die Anwendung sie noch
+benutzt.  Das nächste `open()` kann dieselbe bekommen, und von da an liest das
+Programm in einer fremden Datei.  Schließe Dein eigenes Ende und lass es das
+Dateiende sehen.
+
+**Ein Eigentümer, sonst gibt der zweite frei, was der erste noch hält.**  Ein
+angenommener Socket hat hier einen Faden, der für ihn weiterleitet, und eine
+Anwendung, die ihn schließen darf; wer abräumt, muss einmal festgelegt sein
+und nicht je nach Fall.  Es war je nach Fall festgelegt — der Faden besaß ihn
+nur, solange die Sitzung stand —, also wurde ein Socket, den man schließt,
+nachdem die Gegenstelle aufgelegt hat (das gewöhnliche Ende einer Sitzung),
+von beiden freigegeben.  Das bricht in `malloc` ab und nimmt das Programm mit,
+und es braucht einen *zweiten* Ruf im selben Prozess, um sich zu zeigen —
+weshalb es hier drei Wochen niemand sah und `ax25d(8)` es am ersten Tag
+gesehen hätte.
+
+**Eine Anfrage ist keine Antwort, auch wenn es derselbe Rahmen ist.**  Ein
+Connect hat drei Schreibweisen auf dem Hinweg — schlicht, über Digipeater, mit
+Protokoll-ID — und ein Daemon, der den Rahmen weiterreicht, wie er kam, gibt
+das Wort des Clients als das des Servers aus.  Ein Client nach Spezifikation
+kennt nur die eine Schreibweise, die ein Server benutzt, und verpasst den Ruf
+vollständig.  Normalisiere auf dem Rückweg und behalte, was die andere
+Schreibweise trug, dort wo es hingehört.
+
 **Dateiende ist kein Fehler, und es ist auch nicht nichts.**  Ein `read()`, das
 0 liefert, ist die Art, wie eine geschlossene Sitzung ankommt, wenn sie kein
 Kernel-Socket ist — ein socketpair hat keine Ausnahmebedingung zu melden.  Code,
@@ -495,6 +532,34 @@ Quellrufzeichen nachschlagen.
 `sa_len` in einer Linux-förmigen `sockaddr`.  Frag das System, statt es
 anzunehmen; nimm einen Stream, wenn die Antwort nein lautet, und sag, was das
 kostet.
+
+---
+
+## Socket-Optionen, und die zwei Sorten davon
+
+Unter `SOL_AX25` stehen zwei verschiedene Sorten, und sie lassen sich nicht
+gleich beantworten.
+
+Die meisten sind Kanalparameter — `AX25_WINDOW`, die Timer, `AX25_PACLEN` —
+und die besitzt die Gegenseite.  Ein Knoten oder ein `direwolf` nimmt sie aus
+seiner eigenen Interface-Konfiguration und würde ignorieren, was hier gesagt
+wird; also meldet `setsockopt()` Erfolg und sagt einmal je Option auf
+Standardfehler, dass es ins Leere ging.  Nichts hängt daran, dass der Wert
+ankam: `call(1)` liest `window` aus `axports(5)` und setzt es, und läuft so
+wie so.
+
+Zwei ändern, was die Bytes bedeuten.  `AX25_PIDINCL` legt die Protokoll-ID vor
+die Nutzlast jedes Rahmens, in beiden Richtungen, und `AX25_IAMDIGI` macht den
+Socket zum Wiederholer.  Die anzunehmen und nichts zu tun kostet keine
+Eigenschaft, es verdirbt Daten — `rsuplnk(8)` würde die PID als Nutzdaten
+senden und Nutzdaten als PID lesen, still und dauerhaft.  Umsetzbar ist keine
+von beiden über eine übergebene Sitzung, die ein schlichter Bytestrom ohne
+Platz für eine ID je Rahmen ist, also antworten beide `ENOPROTOOPT`.  Beide
+Programme prüfen den Rückgabewert und hören auf, und das ist das gewollte
+Ergebnis: nicht laufen ist besser als falsch laufen.
+
+`getsockopt(SOL_AX25)` antwortet mit Nullen.  Nichts in der Suite liest einen
+Wert zurück.
 
 ---
 

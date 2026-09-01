@@ -365,6 +365,11 @@ Say these out loud, because each of them is quiet rather than loud:
   path is written from the address as it stands, and nothing carries the mark.
   There are uses for it — forwarding a frame, or recording that the first hop
   has already happened — it is simply not done yet.
+* **The channel parameters in `axports(5)` do not travel.**  `window`, and the
+  timers a program may set beside it, belong to whoever runs the AX.25
+  machine — the node, or a `direwolf` — and each takes them from its own
+  interface configuration.  A program that sets them is told once, on standard
+  error, that they went nowhere.  Set them where the machine reads them.
 * **End to end, no digipeating of our own.**  What `libax25` offers is a
   session between two stations.  It is not a path to a TNC hanging off the
   side, and it does not repeat for anybody.
@@ -389,6 +394,15 @@ the node's own trace            what it thought of the call
 The first is the one to reach for.  "The library is not loaded", "the port is
 not a WAMPES port", "the node refused us" and "the node is not running" look
 identical from the outside and completely different in that output.
+
+**A callsign with a typo in it is refused now, and says so.**  It used to be
+read as far as it made sense and the rest dropped without a word, so
+`DL9SAU12` became `DL9SAU-2` and `DL9SAU 1` became `DL9SAU-1` — a station on
+the air under a callsign nobody had written down.  Anything that is not a
+callsign is an error today, with the reason on standard error.  If something
+that worked yesterday now refuses to start, that line is why, and it is worth
+reading rather than working around: it is naming a typo that had been quietly
+in effect.
 
 Two traps that have cost real evenings:
 

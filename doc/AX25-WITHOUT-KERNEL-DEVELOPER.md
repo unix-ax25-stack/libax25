@@ -448,6 +448,40 @@ is one line hands up a half-parsed call and leaves the rest for the next
 `accept()`, which then finds a line with no descriptor.  Read to the end of
 the line; write all of what you started.
 
+**`EAGAIN` is an invitation, not a refusal.**  It says nothing was taken and to
+come back — and a non-blocking write that treats it as an answer and drops the
+rest of the frame loses data with no way for anyone to notice.  On a
+byte-stream socketpair the loss is not even a missing frame but a hole in the
+middle of the stream.  Measured: with a reader asleep for three seconds,
+exactly the buffer arrived and a third of the transfer was thrown away.  Keep
+what would not fit and push it when the descriptor takes it again; a ceiling
+past which the session is closed loudly is the honest end of that road, and it
+is what `ax25netd(8)` already does for its own clients.
+
+**A descriptor the application holds is not yours to close.**  Closing it
+early loses whatever it had not read yet, and — worse and quieter — hands the
+number back while the application is still using it, so the next `open()` can
+be given the same one.  From then on the program is reading somebody else's
+file.  Close your own end and let it see the end of file.
+
+**One owner, or the second one frees what the first still holds.**  An
+accepted socket here has a thread forwarding for it and an application that
+may close it; whoever tears it down must be settled once and not per case.  It
+was settled per case — the thread owned it only while the session was up — so
+a socket closed after the far end hung up, which is the ordinary end of a
+session, was freed by both.  That aborts in `malloc` and takes the program
+with it, and it needs a *second* call in one process to show, which is why
+nothing here had seen it in three weeks and `ax25d(8)` would have seen it on
+day one.
+
+**A request is not an answer, even when it is the same frame.**  A connect has
+three spellings on the way out — plain, through digipeaters, with a protocol
+id — and a daemon that hands the frame on as it arrived is passing the
+client's word off as the server's.  A client written to the specification
+knows only the one spelling a server uses and misses the call entirely.
+Normalise on the way back, and keep what the extra spelling carried where it
+belongs.
+
 **End of file is not an error, and it is not nothing.**  `read()` returning 0
 is how a closed session arrives when it is not a kernel socket — a socketpair
 has no exception condition to report.  Code that only tests for `< 0` treats
@@ -471,6 +505,31 @@ callsign up as well.
 **macOS has no `SOCK_SEQPACKET` for unix sockets**, and no `sa_len` room in a
 Linux-shaped `sockaddr`.  Ask the system rather than assuming; take a stream
 when the answer is no, and say what it costs.
+
+---
+
+## Socket options, and the two kinds of them
+
+`SOL_AX25` carries two sorts of thing, and they cannot be answered alike.
+
+Most of them are channel parameters — `AX25_WINDOW`, the timers, `AX25_PACLEN`
+— and the far side owns those.  A node or a `direwolf` takes them from its own
+interface configuration and would ignore anything said here, so `setsockopt()`
+answers success and says once per option, on standard error, that it went
+nowhere.  Nothing depends on the value having arrived; `call(1)` reads `window`
+from `axports(5)` and sets it, and works either way.
+
+Two of them change what the bytes mean.  `AX25_PIDINCL` puts the protocol id
+in front of every frame's payload, in both directions, and `AX25_IAMDIGI`
+makes the socket repeat what it hears.  Accepting those and doing nothing does
+not cost a feature, it corrupts traffic — `rsuplnk(8)` would send the pid as
+data and read data as the pid, silently and for as long as it runs.  Neither
+is implementable through a handed-over session, which is a plain byte stream
+with no room for a per-frame id, so both answer `ENOPROTOOPT`.  Both programs
+check the return value and stop, which is the outcome to want: not running
+beats running wrong.
+
+`getsockopt(SOL_AX25)` answers zeroes.  Nothing in the suite reads one back.
 
 ---
 

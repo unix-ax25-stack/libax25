@@ -386,6 +386,12 @@ Sagt Euch das laut, denn jedes davon ist still und nicht laut:
   Adresse geschrieben, wie sie ist, und nichts trägt die Marke.  Es gibt
   Anwendungen dafür — einen Rahmen weiterleiten, oder festhalten, dass der
   erste Sprung schon erfolgt ist — es ist schlicht noch nicht gebaut.
+* **Die Kanalparameter aus `axports(5)` reisen nicht mit.**  `window`, und die
+  Timer, die ein Programm daneben setzen mag, gehören dem, der die
+  AX.25-Maschine betreibt — dem Knoten oder einem `direwolf` —, und jeder nimmt
+  sie aus seiner eigenen Interface-Konfiguration.  Ein Programm, das sie setzt,
+  wird einmal auf Standardfehler darauf hingewiesen, dass es ins Leere ging.
+  Setze sie dort, wo die Maschine sie liest.
 * **Ende zu Ende, kein eigenes Digipeating.**  Was `libax25` anbietet, ist eine
   Sitzung zwischen zwei Stationen.  Es ist kein Weg zu einem seitlich
   angeschlossenen TNC, und es wiederholt für niemanden.
@@ -411,6 +417,15 @@ Nach dem ersten greift man zuerst.  „Die Bibliothek ist nicht geladen", „der
 Port ist kein WAMPES-Port", „der Knoten hat uns abgewiesen" und „der Knoten
 läuft nicht" sehen von außen gleich aus und in dieser Ausgabe völlig
 verschieden.
+
+**Ein Rufzeichen mit Tippfehler wird jetzt abgelehnt, und sagt das auch.**
+Früher wurde es gelesen, so weit es Sinn ergab, und der Rest wortlos verworfen
+— aus `DL9SAU12` wurde `DL9SAU-2`, aus `DL9SAU 1` wurde `DL9SAU-1`: eine
+Station auf dem Band unter einem Rufzeichen, das niemand aufgeschrieben hatte.
+Was kein Rufzeichen ist, ist heute ein Fehler, mit dem Grund auf
+Standardfehler.  Wenn etwas, das gestern lief, jetzt nicht mehr startet, ist
+diese Zeile der Grund — und sie ist es wert, gelesen statt umgangen zu werden:
+sie benennt einen Tippfehler, der bisher still in Kraft war.
 
 Zwei Fallen, die echte Abende gekostet haben:
 

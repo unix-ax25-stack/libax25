@@ -44,17 +44,24 @@ What it buys:
   All three were consequences of "socket() built one thing and bind() wanted
   another"
 
-It is not only about branches, either.  The two backends should **look and
-behave alike**, and today they do not: one is chosen by a probe and the other
-by a file, one steals descriptors and the other cannot.  An asymmetry like
-that reads as if AGWPE were an abandoned corner, which it is not — it was
-tested and working, and it is still the way to a `direwolf` or to AGWPE
-clients on the LAN.  Making the two paths the same shape is as much about not
-letting one of them rot as it is about edge cases.
+It was not only about branches, either.  The two backends should **look and
+behave alike**, and the work of making them do so is mostly done: every entry
+point asks both the same way, the AGWPE half has its own file and a named
+surface, both carry the protocol id, both answer the same error number for the
+same refusal, both say the same thing about an option they cannot honour, and
+a datagram socket can receive on either.  What is left of the asymmetry is
+this item: one backend is still chosen by a probe once per process and the
+other by a file per port.
 
-Which brings an acceptance step with it: **the direwolf tests want repeating
-once the paths are unified.**  They last passed some weeks ago, against code
-that has moved underneath them since.
+The reason for caring was never tidiness.  An asymmetry like that reads as if
+AGWPE were an abandoned corner, which it is not — it is the way to a
+`direwolf` or to AGWPE clients on the LAN — and a corner nobody looks at is
+where the faults of the last few days had been sitting, some since the first
+commit.
+
+Which brings an acceptance step with it: **the direwolf tests want repeating.**
+They last passed some weeks ago, against code that has moved a long way
+underneath them since — most of it in the AGWPE path.
 
 What has to be answered first — descriptors that are never bound:
 

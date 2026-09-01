@@ -380,6 +380,18 @@ static const char *axports_file;
  */
 static int peer_mode;
 
+/*
+ * Which session to close first, when several are up.  Closing one must not
+ * disturb the others, and the two ends of that are worth trying separately:
+ * the first one opened and the last one, because the table is a list and a
+ * fault in the unlinking shows on one end or the other, not both.  -1 closes
+ * none, which is the plain run.
+ */
+static int close_which = -1;
+
+static int gather(int fd, char *buf, size_t buflen, const char *want,
+		  int msec);
+
 /* DL9SAU and DL9SAU-0 are one callsign written two ways.  The library knows
  * that; a string compare does not, so the mark is built from the written-out
  * form and a session is not accused of crossing over a hyphen. */
@@ -551,6 +563,61 @@ static int multi(int argc, char **argv, int optind_, const char *portcall)
 		printf("%d %s %s>%s %s: %s\n", i,
 		       ses[i].port[0] ? ses[i].port : "-",
 		       ses[i].src, ses[i].dst, verdict, ses[i].got);
+	}
+
+	/*
+	 * Close one and speak on the rest.  A session that stopped answering
+	 * because a different one was closed is the fault being looked for,
+	 * and it needs the second exchange to show - the first proves only
+	 * that they came up.
+	 */
+	if (close_which >= 0 && close_which < n && n > 1) {
+		int shut = close_which;
+
+		if (ses[shut].fd >= 0) {
+			close(ses[shut].fd);
+			ses[shut].fd = -1;
+		}
+		printf("closed %d (%s>%s), asking the rest again\n", shut,
+		       ses[shut].src, ses[shut].dst);
+
+		for (i = 0; i < n; i++) {
+			char line[80];
+
+			if (i == shut || ses[i].fd < 0 || ses[i].err != 0)
+				continue;
+			snprintf(line, sizeof(line), "%s\n", ses[i].tag);
+			if (write(ses[i].fd, line, strlen(line)) < 0) {
+				printf("%d %s>%s AFTER: write: %s\n", i,
+				       ses[i].src, ses[i].dst,
+				       strerror(errno));
+				bad = 1;
+			}
+		}
+		for (i = 0; i < n; i++) {
+			char want[64], got[256];
+
+			if (i == shut || ses[i].fd < 0 || ses[i].err != 0)
+				continue;
+			if (peer_mode)
+				pair_tag(want, sizeof(want), ses[i].dst,
+					 ses[i].src);
+			else
+				strcpy(want, ses[i].tag);
+			if (gather(ses[i].fd, got, sizeof(got), want, 3000)) {
+				printf("%d %s>%s AFTER: still there\n", i,
+				       ses[i].src, ses[i].dst);
+			} else {
+				char *nl;
+
+				while ((nl = strchr(got, '\n')) != NULL)
+					*nl = '|';
+				printf("%d %s>%s AFTER: GONE: %s\n", i,
+				       ses[i].src, ses[i].dst,
+				       got[0] ? got : "(nothing)");
+				bad = 1;
+			}
+		}
 	}
 
 	for (i = 0; i < n; i++)
@@ -1391,6 +1458,153 @@ static int evil(const char *portcall, const char *src, const char *dst,
 	return bad;
 }
 
+/*
+ * Listening and connecting at the same time, in one process.
+ *
+ * Two of these call each other: each one listens for its own callsign and
+ * connects to the other's, so each ends up holding an outgoing session and
+ * an incoming one at once - which is what a node program does all day and
+ * what no single-purpose mode here was covering.  The two sessions share the
+ * table, the lock and the dispatch, and the question is whether they stay
+ * apart while they are both up.
+ *
+ * The marks name the pair, so each side can say what it expects to read on
+ * either socket without being told anything by the other.
+ */
+
+static int mixed(const char *portcall, const char *listencall,
+		 const char *src, const char *dst)
+{
+	struct full_sockaddr_ax25 sa;
+	socklen_t alen = sizeof(sa);
+	char otag[64], itag[64], owant[64], iwant[64], got[256], line[80];
+	char peer[16];
+	struct pollfd pfd;
+	int lfd, ofd, ifd = -1, bad = 0;
+
+	/* Listener up before the call goes out, or the other side may find
+	 * nobody home. */
+	if ((lfd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+		perror("axprobe: socket");
+		return 1;
+	}
+	if (bind_port(lfd, portcall, listencall) < 0)
+		return 1;
+	if (p_listen(lfd, 1) < 0) {
+		perror("axprobe: listen");
+		return 1;
+	}
+
+	/*
+	 * Let the other side get its listener up before calling it.  Not
+	 * politeness: ax25netd(8) refuses a connect to a callsign nobody
+	 * has registered yet - "kein Besitzer", answered with a retryout
+	 * disconnect - which is right, it is what a station with nobody
+	 * listening looks like.  Three seconds, because the first AX.25
+	 * socket in a process opens the connection to the server and
+	 * fetches the port table before anything else, so "the listener
+	 * is up" comes a good deal later than "the program started".
+	 */
+	poll(NULL, 0, 3000);
+
+	if ((ofd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+		perror("axprobe: socket");
+		return 1;
+	}
+	if (bind_port(ofd, portcall, src) < 0)
+		return 1;
+	memset(&sa, 0, sizeof(sa));
+	sa.fsa_ax25.sax25_family = AF_AX25;
+	if (aton_entry(dst, sa.fsa_ax25.sax25_call.ax25_call) < 0) {
+		fprintf(stderr, "axprobe: invalid destination\n");
+		return 1;
+	}
+	if (p_connect(ofd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		printf("out %s>%s connect: %s\n", src, dst, strerror(errno));
+		bad = 1;
+	} else {
+		pair_tag(otag, sizeof(otag), src, dst);
+		snprintf(line, sizeof(line), "%s\n", otag);
+		if (write(ofd, line, strlen(line)) < 0) {
+			printf("out %s>%s write: %s\n", src, dst,
+			       strerror(errno));
+			bad = 1;
+		}
+	}
+
+	/* Now the call from the other side. */
+	pfd.fd = lfd;
+	pfd.events = POLLIN;
+	if (poll(&pfd, 1, 8000) > 0) {
+		memset(&sa, 0, sizeof(sa));
+		ifd = p_accept(lfd, (struct sockaddr *)&sa, &alen);
+	}
+	if (ifd < 0) {
+		printf("in  %s: no call arrived\n", listencall);
+		bad = 1;
+	} else {
+		snprintf(peer, sizeof(peer), "%s",
+			 ntoa(sa.fsa_ax25.sax25_call.ax25_call));
+		pair_tag(itag, sizeof(itag), listencall, peer);
+		snprintf(line, sizeof(line), "%s\n", itag);
+		if (write(ifd, line, strlen(line)) < 0) {
+			printf("in  %s<%s write: %s\n", listencall, peer,
+			       strerror(errno));
+			bad = 1;
+		}
+	}
+
+	/* What each socket should be holding: the other side's mark. */
+	if (ofd >= 0) {
+		if (peer_mode)
+			pair_tag(owant, sizeof(owant), dst, src);
+		else
+			strcpy(owant, otag);
+		if (gather(ofd, got, sizeof(got), owant, 5000)) {
+			printf("out %s>%s ok\n", src, dst);
+		} else {
+			char *nl;
+
+			while ((nl = strchr(got, '\n')) != NULL)
+				*nl = '|';
+			if (ifd >= 0 && strstr(got, iwant) != NULL)
+				printf("out %s>%s CROSSED: %s\n", src, dst,
+				       got);
+			else
+				printf("out %s>%s lost: %s\n", src, dst,
+				       got[0] ? got : "(nothing)");
+			bad = 1;
+		}
+	}
+	if (ifd >= 0) {
+		if (peer_mode)
+			pair_tag(iwant, sizeof(iwant), peer, listencall);
+		else
+			strcpy(iwant, itag);
+		if (gather(ifd, got, sizeof(got), iwant, 5000)) {
+			printf("in  %s<%s ok\n", listencall, peer);
+		} else {
+			char *nl;
+
+			while ((nl = strchr(got, '\n')) != NULL)
+				*nl = '|';
+			if (strstr(got, owant) != NULL)
+				printf("in  %s<%s CROSSED: %s\n", listencall,
+				       peer, got);
+			else
+				printf("in  %s<%s lost: %s\n", listencall,
+				       peer, got[0] ? got : "(nothing)");
+			bad = 1;
+		}
+	}
+
+	if (ifd >= 0)
+		close(ifd);
+	close(ofd);
+	close(lfd);
+	return bad;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -1405,6 +1619,7 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] churn   <port> <src>:<dest> <rounds>\n"
 		"       axprobe [-d] [-q] [-f axports] echo    <port> <call> <rounds>\n"
 		"       axprobe [-d] [-q] [-f axports] evil    <port> <src>:<dest> [ui]\n"
+		"       axprobe [-d] [-q] [-f axports] mixed   <port> <listen> <src>:<dest>\n"
 		"\n"
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
 		"      calling them directly - the only way an inserted library is seen\n"
@@ -1412,6 +1627,8 @@ static void usage(void)
 		"  -p  the far end is a partner, not an echo: each session expects\n"
 		"      the line of the station it is talking to (ax25netd loop port,\n"
 		"      or the other half of this same test)\n"
+		"  -z  multi: close this session after the first exchange and ask the\n"
+		"      others again - 0 is the one opened first\n"
 		"  -q  no commentary on stderr\n"
 		"  -f  axports to read instead of " CONF_AXPORTS_FILE "\n"
 		"\n"
@@ -1427,13 +1644,16 @@ int main(int argc, char **argv)
 	int use_dlsym = 0;
 	int fd, c;
 
-	while ((c = getopt(argc, argv, "df:pq")) != -1) {
+	while ((c = getopt(argc, argv, "df:pqz:")) != -1) {
 		switch (c) {
 		case 'd':
 			use_dlsym = 1;
 			break;
 		case 'f':
 			axports = optarg;
+			break;
+		case 'z':
+			close_which = atoi(optarg);
 			break;
 		case 'p':
 			peer_mode = 1;
@@ -1528,6 +1748,20 @@ int main(int argc, char **argv)
 		if (verbose)
 			report(nfd);
 		return shovel(nfd);
+	}
+
+	if (strcmp(cmd, "mixed") == 0) {
+		const char *spec, *colon;
+		char src[16];
+
+		close(fd);
+		if (optind >= argc)
+			usage();
+		spec = argv[optind];
+		if ((colon = strchr(spec, ':')) == NULL)
+			usage();
+		snprintf(src, sizeof(src), "%.*s", (int)(colon - spec), spec);
+		return mixed(portcall, call, src, colon + 1);
 	}
 
 	if (strcmp(cmd, "evil") == 0) {

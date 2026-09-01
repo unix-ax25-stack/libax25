@@ -104,6 +104,16 @@ extern int	(*real_accept)(int, struct sockaddr *, socklen_t *);
 int axsock_backend_now(void);
 
 /*
+ * What stands behind a descriptor number, changed without changing the
+ * number.  The number belongs to the interception layer - it handed it out -
+ * so these live there and both backends use them.  A backend says "let go"
+ * through its own interface; putting the new thing in place is not its
+ * business to know about.
+ */
+int axsock_replace(int fd, int newfd);
+int axsock_placeholder(int fd);
+
+/*
  * Which SOL_AX25 options may be accepted and ignored, and which must be
  * refused because ignoring them would corrupt traffic rather than cost a
  * feature.  Both backends ask, and the one time they answered separately they

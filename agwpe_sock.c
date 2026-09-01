@@ -1835,7 +1835,7 @@ static void *axsock_peer_reader(void *arg)
  * only here - and a datagram socket is served quite differently from a
  * connection.  Answers -1 for a descriptor this backend does not hold.
  */
-int axsock_socktype(int fd)
+int agwpe_socktype(int fd)
 {
 	struct axsock_sock *s;
 	int type;
@@ -1849,7 +1849,7 @@ int axsock_socktype(int fd)
 	return type;
 }
 
-int axsock_forget(int fd)
+int agwpe_forget(int fd)
 {
 	struct axsock_sock *s, **pp;
 	int peer;

@@ -106,6 +106,54 @@
  * lets kernel and AGWPE ports coexist in one process.
  */static int	axsock_backend = -1;	/* -1 undecided, 0 = agwpe, 1 = kernel */
 
+/*
+ * The descriptor number belongs to whoever handed it out, which is this file:
+ * socket() returned it and the application knows nothing else about it.  So
+ * the two operations that change what stands behind it live here, and not in
+ * either backend.
+ *
+ * They were in wampes.c, because a node was the only thing that ever took a
+ * descriptor over - AGWPE only ever built one, at socket() time.  That meant
+ * one backend knew how to reach inside the other, which is the wrong way
+ * round for something neither of them owns.  With the primitives here, a
+ * backend says "let go" and "put this behind the number" and knows nothing
+ * about who held it before.
+ */
+
+/*
+ * Put newfd behind fd, keeping the number the application holds.  newfd is
+ * consumed either way; on failure fd is untouched and errno is the dup2()
+ * one.
+ */
+int axsock_replace(int fd, int newfd)
+{
+	int save;
+
+	if (dup2(newfd, fd) < 0) {
+		save = errno;
+		close(newfd);
+		errno = save;
+		return -1;
+	}
+	close(newfd);
+	return 0;
+}
+
+/*
+ * Leave something inert behind fd: an unbound unix socket, which answers
+ * nothing and is readable by nobody.  For the moment between taking a
+ * descriptor away from one backend and giving it to another, where the number
+ * must stay valid because the application still holds it.
+ */
+int axsock_placeholder(int fd)
+{
+	int ph;
+
+	if ((ph = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+		return -1;
+	return axsock_replace(fd, ph);
+}
+
 int axsock_backend_now(void)
 {
 	const char *b;

@@ -149,6 +149,21 @@ inserts itself into a path.  Worth saying out loud that on a shared channel
 such a frame is indistinguishable from a real digipeat, so it is a tool and a
 footgun in the same hand.
 
+**`AX25_IAMDIGI`, to come back to.**  It makes a socket repeat what it hears —
+the socket becomes a digipeater — and `rsdwnlnk(8)` sets it.  It is refused
+with `ENOPROTOOPT` today rather than accepted and ignored, which stops a
+program that needs it instead of letting it run wrong, but that is a holding
+answer and not a decision.
+
+What it would take is not obviously large.  On the node side a repeated frame
+is what `nextdigi` and the has-been-repeated bit already describe, so this and
+the `*` item further up are the same piece of work seen from two ends.  On the
+AGWPE side a frame to repeat is one the server heard and we send back out with
+one more hop marked — the monitor stream has the frames and `sendto()` can
+carry a path, so the parts exist.  What wants deciding first is whether a
+userland socket should be able to digipeat at all without the sysop saying so,
+which is the access-control question further down.
+
 **What is left of the protocol id on the AGWPE side.**  Most of it is done —
 `socket()` carries the pid through, frames go out with it, the inbound match
 prefers a listener that claims it, `listen()` refuses a second one on the same

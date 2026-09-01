@@ -1319,6 +1319,48 @@ static void axsock_flush_pending(void)
  * Both directions, because the caller reads its own confirmation from the
  * same dispatch.
  */
+/*
+ * A UI frame on its way to a datagram socket.
+ *
+ * The socketpair is a byte stream - macOS has no SEQPACKET pair - so a frame
+ * needs a length in front of it or two of them arriving together become one.
+ * And recvfrom() has to name the sender, which the bytes themselves do not,
+ * so the callsign travels with the length.  The raw monitor solves the same
+ * problem the same way (netax25/axmon.h); this is its small sibling.
+ *
+ *	[4 bytes, payload length, big endian][10 bytes, source callsign][payload]
+ */
+
+#define	AXSOCK_UI_HDR	(4 + AGWPE_MAX_CALL)
+
+static void agwpe_ui_deliver_locked(struct axsock_sock *s, const char *from,
+				    const unsigned char *data, size_t len)
+{
+	unsigned char hdr[AXSOCK_UI_HDR];
+	unsigned char *rec;
+
+	if (len > AXMON_FRAME_MAX)
+		return;			/* nothing here could read it */
+
+	hdr[0] = (unsigned char)(len >> 24);
+	hdr[1] = (unsigned char)(len >> 16);
+	hdr[2] = (unsigned char)(len >> 8);
+	hdr[3] = (unsigned char) len;
+	memset(hdr + 4, 0, AGWPE_MAX_CALL);
+	strncpy((char *) hdr + 4, from, AGWPE_MAX_CALL - 1);
+
+	/* One write, so the queue in axsock_peer_write_locked() can never
+	 * hold half a record: a reader that has the length must be able to
+	 * get the payload. */
+	if ((rec = malloc(sizeof(hdr) + len)) == NULL)
+		return;
+	memcpy(rec, hdr, sizeof(hdr));
+	if (len > 0)
+		memcpy(rec + sizeof(hdr), data, len);
+	(void) axsock_peer_write_locked(s, rec, sizeof(hdr) + len);
+	free(rec);
+}
+
 static int agwpe_is_connect(unsigned char kind)
 {
 	return kind == AGWPE_DK_CONNECT ||
@@ -1425,6 +1467,41 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 			found = 1;
 			break;
 		}
+	}
+
+	/*
+	 * An incoming UI frame.  ax25netd routes one on the loop port to the
+	 * client that registered the destination callsign and hands it on as
+	 * it arrived, so it reaches us as 'M' or 'V'.  Against a real AGWPE
+	 * server this does not happen at all - the protocol has no per
+	 * callsign UI delivery, only the monitor stream - which is the other
+	 * half of this and is not built yet.
+	 */
+	if (!found && (hdr->datakind == AGWPE_CMD_UNPROTO ||
+		       hdr->datakind == AGWPE_CMD_UNPROTO_VIA)) {
+		unsigned char want = hdr->pid ? hdr->pid : AGWPE_PID_AX25;
+		struct axsock_sock *best = NULL;
+
+		for (s = axsock_list; s != NULL; s = s->next) {
+			if (s->type != SOCK_DGRAM || s->local[0] == '\0' ||
+			    s->peer < 0)
+				continue;
+			if (strcasecmp(s->local, hdr->call_to) != 0 &&
+			    !axsock_call_match(s->local, hdr->call_to))
+				continue;
+			if (s->pid == want) {
+				best = s;
+				break;
+			}
+			if (best == NULL)
+				best = s;	/* the pid is a preference */
+		}
+		if (best != NULL) {
+			agwpe_ui_deliver_locked(best, hdr->call_from, data,
+						len);
+			found = 1;
+		}
+		goto out;
 	}
 
 	if (!found && agwpe_is_connect(hdr->datakind)) {
@@ -2135,6 +2212,21 @@ static int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 	sa = (const struct sockaddr_ax25 *)addr;
 	axsock_copy_call(s->local, ax25_ntoa(&sa->sax25_call));
 	s->port = axsock_bind_port(addr, len, s->local, &s->port_named);
+
+	/*
+	 * A datagram socket says with its bind() which callsign it wants to
+	 * hear, and there is no listen() coming to say it later.  So this is
+	 * where it has to be announced, or nothing is ever routed here - the
+	 * node backend claims it at bind() for the same reason.
+	 */
+	if (s->type == SOCK_DGRAM && s->local[0] != '\0' && !s->registered) {
+		pthread_mutex_lock(&axsock_lock);
+		if (axsock_ensure_locked() == 0) {
+			axsock_register_locked(s->local, s->port, 0);
+			s->registered = 1;
+		}
+		pthread_mutex_unlock(&axsock_lock);
+	}
 	if (getenv("AXSOCK_DEBUG"))
 		fprintf(stderr, "axsock: bind fd=%d local='%s' port=%d\n",
 			fd, s->local, s->port);
@@ -2459,6 +2551,9 @@ ssize_t AXSOCK_ENTRY(write)(int fd, const void *buf, size_t len)
 	return real_write(fd, buf, len);
 }
 
+static ssize_t agwpe_ui_read(struct axsock_sock *s, void *buf, size_t len,
+			     struct sockaddr *addr, socklen_t *addrlen);
+
 static int agwpe_recv(int fd, void *buf, size_t len, ssize_t *ret)
 {
 	struct axsock_sock *s;
@@ -2468,6 +2563,12 @@ static int agwpe_recv(int fd, void *buf, size_t len, ssize_t *ret)
 	pthread_mutex_unlock(&axsock_lock);
 	if (s == NULL)
 		return 0;
+
+	/* Same framing as recvfrom(), only nobody asked who sent it. */
+	if (s->type == SOCK_DGRAM && !s->raw) {
+		*ret = agwpe_ui_read(s, buf, len, NULL, NULL);
+		return 1;
+	}
 	/* The descriptor is readable by itself; only the flags are ours to
 	 * drop, since the pipe behind it has none of them. */
 	*ret = real_read(fd, buf, len);
@@ -2483,6 +2584,73 @@ ssize_t AXSOCK_ENTRY(recv)(int fd, void *buf, size_t len, int flags)
 	return real_recv(fd, buf, len, flags);
 }
 
+/* Read exactly n bytes of a record.  Once the length is in hand the rest is
+ * already on its way - it was written in one piece - so this cannot stall on
+ * a frame that will never be completed. */
+static int agwpe_read_full(int fd, unsigned char *buf, size_t n)
+{
+	size_t got = 0;
+
+	while (got < n) {
+		ssize_t r = real_read(fd, buf + got, n - got);
+
+		if (r <= 0)
+			return -1;
+		got += (size_t) r;
+	}
+	return 0;
+}
+
+/*
+ * One UI frame off a datagram socket, with the sender named.  Returns the
+ * payload length, or -1 with errno set.  A payload longer than the caller's
+ * buffer is truncated and the rest dropped, which is what a datagram socket
+ * does - MSG_TRUNC would be the way to say so and nothing here asks for it.
+ */
+static ssize_t agwpe_ui_read(struct axsock_sock *s, void *buf, size_t len,
+			     struct sockaddr *addr, socklen_t *addrlen)
+{
+	unsigned char hdr[AXSOCK_UI_HDR];
+	unsigned char sink[256];
+	size_t plen, take, left;
+	int fd = s->fd;
+
+	if (agwpe_read_full(fd, hdr, sizeof(hdr)) != 0)
+		return -1;
+	plen = ((size_t) hdr[0] << 24) | ((size_t) hdr[1] << 16) |
+	       ((size_t) hdr[2] << 8) | (size_t) hdr[3];
+	if (plen > AXMON_FRAME_MAX) {
+		errno = EPROTO;
+		return -1;
+	}
+
+	take = plen < len ? plen : len;
+	if (take > 0 && agwpe_read_full(fd, buf, take) != 0)
+		return -1;
+	for (left = plen - take; left > 0; ) {
+		size_t chunk = left < sizeof(sink) ? left : sizeof(sink);
+
+		if (agwpe_read_full(fd, sink, chunk) != 0)
+			return -1;
+		left -= chunk;
+	}
+
+	if (addr != NULL && addrlen != NULL &&
+	    *addrlen >= sizeof(struct sockaddr_ax25)) {
+		struct sockaddr_ax25 *sa = (struct sockaddr_ax25 *) addr;
+		char from[AGWPE_MAX_CALL + 1];
+
+		memset(sa, 0, sizeof(*sa));
+		sa->sax25_family = AF_AX25;
+		snprintf(from, sizeof(from), "%.*s", AGWPE_MAX_CALL,
+			 (const char *) hdr + 4);
+		if (from[0] != '\0')
+			ax25_aton_entry(from, sa->sax25_call.ax25_call);
+		*addrlen = sizeof(struct sockaddr_ax25);
+	}
+	return (ssize_t) take;
+}
+
 static int agwpe_recvfrom(int fd, void *buf, size_t len,
 			struct sockaddr *addr, socklen_t *addrlen, ssize_t *ret)
 {
@@ -2495,6 +2663,13 @@ static int agwpe_recvfrom(int fd, void *buf, size_t len,
 
 	if (s == NULL)
 		return 0;
+
+	/* A datagram socket carries a length and a sender in front of every
+	 * frame - see agwpe_ui_deliver_locked() - so it is not read raw. */
+	if (s->type == SOCK_DGRAM && !s->raw) {
+		*ret = agwpe_ui_read(s, buf, len, addr, addrlen);
+		return 1;
+	}
 
 	n = real_read(fd, buf, len);
 	if (n < 0) {

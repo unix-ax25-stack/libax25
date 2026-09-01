@@ -223,13 +223,22 @@ AGWPE server has and is what a monitor channel is for.  Measured on a radio
 port across two processes, byte-identical for the same fourteen payloads that
 torture the loop path.
 
-What is reasoned rather than driven is the has-been-repeated condition in the
-echo filter.  It guards one ordering: a digipeat arriving *before* the copy of
-our own transmission would otherwise consume the echo entry and be swallowed.
-The entry is taken by whichever matching frame comes first, so the window
-cannot be opened deliberately from here — a real digipeater opens it by
-itself, which makes it something to watch for on the `direwolf` run rather
-than something to arrange.
+**What the has-been-repeated condition in the echo filter is actually for**,
+which is worth stating because it is not what it looks like.  Against
+`ax25netd` it never decides anything: the daemon mirrors a client's own
+transmission back at once — its transmit leg — so the echo entry is consumed
+by that copy long before any digipeat could arrive over the air, and every
+later frame is delivered whether the mark is set or not.  Which is also why it
+cannot be exercised here: there is no lage in which it changes the outcome.
+
+It matters if a server does **not** mirror what we transmit.  Then the entry
+stays unused, and the first frame to match it is the digipeat — which without
+the condition would be taken for our own echo and dropped, losing exactly the
+frame that proves the hop happened.  Whether `direwolf` mirrors its own
+transmissions is not known here, so that is a concrete thing to establish on
+the `direwolf` run: send a UI frame with a datagram socket bound, and see
+whether the copy comes back.  If it does not, this condition is the only thing
+between a digipeat and the wastebasket.
 
 Worth remembering what the filter must *not* do, because the obvious version
 gets both wrong: a digipeater repeating us is the same source callsign and a

@@ -220,12 +220,36 @@ answer from `getsockopt`.
 its loop port routes a UI frame to whoever registered the destination
 callsign, and the library binds, matches and frames it.  AGWPE itself has no
 such delivery — a registered callsign gets connections, and UI frames appear
-only in the monitor stream — so against a `direwolf` the frames would have to
-be picked out of that: turn raw monitoring on while a datagram socket is
-bound, and filter by destination callsign and pid.  The plumbing is there,
-`axsock_raw_match()` already does the port half of it.  What wants weighing is
-the cost: monitoring means the server sends every frame it hears, to a client
-that wants a handful.
+only in the monitor stream — so against a `direwolf` they have to come out of
+that.  That is not a price, it is what a monitor channel is for.
+
+Testable here, which was not obvious: `ax25netd` mirrors frames to its raw
+monitor clients and rebuilds them KISS encapsulated *the way direwolf
+transmits them*, so the path can be built and measured against it and the
+direwolf run becomes confirmation rather than discovery.
+
+The rule that avoids delivering anything twice falls out of how the daemon
+works.  `loop_unproto()` routes `M`/`V` to the owner **on the loop port only**;
+a UI frame from a radio upstream arrives as `K` and goes to raw monitors and
+nowhere else.  So: the direct path on the loop, the monitor feed on every
+other port, and no correlation needed between them.
+
+**What must not be filtered out.**  The monitor copy of our own transmission
+has to be suppressed for a datagram socket — the kernel does not deliver a
+station its own frames — but only that, and the temptation is to cast the net
+too wide.  Two cases that must come through:
+
+* **A digipeated repeat.**  Send `A>APRS,WIDE1-1`, a repeater sends it on as
+  `A>APRS,DB0XYZ*`: same source callsign, different frame, and the one the
+  operator most wants to see - it is the proof the digipeat happened.
+  Filtering by source callsign would swallow it.
+* **The same frame heard on another port.**  Transmitted on port 1 and heard
+  back on port 2, for whatever reason, is real information about the network
+  and not an echo.
+
+So the test is all three at once: the identical frame, with no
+has-been-repeated bit set, on the port it was sent on.  Anything else is
+somebody's traffic, including when it started as ours.
 
 **`bind()` waits on the node without a bound.**  A datagram `bind()` claims
 the callsign for incoming UI frames, and the wait for the node's answer has no

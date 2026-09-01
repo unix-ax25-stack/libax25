@@ -1692,10 +1692,23 @@ int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
  * nothing.  Only descriptors that are ours are answered for.
  */
 
-int wampes_setsockopt(int fd, int level, int *ret)
+/*
+ * The same answer the AGWPE side gives, and for the same reasons - see
+ * axsock_opt_refuse() there.  It used to accept everything under SOL_AX25 in
+ * silence, which meant a sysop who had set window in axports(5) got a hint on
+ * one backend and nothing on the other, and rsuplnk(8) was told its
+ * AX25_PIDINCL had been honoured when it had not.
+ */
+int wampes_setsockopt(int fd, int level, int optname, int *ret)
 {
 	if (level != SOL_AX25 || find_sock(fd) == NULL)
 		return 0;
+	if (axsock_opt_refuse(optname)) {
+		errno = ENOPROTOOPT;
+		*ret = -1;
+		return 1;
+	}
+	axsock_opt_note_ignored(optname);
 	*ret = 0;
 	return 1;
 }

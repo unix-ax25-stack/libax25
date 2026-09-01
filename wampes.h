@@ -26,7 +26,14 @@ int wampes_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,
 		       int *ret);
 int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
 		       int *ret);
-int wampes_setsockopt(int fd, int level, int *ret);
+int wampes_setsockopt(int fd, int level, int optname, int *ret);
+
+/* Decided in axsock.c and used by both backends, so the two give one answer:
+ * which SOL_AX25 options may be accepted and ignored, and which must be
+ * refused because ignoring them would corrupt traffic rather than drop a
+ * feature. */
+int axsock_opt_refuse(int optname);
+void axsock_opt_note_ignored(int optname);
 ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 		      const struct sockaddr *addr, socklen_t alen,
 		      ssize_t *ret);

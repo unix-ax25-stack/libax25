@@ -337,12 +337,18 @@ ankommt, statt nie.  Eine Ablehnung dort ist kein Fehler — ein Beacon bindet
 auch, meist das Rufzeichen eines Ports, das kein Client beanspruchen darf —,
 also wird der Grund aufgehoben und dem gegeben, der `recvfrom()` ruft.
 
-Das ist das Knoten-Backend.  **Über AGWPE kann ein Datagrammsocket senden und
-nicht empfangen**: `bind()` meldet dem Server kein Rufzeichen an, es wird ihm
-also nichts zugestellt, und der Zustellweg hat keinen Zweig für einen
-eingehenden Unproto-Rahmen.  Senden ist die Hälfte, die geht — deshalb ist es
-`beacon(8)` nie aufgefallen.  Hier gesagt, statt es finden zu lassen; was die
-andere Hälfte kostet, steht in `TODO.md`.
+Über AGWPE geschieht dasselbe aus demselben Grund: `bind()` meldet das
+Rufzeichen an, ein eingehender Unproto-Rahmen wird gegen die Datagrammsockets
+gehalten, die es führen, und die PID wählt zwischen ihnen.  Anders ist die
+Rahmung auf dem Weg zur Anwendung — der Deskriptor ist eine Socketpaar-Hälfte
+und damit ein Bytestrom, also kommt jeder Rahmen hinter einer Länge und dem
+Rufzeichen des Absenders, und genau daraus kann `recvfrom()` ihn benennen.
+
+Eine Grenze gehört dazu: das geht über `ax25netd(8)`, das einen UI-Rahmen auf
+seinem Loop-Port an den zustellt, der das Zielrufzeichen angemeldet hat.
+AGWPE selbst kennt keine UI-Zustellung je Rufzeichen — nur den Mitschnittstrom
+—, gegen einen `direwolf` müssten die Rahmen also von dort geholt werden.
+Diese Hälfte ist nicht gebaut, siehe `TODO.md`.
 
 ### Welche Aufrufe abgefangen werden
 

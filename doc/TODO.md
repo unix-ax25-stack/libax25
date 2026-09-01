@@ -223,20 +223,16 @@ in the node or in direwolf and takes its parameters from its own interface
 configuration.  Worth aligning anyway — one warning on both sides, and one
 answer from `getsockopt`.
 
-**No UI reception through AGWPE.**  Sending works — `sendto()` goes out as
-an unproto frame — but nothing comes back.  Two halves are missing and
-neither is hard: `bind()` on a datagram socket registers no callsign with the
-server, so `ax25netd` has nobody to route an incoming frame to; and
-`axsock_dispatch()` has arms for `C`, `D`, `d` and `K` and none for `M`, so a
-frame that did arrive would be dropped without a word.  The WAMPES side of
-exactly this was built last week — `claim_ui()` at `bind()`, `wampes_recvfrom()`,
-`parse_ui_header()` — and the two documents describe UI reception as a
-property of the library rather than of one backend, which is now half true.
-
-Worth knowing while testing: `ax25netd` routes a loop frame to the owner of
-the destination callsign and skips the client that sent it, so a station does
-not hear itself.  Two datagram sockets in one process cannot reach each other
-through the loop port, and that is correct — it wants two processes.
+**UI reception through a real AGWPE server.**  Through `ax25netd(8)` it works:
+its loop port routes a UI frame to whoever registered the destination
+callsign, and the library binds, matches and frames it.  AGWPE itself has no
+such delivery — a registered callsign gets connections, and UI frames appear
+only in the monitor stream — so against a `direwolf` the frames would have to
+be picked out of that: turn raw monitoring on while a datagram socket is
+bound, and filter by destination callsign and pid.  The plumbing is there,
+`axsock_raw_match()` already does the port half of it.  What wants weighing is
+the cost: monitoring means the server sends every frame it hears, to a client
+that wants a handful.
 
 **`bind()` waits on the node without a bound.**  A datagram `bind()` claims
 the callsign for incoming UI frames, and the wait for the node's answer has no

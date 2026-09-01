@@ -327,11 +327,20 @@ framing on the way to the application — the descriptor is a socketpair and a
 byte stream, so each frame arrives behind a length and the sender's callsign,
 which is what lets `recvfrom()` name it.
 
-One limit is worth knowing: this works through `ax25netd(8)`, which routes a
-UI frame on its loop port to whoever registered the destination callsign.
-AGWPE itself has no per-callsign UI delivery — only the monitor stream — so
-against a `direwolf` the frames would have to be picked out of that instead.
-That half is not built; see `TODO.md`.
+Both routes exist, and which one is in force follows the port.  On the loop
+port of `ax25netd(8)` the daemon routes a UI frame to whoever registered the
+destination callsign, and it arrives directly.  Anywhere else nobody does —
+AGWPE has no per-callsign UI delivery, only the monitor stream — so a datagram
+socket there asks for raw monitoring and the frames it wants are picked out of
+what comes back.  That is not a workaround; carrying every frame is what a
+monitor channel is for.
+
+The copy of the station's own transmission is suppressed, because a station is
+not told its own frames.  Only that: a digipeater repeating us carries the
+same source callsign and is a different frame — the proof the hop happened —
+and the same frame heard back on another port says something about the
+network.  An echo is all three at once: same port, nothing repeated yet, same
+frame.
 
 ### Which calls are intercepted
 

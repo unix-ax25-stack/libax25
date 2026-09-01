@@ -338,6 +338,7 @@ struct session {
 	char	src[16];
 	char	dst[16];
 	char	port[32];	/* the axports entry, when it differs */
+	int	pid;		/* the protocol id, when it differs */
 	char	tag[64];
 	char	got[256];
 	int	err;		/* errno from connect, 0 when it came up */
@@ -683,7 +684,17 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 	while (optind_ < argc && n < MULTI_MAX) {
 		const char *spec = argv[optind_++];
 		const char *at = strchr(spec, '@');
-		size_t len = at ? (size_t)(at - spec) : strlen(spec);
+		const char *slash = strchr(spec, '/');
+		size_t len;
+
+		/* <call>[/<pid>][@<port>] - the pid per listener, because two
+		 * listeners on one callsign with different pids is the case
+		 * worth testing and one -P for the whole process cannot say
+		 * it. */
+		if (slash != NULL && (at == NULL || slash < at))
+			len = (size_t)(slash - spec);
+		else
+			len = at ? (size_t)(at - spec) : strlen(spec);
 
 		if (len == 0 || len >= sizeof(ses[0].src) ||
 		    (at != NULL && strlen(at + 1) >= sizeof(ses[0].port))) {
@@ -691,6 +702,8 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 			return 1;
 		}
 		memcpy(ses[n].src, spec, len);
+		if (slash != NULL && (at == NULL || slash < at))
+			ses[n].pid = (int) strtol(slash + 1, NULL, 0);
 		if (at != NULL)
 			strcpy(ses[n].port, at + 1);
 		ses[n].fd = -1;
@@ -711,7 +724,9 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 				return 1;
 			pc = own;
 		}
-		if ((lfd[i] = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
+		if ((lfd[i] = p_socket(AF_AX25, SOCK_SEQPACKET,
+				       ses[i].pid ? ses[i].pid : want_pid))
+		    < 0) {
 			perror("axprobe: socket");
 			return 1;
 		}
@@ -838,8 +853,9 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 				bad = 1;
 			}
 		}
-		printf("%d %s <- %s %s: %s\n", i, ses[i].src, ses[i].dst,
-		       verdict, ses[i].got);
+		printf("%d %s(pid 0x%02x) <- %s %s: %s\n", i, ses[i].src,
+		       ses[i].pid ? ses[i].pid : (want_pid ? want_pid : 0xf0),
+		       ses[i].dst, verdict, ses[i].got);
 	}
 
 	for (i = 0; i < n; i++) {
@@ -1625,7 +1641,7 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] listen  <port> <call>\n"
 		"       axprobe [-d] [-q] [-f axports] bind    <port> <call>\n"
 		"       axprobe [-d] [-q] [-f axports] multi   <port> <src>:<dest>[@<port>] ...\n"
-		"       axprobe [-d] [-q] [-f axports] mlisten <port> <call>[@<port>] ...\n"
+		"       axprobe [-d] [-q] [-f axports] mlisten <port> <call>[/<pid>][@<port>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] mui     <port> <call>[:<dest>] ...\n"
 		"       axprobe [-d] [-q] [-f axports] flood   <port> <src>:<dest> <lines> [<linger-ms>]\n"
 		"       axprobe [-d] [-q] [-f axports] sink    <port> <call> <sleep-ms>\n"

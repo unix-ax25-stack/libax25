@@ -125,6 +125,11 @@ struct axsock_sock {
 					 * not take yet, in order */
 	size_t			plen;	/* how many of them are waiting */
 	size_t			pcap;	/* how much pend can hold */
+	int			rawfeed;	/* datagram socket fed from the
+						 * monitor stream: no AGWPE
+						 * server delivers UI to a
+						 * callsign, so off the loop
+						 * port this is the only way */
 	int			peer_eof;	/* the session ended with the
 						 * queue not yet empty: close
 						 * the router end once it is */
@@ -1144,6 +1149,171 @@ static void axsock_flush_pending(void)
  * same dispatch.
  */
 /*
+ * An AX.25 frame off the monitor stream, taken apart far enough to say who
+ * sent it to whom and whether it is a UI frame at all.
+ *
+ * listen(1) has a decoder for this and it lives in ax25-apps, which cannot be
+ * reached from here, so this is a small one: addresses, the control byte, the
+ * protocol id.  It reads what direwolf transmits and what ax25netd(8) rebuilds
+ * in the same shape - a KISS marker, then destination, source, digipeaters
+ * until the extension bit, then control and pid.
+ */
+
+#define	AXSOCK_AX25_UI		0x03	/* control, P/F masked off */
+#define	AXSOCK_AX25_PF		0x10
+#define	AXSOCK_AX25_EXT		0x01	/* last address, in the SSID byte */
+#define	AXSOCK_AX25_HBIT	0x80	/* has been repeated */
+#define	AXSOCK_ADDR_LEN		7
+
+static void agwpe_addr_text(const unsigned char *a, char *out, size_t outlen)
+{
+	char call[8];
+	int i, n = 0, ssid;
+
+	for (i = 0; i < 6; i++) {
+		char c = (char)(a[i] >> 1);
+
+		if (c == ' ')
+			break;
+		call[n++] = c;
+	}
+	call[n] = '\0';
+	ssid = (a[6] >> 1) & 0x0f;
+	if (ssid != 0)
+		snprintf(out, outlen, "%s-%d", call, ssid);
+	else
+		snprintf(out, outlen, "%s", call);
+}
+
+/*
+ * Returns 1 for a UI frame it could read, 0 for anything else - another frame
+ * kind, a truncated one, more digipeaters than AX.25 allows.  repeated says
+ * whether any digipeater in the path has already repeated it, which is what
+ * tells a frame coming back from a digipeater apart from the copy of our own
+ * transmission.
+ */
+static int agwpe_ui_parse(const unsigned char *k, size_t klen,
+			  char *dst, size_t dstlen, char *src, size_t srclen,
+			  unsigned char *pid, const unsigned char **info,
+			  size_t *ilen, int *repeated)
+{
+	const unsigned char *a;
+	size_t off = 1;			/* past the KISS marker */
+	int naddr = 0;
+
+	*repeated = 0;
+	if (klen < 1 + 2 * AXSOCK_ADDR_LEN + 2)
+		return 0;
+
+	for (;;) {
+		if (off + AXSOCK_ADDR_LEN > klen)
+			return 0;
+		a = k + off;
+		if (naddr == 0)
+			agwpe_addr_text(a, dst, dstlen);
+		else if (naddr == 1)
+			agwpe_addr_text(a, src, srclen);
+		else if (a[6] & AXSOCK_AX25_HBIT)
+			*repeated = 1;
+		off += AXSOCK_ADDR_LEN;
+		naddr++;
+		if (a[6] & AXSOCK_AX25_EXT)
+			break;
+		if (naddr > 2 + AX25_MAX_DIGIS)
+			return 0;
+	}
+	if (naddr < 2 || off + 2 > klen)
+		return 0;
+	if ((k[off] & ~AXSOCK_AX25_PF) != AXSOCK_AX25_UI)
+		return 0;		/* not a UI frame */
+	off++;
+	*pid = k[off++];
+	*info = k + off;
+	*ilen = klen - off;
+	return 1;
+}
+
+/*
+ * Our own transmissions come back on the monitor stream, and a station is not
+ * told its own frames.  What must not be swallowed with them is the rest:
+ *
+ *   - a digipeater repeating us is the same source and a different frame, and
+ *     the one an operator most wants to see: it is the proof the hop happened
+ *   - the same frame heard back on another port says something about the
+ *     network and is not an echo
+ *
+ * So the test is all three at once - same port, nothing repeated yet, and the
+ * same frame - and the frame is remembered by what was said rather than by
+ * the bytes, because the far end rebuilds those in its own shape.
+ */
+
+#define	AXSOCK_SENT_RING	8
+
+static struct {
+	unsigned char	port;
+	unsigned char	pid;
+	char		src[AGWPE_MAX_CALL];
+	char		dst[AGWPE_MAX_CALL];
+	uint32_t	hash;
+	int		used;
+} axsock_sent[AXSOCK_SENT_RING];
+static int axsock_sent_at;
+
+static uint32_t agwpe_hash(const unsigned char *p, size_t n)
+{
+	uint32_t h = 2166136261u;	/* FNV-1a */
+
+	while (n-- > 0) {
+		h ^= *p++;
+		h *= 16777619u;
+	}
+	return h;
+}
+
+/* Called under the lock, from the unproto send path. */
+static void agwpe_note_sent_locked(unsigned char port, unsigned char pid,
+				   const char *src, const char *dst,
+				   const void *buf, size_t len)
+{
+	int i = axsock_sent_at;
+
+	axsock_sent[i].port = port;
+	axsock_sent[i].pid = pid;
+	snprintf(axsock_sent[i].src, sizeof(axsock_sent[i].src), "%s", src);
+	snprintf(axsock_sent[i].dst, sizeof(axsock_sent[i].dst), "%s", dst);
+	axsock_sent[i].hash = agwpe_hash(buf, len);
+	axsock_sent[i].used = 1;
+	axsock_sent_at = (i + 1) % AXSOCK_SENT_RING;
+}
+
+static int agwpe_was_ours_locked(unsigned char port, unsigned char pid,
+				 const char *src, const char *dst,
+				 const unsigned char *info, size_t ilen,
+				 int repeated)
+{
+	uint32_t h;
+	int i;
+
+	if (repeated)
+		return 0;		/* somebody repeated it: not an echo */
+	h = agwpe_hash(info, ilen);
+	for (i = 0; i < AXSOCK_SENT_RING; i++) {
+		if (!axsock_sent[i].used || axsock_sent[i].port != port ||
+		    axsock_sent[i].pid != pid || axsock_sent[i].hash != h)
+			continue;
+		if (strcasecmp(axsock_sent[i].src, src) != 0 ||
+		    strcasecmp(axsock_sent[i].dst, dst) != 0)
+			continue;
+		axsock_sent[i].used = 0;	/* one echo per transmission */
+		if (getenv("AXSOCK_DEBUG"))
+			fprintf(stderr, "axsock: monitor copy of our own %s>%s on port %u - not delivered\n",
+				src, dst, port);
+		return 1;
+	}
+	return 0;
+}
+
+/*
  * A UI frame on its way to a datagram socket.
  *
  * The socketpair is a byte stream - macOS has no SEQPACKET pair - so a frame
@@ -1236,6 +1406,42 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 			if (n != (ssize_t)(AXMON_PREFIX_LEN + len))
 				continue;	/* monitor fell behind: drop */
 			s->port = hdr->port;
+		}
+
+		/*
+		 * And the datagram sockets fed from here.  No AGWPE server
+		 * delivers a UI frame to the callsign it is addressed to -
+		 * that is a private extension of ax25netd(8) and works on its
+		 * loop port only - so off the loop this stream is the only
+		 * way one arrives.  Which is what a monitor channel is for.
+		 */
+		{
+			char dst[AGWPE_MAX_CALL], src[AGWPE_MAX_CALL];
+			const unsigned char *info;
+			size_t ilen;
+			unsigned char pid;
+			int repeated;
+
+			if (!agwpe_ui_parse(data, len, dst, sizeof(dst),
+					    src, sizeof(src), &pid, &info,
+					    &ilen, &repeated))
+				goto out;
+			if (agwpe_was_ours_locked(hdr->port, pid, src, dst,
+						  info, ilen, repeated))
+				goto out;
+			for (s = axsock_list; s != NULL; s = s->next) {
+				if (!s->rawfeed || s->peer < 0)
+					continue;
+				if (s->port != hdr->port)
+					continue;
+				if (strcasecmp(s->local, dst) != 0 &&
+				    !axsock_call_match(s->local, dst))
+					continue;
+				if (s->pid != pid)
+					continue;
+				agwpe_ui_deliver_locked(s, src, info, ilen);
+				break;
+			}
 		}
 		goto out;
 	}
@@ -1662,7 +1868,16 @@ static int axsock_send_unproto(struct axsock_sock *s, const char *target,
 	pid = s->pid;
 	memcpy(local, s->local, AGWPE_MAX_CALL);
 
+	/* Remembered before the lock goes, because the ring is under it: the
+	 * copy that comes back on the monitor stream is told from somebody
+	 * else's traffic by this - see agwpe_was_ours_locked().  Noting a
+	 * frame the send then fails to deliver costs nothing: the entry is
+	 * overwritten in eight frames, and until then it could only swallow
+	 * an identical frame from the same pair on the same port. */
+	agwpe_note_sent_locked(port, pid, local, target, buf, len);
+
 	pthread_mutex_unlock(&axsock_lock);
+
 	if (ndigis > 0)
 		rc = agwpe_client_send_unproto_via(cl, port, pid, local,
 						   target, digis, ndigis,
@@ -2052,6 +2267,21 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 		if (axsock_ensure_locked() == 0) {
 			axsock_register_locked(s->local, s->port, 0);
 			s->registered = 1;
+
+			/*
+			 * On the loop port ax25netd routes a UI frame to
+			 * whoever registered the callsign, so the direct
+			 * path serves it.  Anywhere else nobody does, and
+			 * the monitor stream is where the frame is - so ask
+			 * for it, sharing the toggle with the SOCK_PACKET
+			 * monitors, and take it off again at close().
+			 */
+			if (s->port != AGWPE_PORT_LOOP) {
+				s->rawfeed = 1;
+				if (axsock_nraw == 0 && axsock_agwpe != NULL)
+					agwpe_client_raw_toggle(axsock_agwpe);
+				axsock_nraw++;
+			}
 		}
 		pthread_mutex_unlock(&axsock_lock);
 	}
@@ -2557,7 +2787,7 @@ int agwpe_close(int fd, int *ret)
 	if (s->registered)
 		axsock_unregister_locked(s->local, s->port);
 
-	if (s->raw) {
+	if (s->raw || s->rawfeed) {
 		if (--axsock_nraw == 0 && axsock_up && axsock_agwpe != NULL)
 			agwpe_client_raw_toggle(axsock_agwpe);
 	}

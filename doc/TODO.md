@@ -300,6 +300,35 @@ harmless while this is young, but an override that outlives its reason turns
 into a way of configuring things twice, and then into a bug report about the
 file being ignored.
 
+**A radio link on the desk, for the tests that need two stations.**  Two
+direwolf instances on the same virtual audio device - BlackHole on this
+machine - hear each other, which gives a real modulated 1200 baud channel
+without a radio.  `/tmp/dwA.conf` and `/tmp/dwB.conf`, `AGWPORT` 8000 and 8010,
+both `ADEVICE "BlackHole 2ch"`.
+
+What it has already shown: a complete AX.25 connection through the library
+over the air, v2.2 with XID negotiation, data in both directions and a clean
+DISC/UA.  That had never been done - every earlier direwolf test checked which
+frames went *out*, because there was nobody to answer them.
+
+Two things to know before believing a result from it.  The two instances share
+one channel, so they collide with each other exactly as two stations on one
+frequency do; a frame that does not arrive may be a collision rather than a
+fault.  And a test must be patient - `axprobe -w` exists for that - because a
+listener that gives up unregisters its callsign, and the call then arrives at
+a station that is no longer there.
+
+Still to run on it: two listeners on one callsign with different pids, which
+needs an incoming connection and so could not be done against a single
+direwolf; and the outbound flow control below.
+
+**Outbound flow control on the AGWPE path.**  The node side of this was found
+and fixed today by thinking it through: a `cat` of a large file fills faster
+than 1200 baud drains, the far side says stop, and what the application must
+get is `EAGAIN` - not a torn-down session.  The AGWPE path has not been put
+through it.  The rig above is what it wants: a real link that is slow enough
+for the buffers to fill in seconds rather than hours.
+
 ---
 
 ## Measurements outstanding

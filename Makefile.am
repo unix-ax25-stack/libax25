@@ -10,11 +10,14 @@ AM_CPPFLAGS = -DAX25_SYSCONFDIR=\""$(sysconfdir)/ax25/"\" \
 if !AX25_H
 USE_LIBAX25_AX25_H = netax25/ax25.h
 endif
-# Serving AX.25 sockets from userspace: the interception in axsock.c, and
-# the backends it hands them to - AGWPE lives in agwpe_client.c, which is
-# always built, WAMPES in wampes.c, which is only useful with axsock.c.
+# Serving AX.25 sockets from userspace.  axsock.c is the interception - the
+# entry points that stand in front of the libc calls - and the backends it
+# hands a socket to: AGWPE in agwpe_sock.c over the client in agwpe_client.c,
+# which is always built, and a WAMPES node in wampes.c.  The two headers are
+# the whole surface between the interception and the AGWPE backend.
 if USERSPACE_AX25
-USE_LIBAX25_AXSOCK = axsock.c wampes.c wampes.h
+USE_LIBAX25_AXSOCK = axsock.c agwpe_sock.c wampes.c \
+		     axsock_real.h agwpe_sock.h wampes.h
 endif
 if !NETROM_H
 USE_LIBAX25_NETROM_H = netrom/netrom.h
@@ -98,7 +101,8 @@ axprobe_LDADD =
 endif
 
 
-EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c wampes.c wampes.h
+EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c agwpe_sock.c \
+	    axsock_real.h agwpe_sock.h wampes.c wampes.h
 
 dist_doc_DATA = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
 		README-linux-systemd.txt \

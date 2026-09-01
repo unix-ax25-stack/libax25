@@ -46,6 +46,9 @@
 #include "pathnames.h"
 
 #include "wampes.h"
+/* What the other backend hands over, and the option table both consult. */
+#include "agwpe_sock.h"
+#include "axsock_real.h"
 
 #define WAMPES_MAX_SOCK 64
 

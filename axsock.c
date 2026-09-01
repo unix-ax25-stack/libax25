@@ -1439,7 +1439,19 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 				s->state = AXSOCK_CONNECTED;
 				pthread_cond_broadcast(&axsock_cond);
 			} else if (hdr->datakind == AGWPE_DK_DISCONNECT) {
-				s->connect_err = ECONNREFUSED;
+				/*
+				 * The refusal carries its reason in the text,
+				 * which is the only place AGWPE has for one.
+				 * "Nobody answered" and "that pair is already
+				 * connected" are different things to a caller
+				 * and deserve different answers - the node
+				 * backend has always told them apart, saying
+				 * EADDRINUSE for busy.
+				 */
+				s->connect_err =
+					(data != NULL && len > 0 &&
+					 memmem(data, len, "BUSY", 4) != NULL)
+					? EADDRINUSE : ECONNREFUSED;
 				s->state = AXSOCK_NEW;
 				pthread_cond_broadcast(&axsock_cond);
 			}

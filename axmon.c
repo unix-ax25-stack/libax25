@@ -32,13 +32,32 @@
 
 #include "netax25/axmon.h"
 
+/*
+ * Is this descriptor the shim's monitor rather than a kernel packet socket?
+ *
+ * The old test was that getsockopt() fails with ENOPROTOOPT, which the shim
+ * answers for anything but SOL_AX25.  It works where the interception is
+ * strong symbols, and not where it is an interpose table: this file is *in*
+ * the library, and a call from there to getsockopt() is not redirected to the
+ * entry point beside it - it goes straight to libc, succeeds, and the answer
+ * came back "kernel socket".  listen(1) then read our four-byte length as the
+ * front of the frame and decoded four bytes of rubbish followed by a callsign
+ * rotated out of shape.  Nobody saw it for months because the test was that
+ * listen kept running, never that what it printed was right.
+ *
+ * So ask something that is true rather than something that fails.  The shim
+ * hands out one end of a AF_UNIX socketpair; a packet socket is SOCK_PACKET
+ * or SOCK_RAW and never SOCK_STREAM.  Both platforms answer the same way now,
+ * and the ENOPROTOOPT case stays for the one where the call is intercepted.
+ */
 int axmon_framed(int fd)
 {
 	int type;
 	socklen_t len = sizeof(type);
 
-	return getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == -1 &&
-	       errno == ENOPROTOOPT;
+	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == -1)
+		return errno == ENOPROTOOPT;
+	return type == SOCK_STREAM;
 }
 
 /* recvfrom(), retrying signals: a partial length prefix must not be lost

@@ -990,12 +990,19 @@ static struct axsock_sock *axsock_alloc_sock_locked(int type)
 	return s;
 }
 
-static int axsock_new_sock(int type)
+/*
+ * The protocol id belongs to the socket from the moment it is made: AX.25
+ * carries it in every frame, and socket() is where the application says
+ * which one it wants.  Zero means "the usual", which is text.
+ */
+static int axsock_new_sock(int type, int pid)
 {
 	struct axsock_sock *s;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_alloc_sock_locked(type);
+	if (s != NULL && pid != 0)
+		s->pid = (unsigned char) pid;
 	pthread_mutex_unlock(&axsock_lock);
 	if (s == NULL)
 		return -1;
@@ -1301,6 +1308,19 @@ static void axsock_flush_pending(void)
 	pthread_mutex_unlock(&axsock_lock);
 }
 
+/*
+ * A connection coming up, said either way.  The server reports one with 'C',
+ * but a connect that named a protocol id went out as 'c'
+ * (AGWPE_CMD_CONNECT_PID) and comes back as 'c' - ax25netd hands the frame on
+ * as it got it rather than normalising it.  Knowing only 'C' meant a connect
+ * with any pid but text was not recognised at all: the caller waited out its
+ * timeout and the listener never saw the call.
+ */
+static int agwpe_is_connect(unsigned char kind)
+{
+	return kind == AGWPE_DK_CONNECT || kind == AGWPE_CMD_CONNECT_PID;
+}
+
 static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 			    const unsigned char *data, size_t len)
 {
@@ -1368,7 +1388,7 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 
 		if (s->state == AXSOCK_CONNECTING &&
 		    strncasecmp(s->remote, hdr->call_from, AGWPE_MAX_CALL) == 0) {
-			if (hdr->datakind == AGWPE_DK_CONNECT) {
+			if (agwpe_is_connect(hdr->datakind)) {
 				s->state = AXSOCK_CONNECTED;
 				pthread_cond_broadcast(&axsock_cond);
 			} else if (hdr->datakind == AGWPE_DK_DISCONNECT) {
@@ -1402,21 +1422,69 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 		}
 	}
 
-	if (!found && hdr->datakind == AGWPE_DK_CONNECT) {
+	if (!found && agwpe_is_connect(hdr->datakind)) {
 		/* Inbound connect: queue it on a listening socket.  An
 		 * exact call match wins; a listener bound to a call with
 		 * SSID 0 serves any SSID of the same base call.
 		 */
-		for (s = axsock_list; s != NULL; s = s->next) {
-			if (s->listening &&
-			    strcasecmp(s->local, hdr->call_to) == 0)
-				break;
-		}
-		if (s == NULL) {
+		/*
+		 * The pid decides as much as the callsign does.  On the air
+		 * one link carries frames of several protocol ids, and a
+		 * service listening for NET/ROM and one listening for text
+		 * are two different listeners on one callsign - which is how
+		 * the node backend has always treated it.
+		 *
+		 * Here the sorting has to happen on this side: AGWPE
+		 * registers a callsign with 'X' and 'X' carries no pid, so
+		 * the server hands its one owner everything addressed to it
+		 * and leaves the choosing to the client.  Two processes
+		 * therefore cannot divide one callsign by pid - only one of
+		 * them owns it at the server.
+		 *
+		 * A plain 'C' carries no pid either, so a zero means text,
+		 * the same reading session_pid() uses in ax25netd.
+		 *
+		 * And the pid is a preference, not a filter.  Matching it
+		 * exactly and dropping the rest would lose calls that used
+		 * to arrive - from an AGWPE client that fills the field
+		 * differently, or simply because the only listener here is
+		 * the one that was always taking them.  So: the right pid
+		 * first, and a listener without a claim on this pid after
+		 * that, which is what happened before there was a pid at
+		 * all.
+		 */
+		unsigned char want = hdr->pid ? hdr->pid : AGWPE_PID_AX25;
+		int pass;
+
+		s = NULL;
+		for (pass = 0; pass < 4 && s == NULL; pass++) {
+			int exact = (pass % 2) == 0;	/* call: exact, then base */
+			int bypid = pass < 2;		/* pid: matching, then any */
+
 			for (s = axsock_list; s != NULL; s = s->next) {
-				if (s->listening &&
-				    axsock_call_match(s->local, hdr->call_to))
+				if (!s->listening)
+					continue;
+				if (bypid && s->pid != want)
+					continue;
+				if (exact) {
+					if (strcasecmp(s->local,
+						       hdr->call_to) == 0)
+						break;
+				} else if (axsock_call_match(s->local,
+							     hdr->call_to)) {
 					break;
+				}
+			}
+			if (s != NULL && !bypid && s->pid != want) {
+				static int said;
+
+				if (!said) {
+					said = 1;
+					fprintf(stderr,
+						"axsock: no listener for pid 0x%02x on %.*s - giving the call to the one for 0x%02x\n",
+						want, AGWPE_MAX_CALL,
+						hdr->call_to, s->pid);
+				}
 			}
 		}
 		if (getenv("AXSOCK_DEBUG"))
@@ -1899,14 +1967,14 @@ int axsock_forget(int fd)
  * exception is described in doc/TODO.md - hand out a placeholder here and
  * let bind() put the real descriptor over it - and it is not this step.
  */
-static int agwpe_socket(int type)
+static int agwpe_socket(int type, int protocol)
 {
 	if (type != SOCK_SEQPACKET && type != SOCK_DGRAM &&
 	    type != SOCK_RAW) {
 		errno = EPROTONOSUPPORT;
 		return -1;
 	}
-	return axsock_new_sock(type);
+	return axsock_new_sock(type, protocol);
 }
 
 int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
@@ -2009,7 +2077,7 @@ int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 		 * counterpart. */
 		fd = real_socket(domain, type, protocol);
 	else
-		fd = agwpe_socket(type);
+		fd = agwpe_socket(type, protocol);
 	if (fd >= 0 && protocol != 0)
 		wampes_note_protocol(fd, protocol);
 	return fd;
@@ -2622,6 +2690,30 @@ static int agwpe_listen(int fd, int *ret)
 		pthread_mutex_unlock(&axsock_lock);
 		return 0;
 	}
+	/*
+	 * One listener per callsign and pid, which is the rule the node
+	 * enforces and answers with "already taken".  Say the same thing
+	 * here, because on this side nobody else will: the server registers
+	 * a callsign without a pid, so it cannot tell two claims apart, and
+	 * the second listener would simply never hear anything.
+	 *
+	 * Only within this process.  Another process claiming the same
+	 * callsign is beyond what the protocol can express.
+	 */
+	{
+		struct axsock_sock *o;
+
+		for (o = axsock_list; o != NULL; o = o->next)
+			if (o != s && o->listening && o->pid == s->pid &&
+			    o->local[0] != '\0' &&
+			    strcasecmp(o->local, s->local) == 0) {
+				pthread_mutex_unlock(&axsock_lock);
+				errno = EADDRINUSE;
+				*ret = -1;
+				return 1;
+			}
+	}
+
 	s->listening = 1;
 	if (s->local[0] != '\0' && !s->registered) {
 		int listener = (s->port == AGWPE_PORT_LOOP);

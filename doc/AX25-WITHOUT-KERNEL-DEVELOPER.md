@@ -320,12 +320,18 @@ never.  A refusal there is not an error — a beacon binds too, usually a port's
 own callsign, which no client may claim — so the reason is kept and handed to
 whoever calls `recvfrom()`.
 
-That is the node backend.  **Through AGWPE a datagram socket can send and
-cannot receive**: `bind()` registers no callsign with the server, so nothing
-is routed to it, and the dispatch has no arm for an incoming unproto frame.
-Sending is the half that works, which is why `beacon(8)` has never noticed.
-Said here rather than left to be discovered, and kept in `TODO.md` with what
-the other half would take.
+Through AGWPE the same thing happens for the same reason: `bind()` announces
+the callsign, an incoming unproto frame is matched against the datagram
+sockets that hold it, and the pid picks between them.  What differs is the
+framing on the way to the application — the descriptor is a socketpair and a
+byte stream, so each frame arrives behind a length and the sender's callsign,
+which is what lets `recvfrom()` name it.
+
+One limit is worth knowing: this works through `ax25netd(8)`, which routes a
+UI frame on its loop port to whoever registered the destination callsign.
+AGWPE itself has no per-callsign UI delivery — only the monitor stream — so
+against a `direwolf` the frames would have to be picked out of that instead.
+That half is not built; see `TODO.md`.
 
 ### Which calls are intercepted
 

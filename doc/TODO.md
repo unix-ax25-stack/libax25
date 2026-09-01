@@ -180,12 +180,6 @@ and the reason not to build a multiplexer here.  Giving AGWPE the same would
 mean a pid on the registration, which is a change to `ax25netd(8)` and to what
 it can claim to be.
 
-**`ax25netd` passes a connect on as it received it.**  A connect that named a
-pid arrives at the listener as `c` rather than `C`.  The library copes with
-both now, but a client that knows only the AGWPE spelling would not, and the
-daemon is the one place that could normalise it while keeping the pid in the
-header where it belongs.
-
 **And a question for the node, not for here:** whether `listen ax25 <call>
 client pid=any` would be worth having.  It would save a sysop an entry per pid
 and let one program take everything on a callsign.  What speaks against it is
@@ -194,14 +188,6 @@ stream the client cannot tell which frame was which, because the pid is not in
 the bytes.  It would want the counted form, the way the datagram path already
 works — so it is not one line in `axlisten_find()` but a different kind of
 client.  Worth deciding in the WAMPES tree before it is built here.
-
-**The same situation, two error numbers.**  A connect that cannot be made
-because the link already exists answers `EADDRINUSE` through the node — it
-says `busy`, and `link_errno()` maps it — and `ECONNREFUSED` through AGWPE,
-where `ax25netd` synthesises the same retryout disconnect for "nobody is
-listening" and for "that pair is already connected", and the library can only
-map what it is told.  `EADDRINUSE` is the truthful one for a duplicate;
-telling the two apart means the daemon has to say which it means.
 
 **`AX25_WINDOW` and friends are accepted and dropped, differently.**  A
 program that has read `window` from `axports(5)` — `call(1)` does — sets it

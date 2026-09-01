@@ -75,6 +75,15 @@ static ssize_t (*p_write)(int, const void *, size_t);
 
 static int	verbose = 1;
 
+/*
+ * The protocol id handed to socket().  AX.25 carries it in every frame and
+ * it is part of who a listener is: a service listening for NET/ROM and one
+ * listening for text are two different listeners on one callsign, and each
+ * should get its own frames.  Zero means "say nothing", which is what every
+ * mode here did until now.
+ */
+static int want_pid;
+
 static void *lookup(const char *name)
 {
 	void *f = dlsym(RTLD_DEFAULT, name);
@@ -342,7 +351,7 @@ static int multi_open(struct session *ses, const char *portcall)
 	 * to keep apart. */
 	struct full_sockaddr_ax25 sa;
 
-	if ((ses->fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+	if ((ses->fd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 		ses->err = errno;
 		return -1;
 	}
@@ -702,7 +711,7 @@ static int multilisten(int argc, char **argv, int optind_, const char *portcall)
 				return 1;
 			pc = own;
 		}
-		if ((lfd[i] = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+		if ((lfd[i] = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 			perror("axprobe: socket");
 			return 1;
 		}
@@ -887,7 +896,7 @@ static int multiui(int argc, char **argv, int optind_, const char *portcall)
 		usage();
 
 	for (i = 0; i < n; i++) {
-		if ((ses[i].fd = p_socket(AF_AX25, SOCK_DGRAM, 0)) < 0) {
+		if ((ses[i].fd = p_socket(AF_AX25, SOCK_DGRAM, want_pid)) < 0) {
 			perror("axprobe: socket");
 			return 1;
 		}
@@ -1018,7 +1027,7 @@ static int flood(const char *portcall, const char *src, const char *dst,
 	char line[FLOOD_LINE + 1];
 	int fd, i;
 
-	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 		perror("axprobe: socket");
 		return 1;
 	}
@@ -1078,7 +1087,7 @@ static int sink(const char *portcall, const char *call, int slow_ms)
 	long long bytes = 0;
 	int fd, nfd, want = 0, holes = 0, disorder = 0;
 
-	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 		perror("axprobe: socket");
 		return 1;
 	}
@@ -1198,7 +1207,7 @@ static int churn(const char *portcall, const char *src, const char *dst,
 
 		snprintf(tag, sizeof(tag), "round-%d-%s-%s", r, src, dst);
 
-		if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+		if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 			perror("axprobe: socket");
 			return 1;
 		}
@@ -1259,7 +1268,7 @@ static int echoserver(const char *portcall, const char *call, int rounds)
 {
 	int fd, r;
 
-	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 		perror("axprobe: socket");
 		return 1;
 	}
@@ -1379,7 +1388,7 @@ static int evil(const char *portcall, const char *src, const char *dst,
 	memset(boundary, 'B', sizeof(boundary));
 	memset(big, 'G', sizeof(big));
 
-	if ((fd = p_socket(AF_AX25, dgram ? SOCK_DGRAM : SOCK_SEQPACKET, 0))
+	if ((fd = p_socket(AF_AX25, dgram ? SOCK_DGRAM : SOCK_SEQPACKET, want_pid))
 	    < 0) {
 		perror("axprobe: socket");
 		return 1;
@@ -1484,7 +1493,7 @@ static int mixed(const char *portcall, const char *listencall,
 
 	/* Listener up before the call goes out, or the other side may find
 	 * nobody home. */
-	if ((lfd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+	if ((lfd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 		perror("axprobe: socket");
 		return 1;
 	}
@@ -1507,7 +1516,7 @@ static int mixed(const char *portcall, const char *listencall,
 	 */
 	poll(NULL, 0, 3000);
 
-	if ((ofd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+	if ((ofd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 		perror("axprobe: socket");
 		return 1;
 	}
@@ -1629,6 +1638,7 @@ static void usage(void)
 		"      or the other half of this same test)\n"
 		"  -z  multi: close this session after the first exchange and ask the\n"
 		"      others again - 0 is the one opened first\n"
+		"  -P  protocol id for socket(), e.g. 0xf0 text or 0xcf NET/ROM\n"
 		"  -q  no commentary on stderr\n"
 		"  -f  axports to read instead of " CONF_AXPORTS_FILE "\n"
 		"\n"
@@ -1644,7 +1654,7 @@ int main(int argc, char **argv)
 	int use_dlsym = 0;
 	int fd, c;
 
-	while ((c = getopt(argc, argv, "df:pqz:")) != -1) {
+	while ((c = getopt(argc, argv, "dP:f:pqz:")) != -1) {
 		switch (c) {
 		case 'd':
 			use_dlsym = 1;
@@ -1654,6 +1664,9 @@ int main(int argc, char **argv)
 			break;
 		case 'z':
 			close_which = atoi(optarg);
+			break;
+		case 'P':
+			want_pid = (int) strtol(optarg, NULL, 0);
 			break;
 		case 'p':
 			peer_mode = 1;
@@ -1677,7 +1690,7 @@ int main(int argc, char **argv)
 	if (port_callsign(axports, port, portcall, sizeof(portcall)) < 0)
 		return 1;
 
-	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, 0)) < 0) {
+	if ((fd = p_socket(AF_AX25, SOCK_SEQPACKET, want_pid)) < 0) {
 		perror("axprobe: socket");
 		return 1;
 	}

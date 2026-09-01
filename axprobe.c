@@ -1243,6 +1243,154 @@ static int echoserver(const char *portcall, const char *call, int rounds)
 	return 0;
 }
 
+/*
+ * Payloads that look like protocol.
+ *
+ * A frame is content, not text: a line ending inside it is a byte like any
+ * other, and so is a NUL, and so is a line that reads exactly like an answer
+ * from the node.  What decides where a frame ends is a count, and the point
+ * of this is to check that the count is what decides - not a newline that
+ * happened to be in the payload, and not a "*** " at the front of it.
+ *
+ * Every case goes out, comes back from an echoing far end, and is compared
+ * byte for byte.  Length is compared too: something that swallowed a NUL or
+ * stopped at a newline would still return a plausible-looking string.
+ */
+
+struct evilcase {
+	const char	*what;
+	const char	*data;
+	size_t		len;
+};
+
+static int read_exactly(int fd, char *buf, size_t want, int msec)
+{
+	size_t got = 0;
+
+	while (got < want) {
+		struct pollfd pfd;
+		ssize_t n;
+
+		pfd.fd = fd;
+		pfd.events = POLLIN;
+		if (poll(&pfd, 1, msec) <= 0)
+			return -1;
+		if ((n = read(fd, buf + got, want - got)) <= 0)
+			return -1;
+		got += (size_t) n;
+	}
+	return 0;
+}
+
+static int evil(const char *portcall, const char *src, const char *dst,
+		int dgram)
+{
+	static char every[256], big[600], boundary[256];
+	struct evilcase cases[] = {
+		{ "plain",		"hello",		5 },
+		{ "LF in the middle",	"one\ntwo",		7 },
+		{ "CR in the middle",	"one\rtwo",		7 },
+		{ "CRLF",		"one\r\ntwo",		8 },
+		{ "NUL in the middle",	"one\0two",		7 },
+		{ "leading LF",		"\nafter",		6 },
+		{ "trailing LF",	"before\n",		7 },
+		{ "only a LF",		"\n",			1 },
+		{ "a node answer",	"*** connected to DB0XXX\n", 24 },
+		{ "a link failure",	"*** link failure with X - busy\n", 31 },
+		{ "a counted header",	"[5]DL1ABC>DB0AAA:12345", 22 },
+		{ "brackets and colon",	"]:[99]x:y", 9 },
+		{ "every byte value",	every,			sizeof(every) },
+		{ "256 bytes",		boundary,		sizeof(boundary) },
+		{ "600 bytes",		big,			sizeof(big) },
+	};
+	struct full_sockaddr_ax25 sa;
+	int fd, i, bad = 0;
+	size_t k;
+
+	for (k = 0; k < sizeof(every); k++)
+		every[k] = (char) k;
+	memset(boundary, 'B', sizeof(boundary));
+	memset(big, 'G', sizeof(big));
+
+	if ((fd = p_socket(AF_AX25, dgram ? SOCK_DGRAM : SOCK_SEQPACKET, 0))
+	    < 0) {
+		perror("axprobe: socket");
+		return 1;
+	}
+	if (bind_port(fd, portcall, strcmp(src, "-") ? src : portcall) < 0)
+		return 1;
+	memset(&sa, 0, sizeof(sa));
+	sa.fsa_ax25.sax25_family = AF_AX25;
+	if (aton_entry(dst, sa.fsa_ax25.sax25_call.ax25_call) < 0) {
+		fprintf(stderr, "axprobe: invalid destination\n");
+		return 1;
+	}
+	if (!dgram && p_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		perror("axprobe: connect");
+		return 1;
+	}
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+		char back[700];
+		size_t off = 0;
+
+		if (dgram) {
+			/* Nothing comes back: what the node made of it is on
+			 * the node, and that is where the count is read. */
+			if (sendto(fd, cases[i].data, cases[i].len, 0,
+				   (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+				printf("%-20s sendto: %s\n", cases[i].what,
+				       strerror(errno));
+				bad = 1;
+			} else {
+				printf("%-20s %zu bytes sent\n",
+				       cases[i].what, cases[i].len);
+			}
+			continue;
+		}
+
+		while (off < cases[i].len) {
+			ssize_t n = write(fd, cases[i].data + off,
+					  cases[i].len - off);
+
+			if (n < 0) {
+				printf("%-20s write: %s\n", cases[i].what,
+				       strerror(errno));
+				bad = 1;
+				break;
+			}
+			off += (size_t) n;
+		}
+		if (off < cases[i].len)
+			continue;
+
+		if (read_exactly(fd, back, cases[i].len, 4000) < 0) {
+			printf("%-20s %zu bytes out, did not all come back\n",
+			       cases[i].what, cases[i].len);
+			bad = 1;
+			continue;
+		}
+		if (memcmp(back, cases[i].data, cases[i].len) != 0) {
+			size_t j;
+
+			for (j = 0; j < cases[i].len; j++)
+				if (back[j] != cases[i].data[j])
+					break;
+			printf("%-20s CHANGED at byte %zu: sent 0x%02x, got 0x%02x\n",
+			       cases[i].what, j,
+			       (unsigned char) cases[i].data[j],
+			       (unsigned char) back[j]);
+			bad = 1;
+			continue;
+		}
+		printf("%-20s %zu bytes, identical\n", cases[i].what,
+		       cases[i].len);
+	}
+
+	close(fd);
+	return bad;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -1256,6 +1404,7 @@ static void usage(void)
 		"       axprobe [-d] [-q] [-f axports] sink    <port> <call> <sleep-ms>\n"
 		"       axprobe [-d] [-q] [-f axports] churn   <port> <src>:<dest> <rounds>\n"
 		"       axprobe [-d] [-q] [-f axports] echo    <port> <call> <rounds>\n"
+		"       axprobe [-d] [-q] [-f axports] evil    <port> <src>:<dest> [ui]\n"
 		"\n"
 		"  -d  reach the socket calls through dlsym(RTLD_DEFAULT) instead of\n"
 		"      calling them directly - the only way an inserted library is seen\n"
@@ -1379,6 +1528,18 @@ int main(int argc, char **argv)
 		if (verbose)
 			report(nfd);
 		return shovel(nfd);
+	}
+
+	if (strcmp(cmd, "evil") == 0) {
+		const char *colon = strchr(call, ':');
+		char src[16];
+
+		close(fd);
+		if (colon == NULL)
+			usage();
+		snprintf(src, sizeof(src), "%.*s", (int)(colon - call), call);
+		return evil(portcall, src, colon + 1,
+			    optind < argc && !strcmp(argv[optind], "ui"));
 	}
 
 	if (strcmp(cmd, "churn") == 0) {

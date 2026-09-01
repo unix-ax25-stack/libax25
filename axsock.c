@@ -2879,47 +2879,79 @@ static const char *axsock_opt_name(int optname)
 	}
 }
 
+/*
+ * Two kinds of thing live under SOL_AX25, and they cannot be answered alike.
+ *
+ * Most of them are channel parameters - window, the timers, paclen - and the
+ * far side owns those: a node or a direwolf takes them from its own interface
+ * configuration and would ignore ours.  Saying "done" and meaning "not here"
+ * costs nothing, because nothing depends on the value having arrived.
+ *
+ * Two of them change what the bytes mean.  AX25_PIDINCL puts the protocol id
+ * in front of every frame's payload, in both directions, and AX25_IAMDIGI
+ * makes the socket repeat what it hears.  Accepting those and doing nothing
+ * does not cost a feature, it corrupts traffic: rsuplnk(8) and rsdwnlnk(8)
+ * would send the pid as data and read data as the pid, silently and forever.
+ * Neither is implementable here today - a handed-over session is a plain byte
+ * stream with no room for a per-frame id - so they are refused, and both
+ * programs check the return value and stop, which is the outcome to want.
+ */
+
+int axsock_opt_refuse(int optname)
+{
+	return optname == AX25_PIDINCL || optname == AX25_IAMDIGI;
+}
+
+/* Once per process and option, so a program that sets one every session does
+ * not fill the log with it. */
+void axsock_opt_note_ignored(int optname)
+{
+	const char *name;
+	char num[16];
+	int i, warn;
+
+	pthread_mutex_lock(&axsock_lock);
+	for (i = 0; i < axsock_nwarned; i++)
+		if (axsock_warned[i] == optname)
+			break;
+	warn = (i == axsock_nwarned);
+	if (warn && axsock_nwarned <
+		    (int)(sizeof(axsock_warned) / sizeof(axsock_warned[0])))
+		axsock_warned[axsock_nwarned++] = optname;
+	pthread_mutex_unlock(&axsock_lock);
+
+	if (!warn)
+		return;
+	if ((name = axsock_opt_name(optname)) == NULL) {
+		snprintf(num, sizeof(num), "%d", optname);
+		name = num;
+	}
+	fprintf(stderr, "axsock: setsockopt(SOL_AX25, %s) is ignored: the "
+		"channel parameters belong to the far side\n", name);
+}
+
 static int agwpe_setsockopt(int fd, int level, int optname, int *ret)
 {
 	struct axsock_sock *s;
-	int warn = 0;
-	int i;
 
 	pthread_mutex_lock(&axsock_lock);
 	s = axsock_find_locked(fd);
-	if (s != NULL && level == SOL_AX25) {
-		/* Warn once per process and option (AGWPE-BEWERTUNG 9.4):
-		 * the AGWPE server owns the channel parameters and ignores
-		 * maxframe and friends anyway, so the call is a no-op over
-		 * the wire.  It still returns success so existing programs
-		 * that check the return value keep working.  */
-		for (i = 0; i < axsock_nwarned; i++)
-			if (axsock_warned[i] == optname)
-				break;
-		warn = (i == axsock_nwarned);
-		if (warn && axsock_nwarned <
-			    (int)(sizeof(axsock_warned) /
-				  sizeof(axsock_warned[0])))
-			axsock_warned[axsock_nwarned++] = optname;
-	}
 	pthread_mutex_unlock(&axsock_lock);
 
 	if (s == NULL)
 		return 0;
 
-	if (warn) {
-		const char *name = axsock_opt_name(optname);
-		char num[16];
-
-		if (name == NULL) {
-			snprintf(num, sizeof(num), "%d", optname);
-			name = num;
+	if (level == SOL_AX25) {
+		if (axsock_opt_refuse(optname)) {
+			errno = ENOPROTOOPT;
+			*ret = -1;
+			return 1;
 		}
-		fprintf(stderr, "axsock: setsockopt(SOL_AX25, %s) is "
-			"ignored: the AGWPE server owns the channel "
-			"parameters\n", name);
+		axsock_opt_note_ignored(optname);
+		*ret = 0;
+		return 1;
 	}
-	if (level == SOL_AX25 || level == SOL_SOCKET) {
+	if (level == SOL_SOCKET) {
 		*ret = 0;
 		return 1;
 	}
@@ -2933,7 +2965,7 @@ int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
 {
 	int ret;
 
-	if (wampes_setsockopt(fd, level, &ret))
+	if (wampes_setsockopt(fd, level, optname, &ret))
 		return ret;
 	if (agwpe_setsockopt(fd, level, optname, &ret))
 		return ret;

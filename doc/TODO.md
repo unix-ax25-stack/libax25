@@ -158,6 +158,17 @@ setting the has-been-repeated bit in its SSID byte, which is exactly what the
 receiving path already produces, and the shim writes the `*` into the header
 it builds anyway.
 
+**But the service protocol has to be able to say it**, and today it cannot.
+`connect hfb:DL1AAA via DB0BBB,DB0CCC < DL1TST-1` and the counted form of a
+datagram both carry a path and no marks, so even once the library knows which
+hops are done there is no room on the wire to pass that on.  The mark belongs
+where an operator already writes it - `DB0BBB*` in the path - which is the
+notation `setcall()` refuses today and would then have to read.  Both
+directions want it: what we send, and what the node reports on an incoming
+frame.  So this is three pieces, not two - the library, the grammar on
+`sockets/ax25`, and the node's own handling - and the grammar is the one that
+has to be decided first, because the other two write against it.
+
 That gives back something the old world had: a station can emit a connect as
 though the first hops had already happened — which is what a node does when it
 inserts itself into a path.  Worth saying out loud that on a shared channel

@@ -149,6 +149,75 @@ inserts itself into a path.  Worth saying out loud that on a shared channel
 such a frame is indistinguishable from a real digipeat, so it is a tool and a
 footgun in the same hand.
 
+**The protocol id is not part of a listener's identity on the AGWPE side.**
+
+What the pid *is*, first, because it is not "another connection": on the air
+there is one link between two stations, and the I frames inside it carry a pid
+each.  The node splits them by that pid — when a link comes up it walks its
+entries for the callsign and starts a service for **every** configured pid
+(`axserver.c`, the loop calling `axserv_start(axp, lp->pid)`), and each service
+gets the frames of its own pid.  One link, several clients.  That maps onto
+`socket(AF_AX25, SOCK_SEQPACKET, protocol)` exactly: one socket per pid, all
+of them fed by the same link.
+
+The key is `(callsign, pid, ui)` — `axlisten_find()` compares the pid exactly,
+there is no wildcard — so one callsign carries one listener per pid, a second
+claim on the same three is refused with `already taken`, and the library maps
+that to `EADDRINUSE`.  Measured, both halves: a second listener for the same
+pid is refused, and one for `pid=0xcf` beside one for `pid=0xf0` is not.
+
+Through AGWPE none of that happens.  Measured on the same test:
+
+* `agwpe_listen()` checks nothing.  A second listener on the same callsign
+  becomes `listening` and is registered like the first.
+* `ax25netd(8)` does not refuse it either; `loop_call_by_call()` returns the
+  first registration it finds.
+* the inbound match in `axsock_dispatch()` takes the first `listening` socket
+  whose callsign fits and **never looks at the pid at all**
+* and there is nothing to look at: the `protocol` argument of `socket()` is
+  recorded only for the node backend (`wampes_note_protocol()`); on the AGWPE
+  path `s->pid` stays `AGWPE_PID_AX25`
+
+So the second listener is not refused, it simply never hears anything — and a
+NET/ROM listener that registered first would swallow a text connect.  Nobody
+is at fault by itself: the library does not check, and the daemon does not
+either.
+
+What it takes, smallest first: carry the pid on the AGWPE path the way the
+node backend already does; compare it in the inbound match; have
+`agwpe_listen()` answer `EADDRINUSE` for a second listener on the same
+`(callsign, pid)` in this process, the same answer the node gives.  Across
+processes it wants `ax25netd` to key its registrations on `(call, pid)` and
+refuse a duplicate, which is a change to the daemon rather than here.
+
+**The same situation, two error numbers.**  A connect that cannot be made
+because the link already exists answers `EADDRINUSE` through the node — it
+says `busy`, and `link_errno()` maps it — and `ECONNREFUSED` through AGWPE,
+where `ax25netd` synthesises the same retryout disconnect for "nobody is
+listening" and for "that pair is already connected", and the library can only
+map what it is told.  `EADDRINUSE` is the truthful one for a duplicate;
+telling the two apart means the daemon has to say which it means.
+
+**`AX25_WINDOW` and friends are accepted and dropped, differently.**  A
+program that has read `window` from `axports(5)` — `call(1)` does — sets it
+with `setsockopt(SOL_AX25, AX25_WINDOW)` before connecting.  Neither backend
+carries it: the AGWPE connect frames have no field for it and the node's
+`connect` line has no room for it.  AGWPE says so once per option on stderr;
+the node backend accepts it in silence.  `getsockopt(SOL_AX25)` differs too —
+AGWPE answers success with a zeroed value, the node path falls through to the
+real call and fails.
+
+There is a mechanism on the AGWPE side that looks like the answer and is not:
+`AGWPE_CTL_PARAM_WINDOW` reaches `ax25netd`, which stores it in `s->window`
+and never reads it again, and does not pass it upstream.  So routing
+`setsockopt` into a control frame would achieve nothing until the daemon uses
+the value.
+
+For an incoming connection the question does not arise: the AX.25 machine is
+in the node or in direwolf and takes its parameters from its own interface
+configuration.  Worth aligning anyway — one warning on both sides, and one
+answer from `getsockopt`.
+
 **No UI reception through AGWPE.**  Sending works — `sendto()` goes out as
 an unproto frame — but nothing comes back.  Two halves are missing and
 neither is hard: `bind()` on a datagram socket registers no callsign with the

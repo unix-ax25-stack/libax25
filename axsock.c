@@ -2071,87 +2071,107 @@ static int agwpe_socket(int type, int protocol)
 	return axsock_new_sock(type, protocol);
 }
 
-int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
+/*
+ * The SOCK_PACKET monitor, which is the one thing socket() builds that is not
+ * an AX.25 socket: every raw frame heard on any upstream is delivered to it,
+ * fed from the AGWPE 'K' records the server sends once raw monitoring is on.
+ *
+ * SOCK_PACKET is the marker, not the address family: ax25-apps/listen asks for
+ * AF_PACKET, ax25-tools/kiss/net2kiss for AF_INET, which is how one did this
+ * before Linux 2.2 and how that program still does it.  Both mean the same
+ * thing here.
+ *
+ * It sits on this side because everything it needs does - the table, the lock,
+ * the raw counter - and while it stood in the chooser it was the last place an
+ * entry point reached into the backend.
+ *
+ * Returns 0 for anything that is not a monitor socket, including on a kernel
+ * backend, where the packet socket is real and the call belongs to the OS.
+ */
+static int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 {
 	struct axsock_sock *s;
 	int fd;
 
-	/* SOCK_PACKET monitor socket (ax25-apps/listen): every raw AX.25
-	 * frame heard on any upstream is delivered to it.  On macOS there
-	 * is no packet socket, so back it with a monitor fed from the
-	 * AGWPE 'K' frames the server sends once raw monitoring is on.
-	 * On a kernel backend the packet socket is real: raw AX.25 frames
-	 * are delivered by the OS itself.
+	if (type != SOCK_PACKET ||
+	    (domain != AF_PACKET && domain != AF_INET))
+		return 0;
+	if (axsock_backend_now() == 1)
+		return 0;
+
+	/* An AGWPE server is what feeds this socket.  Ask for one first,
+	 * because a machine can have both an AGWPE server and a node, and
+	 * there a monitor works.
 	 *
-	 * SOCK_PACKET is the marker, not the address family: listen asks
-	 * for AF_PACKET, ax25-tools/kiss/net2kiss for AF_INET, which is
-	 * how one did this before Linux 2.2 and how that program still
-	 * does it.  Both mean the same thing here.  Where a kernel stack
-	 * answers, both go straight through untouched.
+	 * Only when none answers does it matter which world we are in.
+	 * WAMPES has no monitor stream at all - nothing carries a copy of
+	 * every frame the way the 'K' record does - so failing there would be
+	 * permanent, and a program that opens a monitor beside its real work
+	 * would be taken down by it.  Hand out a descriptor that stays quiet
+	 * instead: it costs that program one feature and leaves the rest
+	 * working.  Say so once, on stderr, so nobody spends an evening
+	 * wondering why the window is empty.
+	 *
+	 * With no node configured either, the refusal is a configuration
+	 * fault and worth reporting as one.
 	 */
-	if (type == SOCK_PACKET &&
-	    (domain == AF_PACKET || domain == AF_INET)) {
-		if (axsock_backend_now() == 1)
-			return real_socket(domain, type, protocol);
+	pthread_mutex_lock(&axsock_lock);
+	if (axsock_ensure_locked() != 0) {
+		static int said;
 
-		/* An AGWPE server is what feeds this socket, through its 'K'
-		 * records.  Ask for one first, because a machine can have both
-		 * an AGWPE server and a node, and there a monitor works.
-		 *
-		 * Only when none answers does it matter which world we are in.
-		 * WAMPES has no monitor stream at all - nothing carries a copy
-		 * of every frame the way the 'K' record does - so failing there
-		 * would be permanent, and a program that opens a monitor beside
-		 * its real work would be taken down by it.  Hand out a
-		 * descriptor that stays quiet instead: it costs that program one
-		 * feature and leaves the rest working.  Say so once, on stderr,
-		 * so nobody spends an evening wondering why the window is empty.
-		 *
-		 * With no node configured either, the refusal is a configuration
-		 * fault and worth reporting as one.
-		 */
-		pthread_mutex_lock(&axsock_lock);
-		if (axsock_ensure_locked() != 0) {
-			static int said;
-
-			if (!wampes_configured()) {
-				pthread_mutex_unlock(&axsock_lock);
-				return -1;
-			}
-			s = axsock_alloc_sock_locked(type);
-			if (s == NULL) {
-				pthread_mutex_unlock(&axsock_lock);
-				return -1;
-			}
-			s->raw = 1;
-			axsock_nraw++;
-			fd = s->fd;
-			if (!said) {
-				said = 1;
-				fprintf(stderr, "axsock: no monitor stream "
-					"through WAMPES - this socket stays "
-					"silent\n");
-			}
+		if (!wampes_configured()) {
 			pthread_mutex_unlock(&axsock_lock);
-			return fd;
+			*ret = -1;
+			return 1;
 		}
 		s = axsock_alloc_sock_locked(type);
 		if (s == NULL) {
 			pthread_mutex_unlock(&axsock_lock);
-			return -1;
+			*ret = -1;
+			return 1;
 		}
 		s->raw = 1;
-		/* 'k' is a toggle: enable it when the first monitor socket
-		 * opens, disable it again when the last one closes.  */
-		if (axsock_nraw == 0 && axsock_agwpe != NULL)
-			agwpe_client_raw_toggle(axsock_agwpe);
 		axsock_nraw++;
 		fd = s->fd;
+		if (!said) {
+			said = 1;
+			fprintf(stderr, "axsock: no monitor stream through "
+				"WAMPES - this socket stays silent\n");
+		}
 		pthread_mutex_unlock(&axsock_lock);
-		if (getenv("AXSOCK_DEBUG"))
-			fprintf(stderr, "axsock: SOCK_PACKET monitor fd=%d proto=0x%x\n",
-				fd, protocol);
-		return fd;
+		*ret = fd;
+		return 1;
+	}
+	s = axsock_alloc_sock_locked(type);
+	if (s == NULL) {
+		pthread_mutex_unlock(&axsock_lock);
+		*ret = -1;
+		return 1;
+	}
+	s->raw = 1;
+	/* 'k' is a toggle: enable it when the first monitor socket opens,
+	 * disable it again when the last one closes.  */
+	if (axsock_nraw == 0 && axsock_agwpe != NULL)
+		agwpe_client_raw_toggle(axsock_agwpe);
+	axsock_nraw++;
+	fd = s->fd;
+	pthread_mutex_unlock(&axsock_lock);
+	if (getenv("AXSOCK_DEBUG"))
+		fprintf(stderr, "axsock: SOCK_PACKET monitor fd=%d proto=0x%x\n",
+			fd, protocol);
+	*ret = fd;
+	return 1;
+}
+
+int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
+{
+	int fd;
+
+	{
+		int ret;
+
+		if (agwpe_socket_packet(domain, type, protocol, &ret))
+			return ret;
 	}
 
 	if (domain != AF_AX25)

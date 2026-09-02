@@ -222,8 +222,10 @@ int	(*real_bind)(int, const struct sockaddr *, socklen_t);
 int	(*real_connect)(int, const struct sockaddr *, socklen_t);
 ssize_t	(*real_send)(int, const void *, size_t, int);
 ssize_t	(*real_sendto)(int, const void *, size_t, int,
+			       const struct sockaddr *, socklen_t);
 ssize_t	(*real_recv)(int, void *, size_t, int);
 ssize_t	(*real_recvfrom)(int, void *, size_t, int,
+				 struct sockaddr *, socklen_t *);
 ssize_t	(*real_write)(int, const void *, size_t);
 ssize_t	(*real_read)(int, void *, size_t);
 int	(*real_shutdown)(int, int);

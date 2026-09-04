@@ -251,10 +251,11 @@ int rs_config_load_ports(void)
 			while (isspace(*s & 0xff)) ++s;
 
 			memset(&ifr, 0, sizeof(ifr));
-			if (strlen(s) >= IFNAMSIZ)
+			if (strlen(s) >= IFNAMSIZ) {
+				fprintf(stderr, "rsconfig: interface name too long\n");
 				unreachable();
-			strncpy(ifr.ifr_name, s, IFNAMSIZ-1);
-			ifr.ifr_name[IFNAMSIZ-1] = 0;
+			}
+			strcpy(ifr.ifr_name, s);
 
 			if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
 				fprintf(stderr, "rsconfig: SIOCGIFHWADDR: %s\n", strerror(errno));

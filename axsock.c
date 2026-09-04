@@ -71,6 +71,9 @@
 #define	AXSOCK_DEFAULT_PORT	8100
 #define	AXSOCK_MAX_SOCK		128
 #define	AXSOCK_CONNECT_TIMEOUT	60
+
+int axsock_debug = 0;
+
 /*
  * Backend selection.
  *
@@ -241,6 +244,8 @@ int	(*real_accept)(int, struct sockaddr *, socklen_t *);
 __attribute__((constructor))
 static void axsock_real_init(void)
 {
+	axsock_debug = getenv("AXSOCK_DEBUG") ? 1 : 0;
+
 #ifndef __APPLE__
 	/* Not on macOS: there the real calls are reached by calling them, and
 	 * dlsym() would hand back this library's own - see the note at the top
@@ -418,7 +423,7 @@ int AXSOCK_ENTRY(accept)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	int ret;
 
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "axsock: accept(fd=%d) called\n", fd);
 
 	if (wampes_accept(fd, addr, addrlen, &ret))
@@ -506,8 +511,9 @@ void axsock_opt_note_ignored(int optname)
 		snprintf(num, sizeof(num), "%d", optname);
 		name = num;
 	}
-	fprintf(stderr, "axsock: setsockopt(SOL_AX25, %s) is ignored: the "
-		"channel parameters belong to the far side\n", name);
+	if (axsock_debug)
+		fprintf(stderr, "axsock: setsockopt(SOL_AX25, %s) is ignored: the "
+			"channel parameters belong to the far side\n", name);
 }
 
 int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,

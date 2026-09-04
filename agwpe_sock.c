@@ -1180,9 +1180,9 @@ static void agwpe_addr_text(const unsigned char *a, char *out, size_t outlen)
 	call[n] = '\0';
 	ssid = (a[6] >> 1) & 0x0f;
 	if (ssid != 0)
-		snprintf(out, outlen, "%s-%d", call, ssid);
+		snprintf(out, outlen, "%.6s-%d", call, ssid);
 	else
-		snprintf(out, outlen, "%s", call);
+		snprintf(out, outlen, "%.6s", call);
 }
 
 /*
@@ -1305,7 +1305,7 @@ static int agwpe_was_ours_locked(unsigned char port, unsigned char pid,
 		    strcasecmp(axsock_sent[i].dst, dst) != 0)
 			continue;
 		axsock_sent[i].used = 0;	/* one echo per transmission */
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "axsock: monitor copy of our own %s>%s on port %u - not delivered\n",
 				src, dst, port);
 		return 1;
@@ -1371,7 +1371,7 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 	(void)c;
 
 	pthread_mutex_lock(&axsock_lock);
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "axsock dispatch: kind=%c from='%.*s' to='%.*s' len=%zu\n",
 			hdr->datakind, AGWPE_MAX_CALL, hdr->call_from,
 			AGWPE_MAX_CALL, hdr->call_to, len);
@@ -1611,7 +1611,7 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 				}
 			}
 		}
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "axsock: inbound connect to '%.*s' -> listener %s (listening=%d peer=%d)\n",
 				AGWPE_MAX_CALL, hdr->call_to,
 				s != NULL ? s->local : "(none)",
@@ -1638,7 +1638,7 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 					ssize_t nw;
 
 					nw = real_write(s->peer, &m, 1);
-					if (getenv("AXSOCK_DEBUG"))
+					if (axsock_debug)
 						fprintf(stderr,
 							"axsock: marker write peer=%d (read-end %d) -> %zd\n",
 							s->peer, s->fd, nw);
@@ -1987,7 +1987,7 @@ static void *axsock_peer_reader(void *arg)
 		}
 
 		n = real_read(s->peer, buf, sizeof(buf));
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "axsock: peer read n=%zd errno=%d (%s)\n",
 				n, n < 0 ? errno : 0,
 				n < 0 ? strerror(errno) : "");
@@ -2009,7 +2009,7 @@ static void *axsock_peer_reader(void *arg)
 			if (cl != NULL) {
 				memcpy(local, s->local, AGWPE_MAX_CALL);
 				memcpy(remote, s->remote, AGWPE_MAX_CALL);
-				if (getenv("AXSOCK_DEBUG"))
+				if (axsock_debug)
 					fprintf(stderr,
 						"axsock: peer forward %zd bytes to %.*s\n",
 						n, AGWPE_MAX_CALL, remote);
@@ -2087,7 +2087,7 @@ int agwpe_forget(int fd)
 	pthread_mutex_unlock(&axsock_lock);
 	if (peer >= 0)
 		real_close(peer);
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "axsock: fd=%d handed to another backend\n", fd);
 	return 0;
 }
@@ -2201,7 +2201,7 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 	axsock_nraw++;
 	fd = s->fd;
 	pthread_mutex_unlock(&axsock_lock);
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "axsock: SOCK_PACKET monitor fd=%d proto=0x%x\n",
 			fd, protocol);
 	*ret = fd;
@@ -2239,7 +2239,7 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 		memcpy(s->bound, sa0->sa_data,
 		       sizeof(s->bound) - 1);
 		s->bound[sizeof(s->bound) - 1] = '\0';
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "axsock: bind fd=%d raw dev='%s'\n",
 				fd, s->bound);
 		*ret = 0;
@@ -2285,7 +2285,7 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 		}
 		pthread_mutex_unlock(&axsock_lock);
 	}
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "axsock: bind fd=%d local='%s' port=%d\n",
 			fd, s->local, s->port);
 	*ret = 0;
@@ -2472,7 +2472,7 @@ int agwpe_sendto(int fd, const void *buf, size_t len,
 		if (!s->port_named)
 			s->port = axsock_port_for(target);
 
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "axsock: sendto fd=%d type=%d local='%s' port=%d target='%s' len=%zd\n",
 				fd, s->type, s->local, s->port, target, len);
 
@@ -2853,7 +2853,7 @@ int agwpe_listen(int fd, int *ret)
 	if (s->local[0] != '\0' && !s->registered) {
 		int listener = (s->port == AGWPE_PORT_LOOP);
 
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "axsock: listen(fd=%d local=%s port=%u listener=%d)\n",
 				fd, s->local, s->port, listener);
 		/* Announce the listening call so inbound connects are

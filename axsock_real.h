@@ -21,6 +21,9 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+// axsock.c during axsock_real_init sets axsock_debug = getenv("AXSOCK_DEBUG") ? 1 : 0;
+extern int axsock_debug;
+
 /*
  * How the calls below get in front of the application, and why macOS needs
  * a second answer.

@@ -247,8 +247,9 @@ static int wampes_lazy_base(const char *name, const char *base)
 	if (nsaid < (int) (sizeof(said) / sizeof(said[0])) &&
 	    strlen(name) < sizeof(said[0])) {
 		strcpy(said[nsaid++], name);
-		fprintf(stderr, "wampes: no axports entry for \"%s\" - using %s "
-			"and letting the node route\n", name, base);
+		if (axsock_debug)
+			fprintf(stderr, "wampes: no axports entry for \"%s\" - using %s "
+				"and letting the node route\n", name, base);
 	}
 	return 1;
 }
@@ -297,7 +298,7 @@ static void wampes_inherit(void)
 	s->next = Socks;
 	Socks = s;
 	Nsocks++;
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: inherited fd=%d, %s called %s\n",
 			fd, him, me);
 }
@@ -517,11 +518,17 @@ static int read_line(int fd, char *buf, size_t buflen, int *fdp, int msec)
 				if (cm->cmsg_level == SOL_SOCKET &&
 				    cm->cmsg_type == SCM_RIGHTS)
 					memcpy(fdp, CMSG_DATA(cm), sizeof(int));
-		if (got == 0)
+		if (got == 0) {
+			if (axsock_debug)
+				fprintf(stderr, "wampes: read_line fd=%d EOF\n", fd);
 			return WAMPES_EOF;
+		}
 		if (got < 0) {
 			if (errno == EINTR)
 				continue;
+			if (axsock_debug)
+				fprintf(stderr, "wampes: read_line fd=%d errno=%d (%s)\n",
+					fd, errno, strerror(errno));
 			return -1;
 		}
 		if (!started) {
@@ -828,7 +835,7 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 		s->next = Socks;
 		Socks = s;
 		Nsocks++;
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "wampes: fd=%d taken over for port '%s'\n",
 				fd, port);
 	}
@@ -838,7 +845,7 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 	strncpy(s->local, ax25_ntoa(&sa->sax25_call), sizeof(s->local) - 1);
 	s->local[sizeof(s->local) - 1] = '\0';
 	strcpy(s->port, port);
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: bind fd=%d local='%s' port='%s'\n",
 			fd, s->local, s->port);
 	if (s->dgram && !s->rxclaimed)
@@ -848,6 +855,12 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 }
 
 /*---------------------------------------------------------------------------*/
+
+/* write_all() is defined later in the file (with the datagram/stream helper
+ * functions); the command paths in connect() and listen() need it before
+ * that, so it is declared here.
+ */
+static int write_all(int fd, const void *data, size_t len);
 
 int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		   int *ret)
@@ -877,7 +890,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	/* No end-of-line conversion: an AX.25 socket is what the kernel gave,
 	 * and the kernel converted nothing.
 	 */
-	if (write(sock, "binary\n", 7) != 7) {
+	if (write_all(sock, "binary\n", 7) != 0) {
 		close(sock);
 		errno = ECONNRESET;
 		return 1;
@@ -887,8 +900,15 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	 * frame boundaries, which a connection the application made cannot
 	 * have.  A node that does not know the word answers nothing and the
 	 * old way still works - see below.
+
+	 * A short write would hand the node a partial "handover" command, so
+	 * every byte and every error is checked like anywhere else in here.
 	 */
-	(void) write(sock, "handover\n", 9);
+	if (write_all(sock, "handover\n", 9) != 0) {
+		close(sock);
+		errno = ECONNRESET;
+		return 1;
+	}
 
 	strcpy(cmd, "connect ");
 	{
@@ -924,9 +944,9 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	}
 	strcat(cmd, "\n");
 
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: -> %s", cmd);
-	if (write(sock, cmd, strlen(cmd)) != (ssize_t) strlen(cmd)) {
+	if (write_all(sock, cmd, strlen(cmd)) != 0) {
 		close(sock);
 		errno = ECONNRESET;
 		return 1;
@@ -938,16 +958,22 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 			 * when the link never came up: WAMPES retried until
 			 * it gave up and dropped the control block.
 			 */
+			if (axsock_debug)
+				fprintf(stderr,
+					"wampes: connect: node closed without a verdict "
+					"(EOF/incomplete), closing control sock\n");
 			close(sock);
 			errno = ETIMEDOUT;
 			return 1;
 		}
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "wampes: <- %s\n", line);
 		if (strncmp(line, "*** ", 4) != 0)
 			continue;                   /* progress */
 		if (strncmp(line, "*** connected", 13) == 0)
 			break;
+		if (axsock_debug)
+			fprintf(stderr, "wampes: connect refused: %s", line);
 		close(sock);
 		errno = reason_to_errno(line);
 		return 1;
@@ -962,7 +988,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	 * we spoke over was only the way to ask for it.  Without one - an
 	 * older node - that connection is the session, as it always was.
 	 */
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, handed >= 0
 			? "wampes: session on a handed-over descriptor\n"
 			: "wampes: no handover - the control connection is the session\n");
@@ -1027,9 +1053,9 @@ int wampes_listen(int fd, int *ret)
 		sprintf(cmd, "listen %s pid=0x%02x\n", s->local, s->pid);
 	else
 		sprintf(cmd, "listen %s\n", s->local);
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: -> %s", cmd);
-	if (write(sock, cmd, strlen(cmd)) != (ssize_t) strlen(cmd)) {
+	if (write_all(sock, cmd, strlen(cmd)) != 0) {
 		close(sock);
 		errno = ECONNRESET;
 		return 1;
@@ -1040,7 +1066,7 @@ int wampes_listen(int fd, int *ret)
 			errno = ECONNRESET;
 			return 1;
 		}
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "wampes: <- %s\n", line);
 		if (strncmp(line, "*** ", 4) != 0)
 			continue;
@@ -1152,7 +1178,7 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 		errno = EPROTO;             /* a line without a descriptor */
 		return 1;
 	}
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: accept %s", line);
 
 	/* "<port> <src>[,<digi>...] > <dst>": the caller with the path it came
@@ -1202,7 +1228,7 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 			ns->him = him;
 			ns->have_me = 1;
 			ns->have_him = 1;
-			strncpy(ns->port, s->port, sizeof(ns->port) - 1);
+			snprintf(ns->port, sizeof(ns->port), "%s", s->port);
 			ns->next = Socks;
 			Socks = ns;
 			Nsocks++;
@@ -1308,7 +1334,7 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 			strncat(line, opt, sizeof(line) - strlen(line) - 2);
 		}
 		strncat(line, "\n", sizeof(line) - strlen(line) - 1);
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "wampes: -> %s", line);
 		if (write_all(c, line, strlen(line)) != 0) {
 			int save = errno;
@@ -1351,7 +1377,7 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 	}
 
 	snprintf(line, sizeof(line), "[%zu]%s:", len, frame);
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: -> %s<%zu bytes>\n", line, len);
 	if (write_all(s->ctl, line, strlen(line)) != 0 ||
 	    write_all(s->ctl, buf, len) != 0) {
@@ -1408,7 +1434,7 @@ static void claim_ui(struct wampes_sock *s)
 			 s->local, s->pid);
 	else
 		snprintf(cmd, sizeof(cmd), "listen ui %s\n", s->local);
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: -> %s", cmd);
 	if (write_all(c, cmd, strlen(cmd)) != 0) {
 		s->rxerr = errno;
@@ -1421,7 +1447,7 @@ static void claim_ui(struct wampes_sock *s)
 			close(c);
 			return;
 		}
-		if (getenv("AXSOCK_DEBUG"))
+		if (axsock_debug)
 			fprintf(stderr, "wampes: <- %s\n", line);
 		if (strncmp(line, "*** ", 4) != 0)
 			continue;
@@ -1584,7 +1610,7 @@ ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
 		*ret = (ssize_t) len;
 	}
 
-	if (getenv("AXSOCK_DEBUG"))
+	if (axsock_debug)
 		fprintf(stderr, "wampes: <- [%ld]%s: %zd bytes\n", n, hdr, *ret);
 
 	parse_ui_header(hdr, &him);
@@ -1688,6 +1714,9 @@ int wampes_close(int fd)
 
 	if ((s = find_sock(fd)) == NULL)
 		return 0;
+	if (axsock_debug)
+		fprintf(stderr, "wampes: close fd=%d (close() reaches the session)\n",
+			fd);
 	/* The service connection a datagram socket sends over is ours, not the
 	 * application's: nothing else will ever close it. */
 	if (s->ctl >= 0)

@@ -354,17 +354,20 @@ socket may send, under whatever callsign it binds.
 
 Say these out loud, because each of them is quiet rather than loud:
 
-* **No monitor.**  `listen(1)`, `mheardd(8)` and anything else that watches raw
-  frames see nothing through a WAMPES port.  The service protocol has no
-  monitor stream — nothing sends a copy of every frame back the way AGWPE
-  does.  The socket is handed out and stays quiet, with one line on standard
-  error saying so.  The node traces on its own console; that is where to look.
+* **A monitor needs the AGWPE server.**  `listen(1)`, `mheardd(8)` and anything
+  else that watches raw frames see, through a WAMPES port, what
+  `ax25netd(8)` carries: the WAMPES service protocol has no monitor stream of
+  its own, so the libax25 side pushes the frames it carries into the same AGWPE
+  monitor channel.  No server reachable, and the socket is handed out and stays
+  quiet, with a line on standard error saying so under `AXSOCK_DEBUG`.  The
+  node also traces on its own console.
 * **The has-been-repeated bit travels one way only.**  A frame that arrives
   brings its path with the `*` intact — the mark becomes the bit in the
-  digipeater's SSID byte, as it is on the air.  Going out it is dropped: the
-  path is written from the address as it stands, and nothing carries the mark.
-  There are uses for it — forwarding a frame, or recording that the first hop
-  has already happened — it is simply not done yet.
+  digipeater's SSID byte, as it is on the air, and shows in the monitor and
+  the `accept()` address.  Going out it is dropped: the path is written from
+  the address as it stands, and nothing carries the mark.  There are uses for
+  it — forwarding a frame, or recording that the first hop has already
+  happened — it is simply not done yet.
 * **The channel parameters in `axports(5)` do not travel.**  `window`, and the
   timers a program may set beside it, belong to whoever runs the AX.25
   machine — the node, or a `direwolf` — and each takes them from its own

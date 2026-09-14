@@ -47,6 +47,17 @@ extern "C" {
  */
 extern int (*ax25_config_lazy_hook)(const char *name, const char *base);
 
+/*
+ * A "base:suffix" name that ax25_port_ptr() has just resolved through the
+ * lazy hook is remembered against the base entry's callsign, so a later
+ * bind() carrying that callsign can find out which suffix was meant.
+ * ax25_config_lazy_take() hands the oldest remembered name back and
+ * removes it; the backend uses it in place of the port name it would
+ * reverse-engineer from the callsign.  Remember returns 0 on success.
+ */
+extern int ax25_config_lazy_remember(const char *call, const char *name);
+extern int ax25_config_lazy_take(const char *call, char *name, size_t namelen);
+
 extern int ax25_config_load_ports(void);
 
 /*

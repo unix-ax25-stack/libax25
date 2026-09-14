@@ -257,24 +257,30 @@ the packet socket is real and the OS delivers the frames.
 .TP 8
 AGWPE
 the server's raw monitor is switched on with the first such socket and off
-again with the last, and every frame it hears arrives.  The AGWPE server has
-to be reachable, or
+again with the last, and every frame it hears arrives.  The AGWPE server
+.RB ( ax25netd (8)
+or
+.BR direwolf )
+has to be reachable, or
 .BR socket (2)
 fails.
 .TP 8
 WAMPES
-nothing arrives.  The service protocol has no monitor stream: nothing sends a
-copy of every frame back the way the AGWPE
+works through the same monitor.  The WAMPES service protocol has no monitor
+stream of its own, so the libax25 side pushes the frames it carries \-\- what
+it receives from the node and what it sends to it \-\- into the AGWPE server's
+raw monitor as
 .B K
-record does.  Under
-.B AXSOCK_BACKEND=wampes
-the socket is handed out all the same and simply stays quiet, with one line
-on standard error saying so, because a program that opens a monitor beside
-its real work should lose one feature and not its whole run.  Without that
-variable \-\- the ordinary arrangement, where
-.BR wampes.conf (5)
-decides per port \-\- a packet socket is not a WAMPES question at all and takes
-the AGWPE path above, so it wants an AGWPE server like any other.
+records, where a packet socket picks them up like any AGWPE frame, with the
+digipeaters that have already repeated a frame marked
+.BR * .
+So an AGWPE server
+.RB ( ax25netd (8))
+has to be reachable here too.  When none is, a packet socket is handed out
+all the same and stays quiet rather than failing, because a program that
+opens a monitor beside its real work should lose one feature and not its
+whole run; a line on standard error says so under
+.BR AXSOCK_DEBUG .
 .SH ENVIRONMENT
 .TP
 .B AXSOCK_BACKEND

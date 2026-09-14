@@ -21,33 +21,36 @@ int ax25_aton_entry(const char *name, char *buf)
 {
 	int ct   = 0;
 	int ssid = 0;
+	int repeated = 0;
 	const char *p = name;
 	const char *end;
 	char c;
 
-	/* A "*" is not part of a callsign.  It is the has-been-repeated mark of
-	 * the TNC2 notation and belongs in the SSID byte, not in the text - a
-	 * caller that means it takes it off and sets the bit itself.  Refused
-	 * here rather than left to the two parsers below, which disagreed about
-	 * it: the loop calls it an invalid symbol, while sscanf() in the SSID
-	 * stops at it, so "DL1AB*" failed and "DB0AAA-1*" was accepted with the
-	 * mark quietly dropped.  Same word, two answers.
-	 */
-	if (strchr(name, '*') != NULL) {
-		fprintf(stderr, "axutils: '*' is not part of a callsign - '%s'\n", name);
-		return -1;
-	}
-
-	/* Trailing blanks end the callsign.  A configuration file hands them
-	 * over often enough, they change nothing, and refusing them would only
-	 * make a whitespace character the difference between a station and an
-	 * error.  Leading ones are a different matter and stay an error below:
-	 * " DL1AA" is not a callsign written badly, it is a field that starts
-	 * in the wrong column.
+	/* A trailing "*" is the has-been-repeated mark of the TNC2 notation and
+	 * belongs in the SSID byte, not in the text.  Accept it on one end and
+	 * set the bit, the way the kernel reads it off a full_sockaddr_ax25:
+	 * "DL1AB*" and "DB0AAA-1*" both mean the digi has already repeated the
+	 * frame.  Any "*" that is not the last character is still not a
+	 * callsign - it would break the token anyway, and refusing it catches
+	 * the mistake instead of quietly misreading it.
+	 *
+	 * Trailing blanks end the callsign as well.  A configuration file
+	 * hands them over often enough, they change nothing, and refusing them
+	 * would only make a whitespace character the difference between a
+	 * station and an error.  Leading ones are a different matter and stay
+	 * an error below: " DL1AA" is not a callsign written badly, it is a
+	 * field that starts in the wrong column.
 	 */
 	end = name + strlen(name);
 	while (end > name && isspace((unsigned char) end[-1]))
 		end--;
+	if (end > name && end[-1] == '*') {
+		repeated = 1;
+		end--;
+	} else if (memchr(name, '*', (size_t)(end - name)) != NULL) {
+		fprintf(stderr, "axutils: '*' must be last in a callsign - '%s'\n", name);
+		return -1;
+	}
 
 	while (ct < 6 && p < end) {
 		c = toupper(*p);
@@ -115,6 +118,8 @@ int ax25_aton_entry(const char *name, char *buf)
 	}
 
 	buf[6] = ((ssid + '0') << 1) & 0x1E;
+	if (repeated)
+		buf[6] |= 0x80;
 
 	return 0;
 }

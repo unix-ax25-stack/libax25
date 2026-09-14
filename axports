@@ -10,9 +10,17 @@
 # selects the N-th radio interface (channel) of that upstream.  The
 # callsign is the default source call of the interface, paclen the
 # default packet size (mtu), window the default MAXFRAME.
+#
+# The WAMPES node needs only this one line: the port on the node (xnet,
+# hfb, 70cm, ...) is named by a "wampes:<port>" name, and one that has no
+# entry of its own is accepted under this node-wide entry and routed to
+# whatever port is actually reachable.  To always mean one specific port,
+# give the "wampes:<port>" name its own line and callsign - the explicit
+# entry wins over the fallback.
 
 #agwpe-direwolf		DG8HT-1	9600	256	2	VHF (Direwolf interface 1)
 #agwpe-direwolf:1	DG8HT-2	9600	256	2	UHF (Direwolf interface 2)
 #agwpe-direwolf2	DK0ABC-1	1200	128	1	1200 bd (Direwolf 2, iface 1)
-#wampes:hfb	DL9SAU-1	9600	256	2	WAMPES node, port hfb
-#wampes:70cm	DL9SAU-2	9600	256	2	WAMPES node, port 70cm
+#wampes			DL9SAU-0	9600	256	2	WAMPES node
+#wampes:hfb		DL9SAU-1	9600	256	2	WAMPES node, port hfb (pinned by its own call)
+#wampes:70cm		DL9SAU-2	9600	256	2	WAMPES node, port 70cm (pinned by its own call)

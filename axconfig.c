@@ -65,6 +65,76 @@ static int is_same_call(char *call1, char *call2)
 
 int (*ax25_config_lazy_hook)(const char *name, const char *base);
 
+/* A "base:suffix" name (e.g. "wampes:xnet") has no axports entry of its
+ * own: ax25_port_ptr() resolves it to the base entry and the bind() that
+ * follows carries only that base entry's callsign, so the suffix would be
+ * lost.  It is remembered here, against the callsign it resolved to, and a
+ * backend consumes it when the bind actually happens - see
+ * ax25_config_lazy_take().
+ *
+ * A FIFO and not a map: every "base:suffix" of the same base resolves to
+ * the SAME callsign, so the callsign alone cannot tell two waiting names
+ * apart.  Keeping the order of resolution lets a program that resolves
+ * two interfaces up front and then opens them the same way round get each
+ * one back.  Bounded so that a name merely resolved and never bound
+ * cannot pin a later, unrelated bind forever; when it is full the newest
+ * is simply not remembered, and that connect takes the default path (the
+ * node routes) rather than pinning the wrong interface.
+ *
+ * Depth 8 = the largest holder in the suite, axprobe(1) with MULTI_MAX
+ * sessions, can legitimately keep unresolved before its binds; every other
+ * program holds at most one.  Deeper would only widen the stray-pin window,
+ * so 8 is the largest that remains safe.
+ */
+#define AX25_LAZY_MEMORY	8
+
+static struct {
+	char call[16];
+	char name[39];
+} Lazy_mem[AX25_LAZY_MEMORY];
+static int Lazy_n;
+
+int ax25_config_lazy_remember(const char *call, const char *name)
+{
+	if (call == NULL || name == NULL || *call == '\0')
+		return -1;
+	if (Lazy_n >= (int) (sizeof(Lazy_mem) / sizeof(Lazy_mem[0])))
+		return -1;
+	strncpy(Lazy_mem[Lazy_n].call, call, sizeof(Lazy_mem[0].call) - 1);
+	Lazy_mem[Lazy_n].call[sizeof(Lazy_mem[0].call) - 1] = '\0';
+	strncpy(Lazy_mem[Lazy_n].name, name, sizeof(Lazy_mem[0].name) - 1);
+	Lazy_mem[Lazy_n].name[sizeof(Lazy_mem[0].name) - 1] = '\0';
+	Lazy_n++;
+	return 0;
+}
+
+/* Take the oldest remembered name for this callsign - the resolution that
+ * predates the other ones, which is the one the bind with this callsign
+ * belongs to in the pattern real tools follow (resolve, then bind at
+ * once).  Consumed either way: an entry that is never re-found cannot
+ * pin a later, unrelated bind.
+ */
+int ax25_config_lazy_take(const char *call, char *name, size_t namelen)
+{
+	int i;
+
+	if (call == NULL)
+		return -1;
+	for (i = 0; i < Lazy_n; i++)
+		if (Lazy_mem[i].call[0] != '\0' &&
+		    strcasecmp(Lazy_mem[i].call, call) == 0) {
+			if (name != NULL && namelen > 0) {
+				strncpy(name, Lazy_mem[i].name, namelen - 1);
+				name[namelen - 1] = '\0';
+			}
+			for (; i < Lazy_n - 1; i++)
+				Lazy_mem[i] = Lazy_mem[i + 1];
+			Lazy_n--;
+			return 0;
+		}
+	return -1;
+}
+
 static AX_Port *ax25_port_ptr(char *name)
 {
 	AX_Port *p = ax25_ports;
@@ -93,8 +163,14 @@ static AX_Port *ax25_port_ptr(char *name)
 	if (!(*ax25_config_lazy_hook)(name, base))
 		return NULL;
 	for (p = ax25_ports; p != NULL; p = p->Next)
-		if (p->Name != NULL && strcasecmp(p->Name, base) == 0)
+		if (p->Name != NULL && strcasecmp(p->Name, base) == 0) {
+			/* The full name is what the bind() that follows would
+			 * otherwise lose: the calling function only hands the
+			 * base entry's callsign onwards.  Remember it before
+			 * answering - see ax25_config_lazy_remember(). */
+			ax25_config_lazy_remember(p->Call, name);
 			return p;
+		}
 	return NULL;
 }
 

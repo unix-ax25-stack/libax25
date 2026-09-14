@@ -120,13 +120,6 @@ only at the end: **three cases at run time** — kernel only, both, userspace
 only — **and both build variants**, with and without
 `--enable-userspace-ax25`.
 
-One of them is done: after the file split, Linux builds and carries a
-connection in each direction.  That is the branch this desk cannot exercise —
-there the interception is strong symbols rather than an interpose table, a
-different mechanism through the same new boundary — and it is where the split
-had left two pointer definitions cut in half, invisible to every build here.
-The rest of the matrix is still owed.
-
 ---
 
 ## Open

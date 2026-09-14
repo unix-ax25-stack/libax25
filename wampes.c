@@ -43,6 +43,8 @@
 #include "netax25/axlib.h"
 #include "netax25/axconfig.h"
 
+#include "netax25/agwpe_client.h"
+
 #include "pathnames.h"
 
 #include "wampes.h"
@@ -56,6 +58,7 @@
  * no configuration file worth the name. */
 #define WAMPES_DEFAULT_SOCKET "/usr/local/wampes/sockets/ax25"
 #define WAMPES_CALLLEN  10              /* "DL9SAU-15" and the NUL */
+#define AX25_REPEATED	0x80		/* in the SSID byte, as on the air */
 
 /* A socket the application holds.  After connect() the descriptor IS the
  * connection and nothing intercepts read(), write(), poll() or close() any
@@ -222,36 +225,18 @@ static const char *wampes_node_addr(const char *port)
 }
 
 /* A "wampes:70cm" with no axports entry of its own is accepted and the entry
- * for the node is used.  What it cannot do is pin the port, and the reason is
- * worth knowing: bind() hands us a callsign, never a port name, so the name
- * comes back from a reverse lookup - and entries that share a callsign cannot
- * be told apart by one, while axports refuses duplicate callsigns anyway.  So
- * the suffix is accepted and the node routes.  Pinning a port keeps needing
- * an entry, and that entry keeps needing a callsign of its own.
- *
- * Said once per name rather than silently, because somebody who typed the
- * suffix meant something by it.
+ * for the node used.  What the name alone cannot say is whether the bind
+ * that follows means the node or one specific port of it: bind() hands us
+ * only a callsign, and every "wampes:..." resolves to the SAME node callsign,
+ * so the suffix would be lost there.  The remembering therefore lives in
+ * axconfig.c: ax25_port_ptr() records the intended name at the moment this
+ * hook answers yes, and wampes_bind() consumes it again.  This function is
+ * the gate and nothing else: is the base the name of one of our nodes?
  */
 
 static int wampes_lazy_base(const char *name, const char *base)
 {
-	static char said[8][64];
-	static int nsaid;
-	int i;
-
-	if (wampes_node_addr(base) == NULL)
-		return 0;                   /* not one of ours */
-	for (i = 0; i < nsaid; i++)
-		if (!strcasecmp(said[i], name))
-			return 1;
-	if (nsaid < (int) (sizeof(said) / sizeof(said[0])) &&
-	    strlen(name) < sizeof(said[0])) {
-		strcpy(said[nsaid++], name);
-		if (axsock_debug)
-			fprintf(stderr, "wampes: no axports entry for \"%s\" - using %s "
-				"and letting the node route\n", name, base);
-	}
-	return 1;
+	return wampes_node_addr(base) != NULL;
 }
 
 /* A descriptor inherited across exec.
@@ -716,6 +701,12 @@ int wampes_socket(int type)
  * source callsign - what "call -s" sets, and what WAMPES is told with "<".
  * The first digipeater slot is not a digipeater at all: libax25 puts the
  * callsign of the axports entry there, which is how the port is named.
+ *
+ * With a single node-wide axports entry, the callsign is the same for every
+ * suffix (wampes:xnet, wampes:hfb, ...).  A name without its own axports
+ * entry is remembered in the configuration library against that callsign,
+ * and port_of_bind() consumes it before it falls back to a lookup which
+ * would see only the base entry and route.
  */
 
 /* Which axports entry does this bind name?  libax25 puts the entry's callsign
@@ -729,6 +720,7 @@ static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 {
 	const struct full_sockaddr_ax25 *fsa =
 		(const struct full_sockaddr_ax25 *) addr;
+	ax25_address *which;
 	char *name;
 
 	*port = '\0';
@@ -746,12 +738,19 @@ static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 	 *
 	 * Only reads it, but says otherwise in the header.
 	 */
-	if (fsa->fsa_ax25.sax25_ndigis > 0)
-		name = ax25_config_get_port(
-			(ax25_address *) &fsa->fsa_digipeater[0]);
-	else
-		name = ax25_config_get_port(
-			(ax25_address *) &fsa->fsa_ax25.sax25_call);
+	which = fsa->fsa_ax25.sax25_ndigis > 0
+		? (ax25_address *) &fsa->fsa_digipeater[0]
+		: (ax25_address *) &fsa->fsa_ax25.sax25_call;
+	/* Before the reverse lookup: a "wampes:xnet" resolved through the lazy
+	 * hook has told axconfig.c the intended name against this callsign,
+	 * and what the lookup could answer with - the base entry "wampes" -
+	 * would throw the suffix away and let the node route.  Consumed here,
+	 * so the node gets the interface prefix; a bind that resolved no name
+	 * finds nothing and goes on below.
+	 */
+	if (ax25_config_lazy_take(ax25_ntoa(which), port, portlen) == 0)
+		return;
+	name = ax25_config_get_port(which);
 	if (name == NULL && ax25_config_get_next(NULL) == NULL) {
 		/* The port table belongs to the application: every program in
 		 * the suite calls ax25_config_load_ports() at startup, and a
@@ -763,9 +762,7 @@ static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 		 * backend to depend on the order of the binds.
 		 */
 		ax25_config_load_ports();
-		name = ax25_config_get_port(fsa->fsa_ax25.sax25_ndigis > 0
-			? (ax25_address *) &fsa->fsa_digipeater[0]
-			: (ax25_address *) &fsa->fsa_ax25.sax25_call);
+		name = ax25_config_get_port(which);
 	}
 	if (name == NULL)
 		return;
@@ -1287,16 +1284,203 @@ static int write_all(int fd, const void *data, size_t len)
  * frames is not built; the node can deliver them, nothing here asks for them.
  */
 
+/*---------------------------------------------------------------------------*/
+
+/* Mirror one frame into the ax25netd monitor channel.
+ *
+ * The program on this backend sends and receives UI frames over the node's
+ * line protocol, so a packet socket (listen) on the same machine never sees
+ * that traffic as a frame.  It is still radio traffic, so it belongs in the
+ * monitor.
+ *
+ * ax25netd's loop port 255 re-broadcasts every raw ('K') frame it receives
+ * to its own raw monitor clients verbatim - there is nothing to decode on
+ * the server, the client sends the finished frame.  So this builds the
+ * finished frame exactly the way the server would for an outgoing UI frame
+ * (see mux_mirror_raw in ax25-apps/ax25netd): KISS marker, the addresses
+ * with the bit patterns direwolf transmits, the last address end-of-field
+ * marker, control 0x03 (UI), the PID, the payload.  The has-been-repeated
+ * bit ('*' of the TNC2 notation) rides inside the SSID byte it arrived in.
+ *
+ * The connection to ax25netd is lazy: a datagram socket should not pay for
+ * one, let alone open it for a program that only sends beacons, and a
+ * server that is not there - the normal case - must not be an error for the
+ * sendto() or recvfrom() this is called from.  Nothing here may touch
+ * errno, and a server that cannot be reached simply stays unmoved until a
+ * later frame finds it again.
+ */
+
+static agwpe_client_t *wampes_mirror_client;
+
+static int wampes_mirror_open(void)
+{
+	const struct agwpe_client_cb cb = { 0 };
+	const char *host, *portstr, *user, *pass;
+
+	if (wampes_mirror_client != NULL) {
+		if (agwpe_client_connected(wampes_mirror_client))
+			return 0;
+
+		/* The server died since; drop the corpse and let a later
+		 * frame find it again. */
+		agwpe_client_free(wampes_mirror_client);
+		wampes_mirror_client = NULL;
+	}
+
+	host = getenv("AXSOCK_HOST");
+	if (host == NULL || host[0] == '\0')
+		host = AXSOCK_DEFAULT_HOST;
+	portstr = getenv("AXSOCK_PORT");
+	if (portstr == NULL || portstr[0] == '\0' ||
+	    atoi(portstr) <= 0 || atoi(portstr) > 65535)
+		portstr = NULL;
+
+	wampes_mirror_client = agwpe_client_new(&cb, NULL);
+	if (wampes_mirror_client == NULL)
+		return -1;
+
+	if (host[0] == '/') {
+		if (agwpe_client_connect_unix(wampes_mirror_client, host) != 0)
+			goto fail;
+	} else if (agwpe_client_connect_host(wampes_mirror_client, host,
+					     portstr != NULL ?
+					     atoi(portstr) :
+					     AXSOCK_DEFAULT_PORT) != 0) {
+		goto fail;
+	}
+
+	user = getenv("AXSOCK_USER");
+	if (user != NULL && user[0] != '\0') {
+		pass = getenv("AXSOCK_PASSWORD");
+		agwpe_client_login(wampes_mirror_client, user,
+				   (pass != NULL) ? pass : "");
+	}
+
+	return 0;
+
+fail:
+	agwpe_client_free(wampes_mirror_client);
+	wampes_mirror_client = NULL;
+	return -1;
+}
+
+static void wampes_mirror_frame(const ax25_address dest,
+				const ax25_address src,
+				const ax25_address *digis, int ndigis,
+				unsigned char pid,
+				const unsigned char *info, size_t ilen)
+{
+	unsigned char buf[1 + 7 * (AX25_MAX_DIGIS + 2) + 2 + 256];
+	unsigned char *p = buf;
+	struct agwpe_s hdr;
+	int i;
+
+	if (ndigis > AX25_MAX_DIGIS)
+		ndigis = AX25_MAX_DIGIS;
+
+	if (wampes_mirror_open() != 0)
+		return;
+
+	*p++ = 0;				/* KISS data marker */
+
+	memcpy(p, dest.ax25_call, 7);
+	p[6] |= 0xE0;
+	p += 7;
+
+	memcpy(p, src.ax25_call, 7);
+	p[6] |= 0x60;
+	p += 7;
+
+	for (i = 0; i < ndigis; i++) {
+		memcpy(p, digis[i].ax25_call, 7);
+		p[6] |= 0x60;
+		p += 7;
+	}
+	p[-1] |= 0x01;				/* end of the address field */
+
+	*p++ = 0x03;				/* UI, command */
+	*p++ = pid;
+
+	if (ilen > (size_t) (sizeof(buf) - (p - buf)))
+		ilen = sizeof(buf) - (p - buf);
+	if (info != NULL && ilen > 0)
+		memcpy(p, info, ilen);
+	p += ilen;
+
+	agwpe_header_init(&hdr, AGWPE_PORT_LOOP, AGWPE_CMD_RAW, pid,
+			  ax25_ntoa(&src), ax25_ntoa(&dest),
+			  (uint32_t) (p - buf));
+	(void) agwpe_client_send_frame(wampes_mirror_client, &hdr, buf);
+}
+
+/* The callsign a frame goes out under: the one bind() gave the socket, or
+ * the callsign of the axports entry the socket is on when nothing was bound.
+ * NULL if there is neither - such a socket has nothing to send a frame from.
+ */
+
+static const char *wampes_source_call(const struct wampes_sock *s)
+{
+	char *portcall;
+
+	if (s->local[0] != '\0')
+		return s->local;
+	if (s->port[0] != '\0' &&
+	    (portcall = ax25_config_get_addr((char *) s->port)) != NULL)
+		return portcall;
+	return NULL;
+}
+
+static void wampes_mirror_path(const struct wampes_sock *s,
+			       const ax25_address *dest,
+			       const ax25_address *src7,
+			       const ax25_address *digis, int ndigis,
+			       int send,
+			       const unsigned char *info, size_t ilen)
+{
+	const ax25_address empty = { { 0 } };
+	ax25_address srcbuf;
+	ax25_address path[AX25_MAX_DIGIS];
+	int i;
+
+	if (src7 == NULL) {
+		const char *src = wampes_source_call(s);
+
+		if (src == NULL)
+			return;
+		if (ax25_aton_entry(src, srcbuf.ax25_call) != 0)
+			return;
+		src7 = &srcbuf;
+	}
+	if (dest == NULL)
+		dest = &empty;
+	if (send) {
+		/* Outgoing.  wampes_sendto prints "*" for a digi whose handle
+		 * carries the has-been-repeated bit, the node understands it
+		 * and the H-bit is on the air, so what is mirrored is what
+		 * left the port - nothing to mask.  The bytes are copied to a
+		 * local buffer only so that nothing here writes into the
+		 * caller's sockaddr. */
+		for (i = 0; i < ndigis && i < AX25_MAX_DIGIS; i++)
+			path[i] = digis[i];
+		digis = path;
+	}
+	wampes_mirror_frame(*dest, *src7, digis, ndigis,
+			    (unsigned char) (s->pid != 0 ? s->pid : 0xf0),
+			    info, ilen);
+}
+
 ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 		      const struct sockaddr *addr, socklen_t alen,
 		      ssize_t *ret)
 {
 	const struct full_sockaddr_ax25 *fsa;
 	const struct sockaddr_ax25 *sa;
+	ax25_address digis[AX25_MAX_DIGIS];
 	struct wampes_sock *s;
 	char frame[128];
 	char line[256];
 	int ndigis = 0;
+	int last = -1;                  /* last digi carrying REPEATED */
 	int i;
 
 	(void) flags;
@@ -1356,14 +1540,25 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 	if (ndigis > AX25_MAX_DIGIS)
 		ndigis = AX25_MAX_DIGIS;
 
-	{
-		const char *src = s->local;
-		char *portcall;
+	/* The node carries the path as the one index after the last repeated
+	 * digi (hdr.nextdigi) and serialises it contiguously - every digi
+	 * before that index leaves the port with the has-been-repeated bit,
+	 * the frame format allows no other shape.  A caller that hands over a
+	 * gap in the sockaddr - repeated, not, repeated - wrote something the
+	 * air cannot say; mirror it already in the shape the node will
+	 * transmit, so that what is shown here is what is sent. */
+	for (i = 0; i < ndigis; i++) {
+		digis[i] = fsa->fsa_digipeater[i];
+		if (digis[i].ax25_call[6] & AX25_REPEATED)
+			last = i;
+	}
+	for (i = 0; i <= last; i++)
+		digis[i].ax25_call[6] |= AX25_REPEATED;
 
-		if (*src == '\0' && s->port[0] != '\0' &&
-		    (portcall = ax25_config_get_addr(s->port)) != NULL)
-			src = portcall;
-		if (*src == '\0') {
+	{
+		const char *src = wampes_source_call(s);
+
+		if (src == NULL || *src == '\0') {
 			errno = EDESTADDRREQ;   /* nothing to send it from */
 			return 1;
 		}
@@ -1372,8 +1567,15 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 	}
 	for (i = 0; i < ndigis; i++) {
 		strncat(frame, ",", sizeof(frame) - strlen(frame) - 2);
-		strncat(frame, ax25_ntoa(&fsa->fsa_digipeater[i]),
+		strncat(frame, ax25_ntoa(&digis[i]),
 			sizeof(frame) - strlen(frame) - 2);
+		/* The has-been-repeated bit survives here, in the eighth
+		 * byte of the caller's address, and the node understands
+		 * the "*" marker - a digipeater that forwards a frame it
+		 * heard marks itself with it.  Printing it is what lets
+		 * an APRS gate pass the path through unchanged. */
+		if (digis[i].ax25_call[6] & AX25_REPEATED)
+			strncat(frame, "*", sizeof(frame) - strlen(frame) - 2);
 	}
 
 	snprintf(line, sizeof(line), "[%zu]%s:", len, frame);
@@ -1392,6 +1594,12 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 		return 1;
 	}
 	*ret = (ssize_t) len;
+
+	/* It is out.  Mirror it now: anything that fails here must not
+	 * change the outcome of the sendto() the application just made. */
+	wampes_mirror_path(s, &sa->sax25_call, NULL,
+			   ndigis ? digis : NULL, ndigis,
+			   1, buf, len);
 	return 1;
 }
 
@@ -1413,8 +1621,6 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
  * own, which no client may claim.  The reason is kept and handed to whoever
  * calls recvfrom().
  */
-
-#define AX25_REPEATED	0x80		/* in the SSID byte, as on the air */
 
 static void claim_ui(struct wampes_sock *s)
 {
@@ -1553,6 +1759,22 @@ static void parse_ui_header(char *hdr, struct full_sockaddr_ax25 *fsa)
 		fsa->fsa_ax25.sax25_ndigis = n;
 		n++;
 	}
+
+	/* The node thinks of the path as the one index after the last element
+	 * that has already repeated it (hdr.nextdigi) and marks only that
+	 * last one when it writes the path out; the air has no gaps.  Widen
+	 * the mark to the whole prefix, symmetric to wampes_sendto(), so a
+	 * caller of recvfrom() sees the frame the way it really was. */
+	{
+		int last = -1;
+		int i;
+
+		for (i = 0; i < fsa->fsa_ax25.sax25_ndigis; i++)
+			if (fsa->fsa_digipeater[i].ax25_call[6] & AX25_REPEATED)
+				last = i;
+		for (i = 0; i <= last; i++)
+			fsa->fsa_digipeater[i].ax25_call[6] |= AX25_REPEATED;
+	}
 }
 
 ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
@@ -1619,6 +1841,19 @@ ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
 		if (*alen > (socklen_t) sizeof(him))
 			*alen = sizeof(him);
 		memcpy(addr, &him, *alen);
+	}
+
+	/* It is in.  Mirror it now, with the has-been-repeated bits the node
+	 * reported; anything that fails here must not touch errno or the
+	 * frame the application just received. */
+	{
+		ax25_address dest;
+
+		if (ax25_aton_entry(s->local, dest.ax25_call) == 0)
+			wampes_mirror_path(s, &dest, &him.fsa_ax25.sax25_call,
+					   him.fsa_digipeater,
+					   him.fsa_ax25.sax25_ndigis, 0,
+					   buf, (size_t) *ret);
 	}
 	return 1;
 }

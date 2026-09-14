@@ -64,8 +64,6 @@
 #include "axsock_real.h"
 #include "agwpe_sock.h"
 
-#define	AXSOCK_DEFAULT_HOST	"127.0.0.1"
-#define	AXSOCK_DEFAULT_PORT	8100
 #define	AXSOCK_MAX_SOCK		128
 #define	AXSOCK_CONNECT_TIMEOUT	60
 #ifndef SIOCGSTAMP
@@ -2138,21 +2136,22 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 	if (axsock_backend_now() == 1)
 		return 0;
 
-	/* An AGWPE server is what feeds this socket.  Ask for one first,
-	 * because a machine can have both an AGWPE server and a node, and
-	 * there a monitor works.
+	/* An AGWPE server feeds this socket.  Ask for one first, because a
+	 * machine can have both an AGWPE server and a node, and there a
+	 * monitor works.
 	 *
-	 * Only when none answers does it matter which world we are in.
-	 * WAMPES has no monitor stream at all - nothing carries a copy of
-	 * every frame the way the 'K' record does - so failing there would be
-	 * permanent, and a program that opens a monitor beside its real work
-	 * would be taken down by it.  Hand out a descriptor that stays quiet
-	 * instead: it costs that program one feature and leaves the rest
-	 * working.  Say so once, on stderr, so nobody spends an evening
-	 * wondering why the window is empty.
+	 * Neither backend can do without it now: AGWPE frames reach the
+	 * monitor through ax25netd exactly as before, and WAMPES frames are
+	 * pushed into the same ax25netd monitor channel by the libax25 side
+	 * itself, so ax25netd has to be reachable there too.  Either way an
+	 * unreachable server means the monitor cannot be fed.
 	 *
-	 * With no node configured either, the refusal is a configuration
-	 * fault and worth reporting as one.
+	 * Still hand out a descriptor that stays quiet rather than failing,
+	 * so a program that opens a monitor beside its real work is not
+	 * taken down by the absence of a server.  It costs that program one
+	 * feature and leaves the rest working.  With no node configured
+	 * either, the refusal is a configuration fault and worth reporting
+	 * as one.
 	 *
 	 * This is the one place the AGWPE backend looks at the other one's
 	 * register, and it is not an oversight: whether a failure here should
@@ -2178,10 +2177,10 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 		s->raw = 1;
 		axsock_nraw++;
 		fd = s->fd;
-		if (!said) {
+		if (!said && axsock_debug) {
 			said = 1;
-			fprintf(stderr, "axsock: no monitor stream through "
-				"WAMPES - this socket stays silent\n");
+			fprintf(stderr, "axsock: ax25netd/AGWPE server not "
+				"reachable - monitor socket stays silent\n");
 		}
 		pthread_mutex_unlock(&axsock_lock);
 		*ret = fd;

@@ -72,6 +72,7 @@ static int (*p_accept)(int, struct sockaddr *, socklen_t *);
 static int (*p_getsockname)(int, struct sockaddr *, socklen_t *);
 static int (*p_getpeername)(int, struct sockaddr *, socklen_t *);
 static ssize_t (*p_write)(int, const void *, size_t);
+static char *(*p_ax25_config_get_addr)(char *);
 
 static int	verbose = 1;
 
@@ -132,6 +133,12 @@ static void bind_calls(int use_dlsym)
 	p_getsockname = lookup("getsockname");
 	p_getpeername = lookup("getpeername");
 	p_write = lookup("write");
+	/* The lazy config call comes from the library that the program under
+	 * test has preloaded; like the socket calls it is found through the
+	 * default namespace, never linked.  It is the fallback for a
+	 * "port:name" whose callsign no axports line carries - see
+	 * port_callsign(). */
+	p_ax25_config_get_addr = lookup("ax25_config_get_addr");
 }
 
 /* Shifted ASCII, six characters and an SSID.  ax25_aton_entry() does this in
@@ -216,6 +223,21 @@ static int port_callsign(const char *file, const char *port, char *out,
 		return 0;
 	}
 	fclose(fp);
+	/* A "base:suffix" (e.g. "wampes:xnet") has no axports line of its own;
+	 * the plain scan above would report it missing.  Let the library answer
+	 * through its lazy hook: it fills the remember-FIFO with the full name
+	 * and returns the node callsign, which is exactly the callsign the bind
+	 * that follows must carry.  Only present when the library under test is
+	 * actually in the process (it is found, not linked); with the table
+	 * given, ax25_config_get_addr() needs nothing here to be loaded. */
+	if (p_ax25_config_get_addr != NULL && strchr(port, ':') != NULL) {
+		char *call = (*p_ax25_config_get_addr)((char *)port);
+
+		if (call != NULL && call[0] != '\0') {
+			snprintf(out, outlen, "%s", call);
+			return 0;
+		}
+	}
 	fprintf(stderr, "axprobe: no entry \"%s\" in %s\n", port, file);
 	return -1;
 }

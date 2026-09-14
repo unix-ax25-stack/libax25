@@ -29,6 +29,14 @@
 
 #include <sys/socket.h>
 
+/* The AGWPE server these backends feed or read.  AXSOCK_HOST and AXSOCK_PORT
+ * override both; when the host starts with a slash it is a unix socket path
+ * instead of a TCP address.  Both backends - agwpe_sock.c talking to it, and
+ * the wampes.c monitor mirror pushing frames into it - share the defaults, so
+ * they live here once. */
+#define	AXSOCK_DEFAULT_HOST	"127.0.0.1"
+#define	AXSOCK_DEFAULT_PORT	8100
+
 int agwpe_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret);
 int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret);
 int agwpe_close(int fd, int *ret);

@@ -241,7 +241,23 @@ int	(*real_listen)(int, int);
 int	(*real_accept)(int, struct sockaddr *, socklen_t *);
 #endif
 
-__attribute__((constructor))
+/*
+ * The real calls, resolved lazily instead of in a constructor.  A library
+ * constructor runs in the dynamic linker's initfini order, which is driven
+ * by the dependency graph: a constructor of a deeper dependency (e.g.
+ * libcap-ng behind libpam/libaudit) can run before this one and call one
+ * of the interposed syscalls (close(2), ...) while the real_* pointers are
+ * still NULL, crashing at the fall-through.  Resolving on first use makes
+ * the order irrelevant.
+ *
+ * Resolved exactly once, deadlock-free: a plain "if (real_socket == NULL)"
+ * gate lets two threads walk into the init together, and one of them can
+ * then see real_socket set while real_close is still NULL and fall through
+ * on an empty pointer.  pthread_once() blocks the second thread until the
+ * first is done, which is the point of the exercise.
+ */
+static pthread_once_t axsock_real_once = PTHREAD_ONCE_INIT;
+
 static void axsock_real_init(void)
 {
 	axsock_debug = getenv("AXSOCK_DEBUG") ? 1 : 0;
@@ -271,10 +287,17 @@ static void axsock_real_init(void)
 #endif
 }
 
+#define AXSOCK_NEED_REAL()				\
+	do {						\
+		pthread_once(&axsock_real_once,		\
+			     axsock_real_init);		\
+	} while (0)
+
 int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 {
 	int fd;
 
+	AXSOCK_NEED_REAL();
 	{
 		int ret;
 
@@ -309,6 +332,7 @@ int AXSOCK_ENTRY(bind)(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	/* bind() is the first moment the port is known, and therefore the
 	 * first moment the backend can be chosen per port rather than per
 	 * process.  A socket made in socket() is handed over here if the port
@@ -326,6 +350,7 @@ int AXSOCK_ENTRY(connect)(int fd, const struct sockaddr *addr, socklen_t len)
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	if (wampes_connect(fd, addr, len, &ret))
 		return ret;
 	if (agwpe_connect(fd, addr, len, &ret))
@@ -337,6 +362,7 @@ ssize_t AXSOCK_ENTRY(send)(int fd, const void *buf, size_t len, int flags)
 {
 	ssize_t ret;
 
+	AXSOCK_NEED_REAL();
 	if (agwpe_send(fd, buf, len, &ret))
 		return ret;
 	return real_send(fd, buf, len, flags);
@@ -347,6 +373,7 @@ ssize_t AXSOCK_ENTRY(sendto)(int fd, const void *buf, size_t len, int flags,
 {
 	ssize_t ret;
 
+	AXSOCK_NEED_REAL();
 	if (wampes_sendto(fd, buf, len, flags, to, tolen, &ret))
 		return ret;
 	if (agwpe_sendto(fd, buf, len, to, tolen, &ret))
@@ -358,6 +385,7 @@ ssize_t AXSOCK_ENTRY(write)(int fd, const void *buf, size_t len)
 {
 	ssize_t ret;
 
+	AXSOCK_NEED_REAL();
 	if (agwpe_write(fd, buf, len, &ret))
 		return ret;
 	return real_write(fd, buf, len);
@@ -367,6 +395,7 @@ ssize_t AXSOCK_ENTRY(recv)(int fd, void *buf, size_t len, int flags)
 {
 	ssize_t ret;
 
+	AXSOCK_NEED_REAL();
 	if (agwpe_recv(fd, buf, len, &ret))
 		return ret;
 	return real_recv(fd, buf, len, flags);
@@ -377,6 +406,7 @@ ssize_t AXSOCK_ENTRY(recvfrom)(int fd, void *buf, size_t len, int flags,
 {
 	ssize_t ret;
 
+	AXSOCK_NEED_REAL();
 	if (wampes_recvfrom(fd, buf, len, flags, addr, addrlen, &ret))
 		return ret;
 	if (agwpe_recvfrom(fd, buf, len, addr, addrlen, &ret))
@@ -388,6 +418,7 @@ int AXSOCK_ENTRY(shutdown)(int fd, int how)
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	if (agwpe_shutdown(fd, how, &ret))
 		return ret;
 	return real_shutdown(fd, how);
@@ -396,6 +427,8 @@ int AXSOCK_ENTRY(shutdown)(int fd, int how)
 int AXSOCK_ENTRY(close)(int fd)
 {
 	int ret;
+
+	AXSOCK_NEED_REAL();
 
 	/* A WAMPES placeholder that never reached connect() - after connect()
 	 * there is nothing of ours left to forget.  It answers nothing, so it
@@ -412,6 +445,7 @@ int AXSOCK_ENTRY(listen)(int fd, int backlog)
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	if (wampes_listen(fd, &ret))
 		return ret;
 	if (agwpe_listen(fd, &ret))
@@ -423,6 +457,7 @@ int AXSOCK_ENTRY(accept)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	if (axsock_debug)
 		fprintf(stderr, "axsock: accept(fd=%d) called\n", fd);
 
@@ -521,6 +556,7 @@ int AXSOCK_ENTRY(setsockopt)(int fd, int level, int optname,
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	if (wampes_setsockopt(fd, level, optname, &ret))
 		return ret;
 	if (agwpe_setsockopt(fd, level, optname, &ret))
@@ -533,6 +569,7 @@ int AXSOCK_ENTRY(getsockopt)(int fd, int level, int optname,
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	(void)optname;
 
 	if (agwpe_getsockopt(fd, level, optval, optlen, &ret))
@@ -546,6 +583,7 @@ int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 	void *arg;
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	va_start(ap, request);
 	arg = va_arg(ap, void *);
 	va_end(ap);
@@ -559,6 +597,7 @@ int AXSOCK_ENTRY(getsockname)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	if (wampes_getsockname(fd, addr, addrlen, &ret))
 		return ret;
 	if (agwpe_getsockname(fd, addr, addrlen, &ret))
@@ -570,6 +609,7 @@ int AXSOCK_ENTRY(getpeername)(int fd, struct sockaddr *addr, socklen_t *addrlen)
 {
 	int ret;
 
+	AXSOCK_NEED_REAL();
 	if (wampes_getpeername(fd, addr, addrlen, &ret))
 		return ret;
 	if (agwpe_getpeername(fd, addr, addrlen, &ret))

@@ -31,6 +31,7 @@
 #include <errno.h>
 #include <netdb.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,6 +71,7 @@
 struct wampes_sock {
 	struct wampes_sock *next;
 	int fd;
+	int refs;                           /* in-flight + list reference count */
 	char local[WAMPES_CALLLEN];         /* source call, from bind() */
 	char port[32];                      /* axports entry, from bind() */
 	int pid;                            /* protocol id, from the third
@@ -103,29 +105,72 @@ struct wampes_sock {
 static struct wampes_sock *Socks;
 static int Nsocks;
 
-/*---------------------------------------------------------------------------*/
+/* Recursive mutex: the AGWPE client layer and this backend are part of
+ * the same dylib, so internal close()/socket()/send() calls, as well as
+ * axsock_replace() -> close(), route back through the interposers.  The
+ * lock protects the Socks list and every s-> field.
+ *
+ * Never hold this lock while acquiring agwpe's axsock_lock: agwpe calls
+ * interposed send()/close() with its own lock held, which would take this
+ * one - the only compliant order is wampes_lock -> agwpe_lock, and
+ * blocking I/O must happen without any of the two (see the descriptor
+ * exchanges in wampes_connect(), wampes_listen() and claim_ui()).  The
+ * recursion is a safety net for pure re-entry, not a license to nest the
+ * two locks.
+ */
+static pthread_mutex_t wampes_lock =
+	PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 
-static struct wampes_sock *find_sock(int fd)
+static struct wampes_sock *sock_ref(struct wampes_sock *s)
+{
+	s->refs++;
+	return s;
+}
+
+static void sock_unref(struct wampes_sock *s)
+{
+	if (--s->refs == 0)
+		free(s);
+}
+
+/* Drop an in-flight reference taken by sock_take_locked().  Used by the
+ * entry functions once they no longer hold the lock (the blocking and
+ * interposed parts run unlocked).
+ */
+static void sock_put(struct wampes_sock *s)
+{
+	pthread_mutex_lock(&wampes_lock);
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
+}
+
+/* Find an entry and take an in-flight reference.  Must be called with
+ * wampes_lock held.  The caller must eventually call sock_unref().
+ */
+static struct wampes_sock *sock_take_locked(int fd)
 {
 	struct wampes_sock *s;
 
 	for (s = Socks; s != NULL; s = s->next)
 		if (s->fd == fd)
-			return s;
+			return sock_ref(s);
 	return NULL;
 }
 
-static void drop_sock(int fd)
+/* Unlink from list and drop the list reference.  Must be called with
+ * wampes_lock held.  If no in-flight references remain, frees s.
+ */
+static void sock_drop_locked(struct wampes_sock *s)
 {
-	struct wampes_sock *s, **pp;
+	struct wampes_sock **pp;
 
-	for (pp = &Socks; (s = *pp) != NULL; pp = &s->next)
-		if (s->fd == fd) {
+	for (pp = &Socks; *pp != NULL; pp = &(*pp)->next)
+		if (*pp == s) {
 			*pp = s->next;
-			free(s);
-			Nsocks--;
-			return;
+			break;
 		}
+	Nsocks--;
+	sock_unref(s);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -280,6 +325,8 @@ static void wampes_inherit(void)
 	}
 	s->have_me = 1;
 	s->have_him = 1;
+	/* the list owns one reference, exactly like wampes_sock() */
+	s->refs = 1;
 	s->next = Socks;
 	Socks = s;
 	Nsocks++;
@@ -675,10 +722,14 @@ int wampes_socket(int type)
 		errno = EPROTONOSUPPORT;
 		return -1;
 	}
+	pthread_mutex_lock(&wampes_lock);
 	if (Nsocks >= WAMPES_MAX_SOCK) {
+		pthread_mutex_unlock(&wampes_lock);
 		errno = EMFILE;
 		return -1;
 	}
+	pthread_mutex_unlock(&wampes_lock);
+
 	if ((fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
 	if ((s = calloc(1, sizeof(*s))) == NULL) {
@@ -687,11 +738,14 @@ int wampes_socket(int type)
 		return -1;
 	}
 	s->fd = fd;
+	s->refs = 1;
 	s->ctl = -1;
 	s->dgram = (type == SOCK_DGRAM);
+	pthread_mutex_lock(&wampes_lock);
 	s->next = Socks;
 	Socks = s;
 	Nsocks++;
+	pthread_mutex_unlock(&wampes_lock);
 	return fd;
 }
 
@@ -780,12 +834,21 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 	const struct sockaddr_ax25 *sa;
 	struct wampes_sock *s;
 
-	s = find_sock(fd);
+	/* A descriptor that is already ours is kept alive for the rest of
+	 * bind(): its UI claim below blocks on the node, during which a
+	 * concurrent close() must not free it.
+	 */
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	pthread_mutex_unlock(&wampes_lock);
 	if (s == NULL && !is_ax25(addr, len))
 		return 0;                       /* not ours, and not AX.25 */
 	if (!is_ax25(addr, len)) {
 		*ret = -1;
 		errno = EAFNOSUPPORT;
+		pthread_mutex_lock(&wampes_lock);
+		sock_unref(s);
+		pthread_mutex_unlock(&wampes_lock);
 		return 1;
 	}
 	port_of_bind(addr, len, port, sizeof(port));
@@ -815,23 +878,29 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 			*ret = -1;
 			return 1;
 		}
+		pthread_mutex_lock(&wampes_lock);
 		if (Nsocks >= WAMPES_MAX_SOCK) {
+			pthread_mutex_unlock(&wampes_lock);
 			*ret = -1;
 			errno = EMFILE;
 			return 1;
 		}
 		if ((s = calloc(1, sizeof(*s))) == NULL) {
+			pthread_mutex_unlock(&wampes_lock);
 			*ret = -1;
 			errno = ENOMEM;
 			return 1;
 		}
 		s->fd = fd;
+		s->refs = 1;
 		s->ctl = -1;
 		s->dgram = (type == SOCK_DGRAM);
 		s->pid = protocol_of(fd);
 		s->next = Socks;
 		Socks = s;
 		Nsocks++;
+		sock_ref(s);                     /* hold it across claim_ui */
+		pthread_mutex_unlock(&wampes_lock);
 		if (axsock_debug)
 			fprintf(stderr, "wampes: fd=%d taken over for port '%s'\n",
 				fd, port);
@@ -848,6 +917,9 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 	if (s->dgram && !s->rxclaimed)
 		claim_ui(s);
 	*ret = 0;
+	pthread_mutex_lock(&wampes_lock);
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
 	return 1;
 }
 
@@ -864,25 +936,42 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 {
 	char line[512];
 	char cmd[512];
+	char port[32];
+	char local[WAMPES_CALLLEN];
 	const struct full_sockaddr_ax25 *fsa;
 	const struct sockaddr_ax25 *sa;
 	int i;
 	int handed = -1;
 	int ndigis = 0;
+	int pid;
 	int sock;
 	struct wampes_sock *s;
 
-	if ((s = find_sock(fd)) == NULL)
+	/* keep the entry alive while the node answers: the dial and the
+	 * verdict run without the lock, during which a close() on another
+	 * thread must not free it */
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s != NULL) {
+		memcpy(port, s->port, sizeof(port));
+		memcpy(local, s->local, sizeof(local));
+		pid = s->pid;
+	}
+	pthread_mutex_unlock(&wampes_lock);
+	if (s == NULL)
 		return 0;                       /* not ours */
 	*ret = -1;
 	if (!is_ax25(addr, len)) {
 		errno = EAFNOSUPPORT;
+		sock_put(s);
 		return 1;
 	}
 	sa = (const struct sockaddr_ax25 *) addr;
 
-	if ((sock = wampes_dial(wampes_address(s->port))) < 0)
+	if ((sock = wampes_dial(wampes_address(port))) < 0) {
+		sock_put(s);
 		return 1;
+	}
 
 	/* No end-of-line conversion: an AX.25 socket is what the kernel gave,
 	 * and the kernel converted nothing.
@@ -890,6 +979,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	if (write_all(sock, "binary\n", 7) != 0) {
 		close(sock);
 		errno = ECONNRESET;
+		sock_put(s);
 		return 1;
 	}
 	/* Ask for a descriptor rather than for this connection to become the
@@ -904,12 +994,13 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	if (write_all(sock, "handover\n", 9) != 0) {
 		close(sock);
 		errno = ECONNRESET;
+		sock_put(s);
 		return 1;
 	}
 
 	strcpy(cmd, "connect ");
 	{
-		const char *iface = wampes_iface(s->port);
+		const char *iface = wampes_iface(port);
 
 		if (iface != NULL) {
 			strncat(cmd, iface, sizeof(cmd) - strlen(cmd) - 2);
@@ -929,14 +1020,14 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		strncat(cmd, ax25_ntoa(&fsa->fsa_digipeater[i]),
 			sizeof(cmd) - strlen(cmd) - 2);
 	}
-	if (s->local[0] != '\0') {
+	if (local[0] != '\0') {
 		strncat(cmd, " < ", sizeof(cmd) - strlen(cmd) - 2);
-		strncat(cmd, s->local, sizeof(cmd) - strlen(cmd) - 2);
+		strncat(cmd, local, sizeof(cmd) - strlen(cmd) - 2);
 	}
-	if (s->pid) {
+	if (pid) {
 		char opt[24];
 
-		sprintf(opt, " --pid 0x%02x", s->pid);
+		sprintf(opt, " --pid 0x%02x", pid);
 		strncat(cmd, opt, sizeof(cmd) - strlen(cmd) - 2);
 	}
 	strcat(cmd, "\n");
@@ -946,6 +1037,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	if (write_all(sock, cmd, strlen(cmd)) != 0) {
 		close(sock);
 		errno = ECONNRESET;
+		sock_put(s);
 		return 1;
 	}
 
@@ -961,6 +1053,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 					"(EOF/incomplete), closing control sock\n");
 			close(sock);
 			errno = ETIMEDOUT;
+			sock_put(s);
 			return 1;
 		}
 		if (axsock_debug)
@@ -973,6 +1066,7 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 			fprintf(stderr, "wampes: connect refused: %s", line);
 		close(sock);
 		errno = reason_to_errno(line);
+		sock_put(s);
 		return 1;
 	}
 
@@ -993,8 +1087,15 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		close(sock);
 		sock = handed;
 	}
-	if (axsock_replace(fd, sock) < 0)
+	/* The descriptor exchange calls close() internally, which would take
+	 * the AGWPE lock while we hold ours; do it without, so the two
+	 * backends' locks are never acquired in opposite order.  The
+	 * in-flight reference keeps the entry alive meanwhile. */
+	if (axsock_replace(fd, sock) < 0) {
+		sock_put(s);
 		return 1;
+	}
+	pthread_mutex_lock(&wampes_lock);
 	s->connected = 1;
 	/* ax25d and axspawn ask afterwards who is at each end; answer from
 	 * what we already had rather than from the unix socket underneath,
@@ -1007,9 +1108,11 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	s->have_him = 1;
 	memset(&s->me, 0, sizeof(s->me));
 	s->me.fsa_ax25.sax25_family = AF_AX25;
-	if (s->local[0] != '\0')
-		ax25_aton_entry(s->local, s->me.fsa_ax25.sax25_call.ax25_call);
+	if (local[0] != '\0')
+		ax25_aton_entry(local, s->me.fsa_ax25.sax25_call.ax25_call);
 	s->have_me = 1;
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
 	*ret = 0;
 	return 1;
 }
@@ -1033,34 +1136,50 @@ int wampes_listen(int fd, int *ret)
 {
 	char line[512];
 	char cmd[128];
+	char local[WAMPES_CALLLEN];
+	char port[32];
+	int pid;
 	int sock;
 	struct wampes_sock *s;
 
-	if ((s = find_sock(fd)) == NULL)
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s != NULL) {
+		memcpy(local, s->local, sizeof(local));
+		memcpy(port, s->port, sizeof(port));
+		pid = s->pid;
+	}
+	pthread_mutex_unlock(&wampes_lock);
+	if (s == NULL)
 		return 0;                   /* not ours */
 	*ret = -1;
-	if (s->local[0] == '\0') {
+	if (local[0] == '\0') {
 		errno = EDESTADDRREQ;       /* nothing was bound */
+		sock_put(s);
 		return 1;
 	}
-	if ((sock = wampes_dial(wampes_address(s->port))) < 0)
+	if ((sock = wampes_dial(wampes_address(port))) < 0) {
+		sock_put(s);
 		return 1;
+	}
 
-	if (s->pid)
-		sprintf(cmd, "listen %s pid=0x%02x\n", s->local, s->pid);
+	if (pid)
+		sprintf(cmd, "listen %s pid=0x%02x\n", local, pid);
 	else
-		sprintf(cmd, "listen %s\n", s->local);
+		sprintf(cmd, "listen %s\n", local);
 	if (axsock_debug)
 		fprintf(stderr, "wampes: -> %s", cmd);
 	if (write_all(sock, cmd, strlen(cmd)) != 0) {
 		close(sock);
 		errno = ECONNRESET;
+		sock_put(s);
 		return 1;
 	}
 	for (;;) {
 		if (read_line(sock, line, sizeof(line), NULL, 0) < 0) {
 			close(sock);
 			errno = ECONNRESET;
+			sock_put(s);
 			return 1;
 		}
 		if (axsock_debug)
@@ -1071,11 +1190,18 @@ int wampes_listen(int fd, int *ret)
 			break;
 		close(sock);
 		errno = listen_errno(line);
+		sock_put(s);
 		return 1;
 	}
-	if (axsock_replace(fd, sock) < 0)
+	/* descriptor exchange outside the lock, see wampes_connect() */
+	if (axsock_replace(fd, sock) < 0) {
+		sock_put(s);
 		return 1;
+	}
+	pthread_mutex_lock(&wampes_lock);
 	s->listening = 1;
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
 	*ret = 0;
 	return 1;
 }
@@ -1133,13 +1259,28 @@ static void parse_call(const char *text, struct full_sockaddr_ax25 *fsa,
 int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 {
 	char line[256];
+	char port[32];
 	char *sp;
 	int newfd = -1;
 	struct wampes_sock *s;
+	int listening;
 	int n;
 
-	if ((s = find_sock(fd)) == NULL || !s->listening)
+	/* The parent entry is kept alive while accept() blocks on the node.
+	 * A close() of the listening socket from another thread would
+	 * otherwise free it mid-wait.
+	 */
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	listening = (s != NULL) && s->listening;
+	if (s != NULL)
+		memcpy(port, s->port, sizeof(port));
+	pthread_mutex_unlock(&wampes_lock);
+	if (s == NULL || !listening) {
+		if (s != NULL)
+			sock_put(s);
 		return 0;                   /* not ours, or not listening */
+	}
 	*ret = -1;
 
 	/* Read to the end of the line rather than trusting one recvmsg() to
@@ -1169,10 +1310,12 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 			errno = ECONNABORTED;   /* the node went away */
 		else if (n == WAMPES_INCOMPLETE)
 			errno = EPROTO;         /* half a line, and no more */
-		return 1;                   /* otherwise errno is from recvmsg */
+		sock_put(s);                /* otherwise errno is from recvmsg */
+		return 1;
 	}
 	if (newfd < 0) {
 		errno = EPROTO;             /* a line without a descriptor */
+		sock_put(s);
 		return 1;
 	}
 	if (axsock_debug)
@@ -1220,17 +1363,21 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 		    (ns = calloc(1, sizeof(*ns))) != NULL) {
 			ns->fd = newfd;
 			ns->ctl = -1;
+			ns->refs = 1;
 			ns->connected = 1;
 			ns->me = me;
 			ns->him = him;
 			ns->have_me = 1;
 			ns->have_him = 1;
-			snprintf(ns->port, sizeof(ns->port), "%s", s->port);
+			snprintf(ns->port, sizeof(ns->port), "%s", port);
+			pthread_mutex_lock(&wampes_lock);
 			ns->next = Socks;
 			Socks = ns;
 			Nsocks++;
+			pthread_mutex_unlock(&wampes_lock);
 		}
 	}
+	sock_put(s);
 	*ret = newfd;
 	return 1;
 }
@@ -1479,42 +1626,66 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 	struct wampes_sock *s;
 	char frame[128];
 	char line[256];
+	char port[32];
+	char local[WAMPES_CALLLEN];
 	int ndigis = 0;
 	int last = -1;                  /* last digi carrying REPEATED */
+	int pid;
+	int ctl;
 	int i;
 
 	(void) flags;
-	if ((s = find_sock(fd)) == NULL || !s->dgram)
+	/* The frame goes out over an unlocked, possibly still-to-be-opened
+	 * service connection; the entry is kept alive meanwhile so that a
+	 * concurrent close() cannot free it. */
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s != NULL) {
+		ctl = s->ctl;
+		memcpy(port, s->port, sizeof(port));
+		memcpy(local, s->local, sizeof(local));
+		pid = s->pid;
+	}
+	pthread_mutex_unlock(&wampes_lock);
+	if (s == NULL || !s->dgram) {
+		if (s != NULL)
+			sock_put(s);
 		return 0;                   /* not ours, or not a datagram */
+	}
 	*ret = -1;
 
 	if (addr == NULL) {
 		errno = EDESTADDRREQ;       /* a UI frame needs somewhere to go */
+		sock_put(s);
 		return 1;
 	}
 	if (!is_ax25(addr, alen)) {
 		errno = EAFNOSUPPORT;
+		sock_put(s);
 		return 1;
 	}
 	if (len > 256) {                    /* an AX.25 frame is not a stream */
 		errno = EMSGSIZE;
+		sock_put(s);
 		return 1;
 	}
 
-	if (s->ctl < 0) {
-		const char *iface = wampes_iface(s->port);
+	if (ctl < 0) {
+		const char *iface = wampes_iface(port);
 		int c;
 
-		if ((c = wampes_dial(wampes_address(s->port))) < 0)
+		if ((c = wampes_dial(wampes_address(port))) < 0) {
+			sock_put(s);
 			return 1;
+		}
 		/* No port named means every AX.25 port of the node, which is
 		 * what a beacon on a node-wide entry asks for. */
 		snprintf(line, sizeof(line), "datagram %s%s",
 			 iface != NULL ? iface : "", iface != NULL ? ":" : "");
-		if (s->pid) {
+		if (pid) {
 			char opt[24];
 
-			snprintf(opt, sizeof(opt), " --pid 0x%02x", s->pid);
+			snprintf(opt, sizeof(opt), " --pid 0x%02x", pid);
 			strncat(line, opt, sizeof(line) - strlen(line) - 2);
 		}
 		strncat(line, "\n", sizeof(line) - strlen(line) - 1);
@@ -1525,9 +1696,13 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 
 			close(c);
 			errno = save;
+			sock_put(s);
 			return 1;
 		}
+		pthread_mutex_lock(&wampes_lock);
 		s->ctl = c;
+		pthread_mutex_unlock(&wampes_lock);
+		ctl = c;
 	}
 
 	/* "[n]SRC>DEST[,DIGI...]:" - the source is the bound callsign, or the
@@ -1560,6 +1735,7 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 
 		if (src == NULL || *src == '\0') {
 			errno = EDESTADDRREQ;   /* nothing to send it from */
+			sock_put(s);
 			return 1;
 		}
 		snprintf(frame, sizeof(frame), "%s>%s", src,
@@ -1581,16 +1757,26 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 	snprintf(line, sizeof(line), "[%zu]%s:", len, frame);
 	if (axsock_debug)
 		fprintf(stderr, "wampes: -> %s<%zu bytes>\n", line, len);
-	if (write_all(s->ctl, line, strlen(line)) != 0 ||
-	    write_all(s->ctl, buf, len) != 0) {
+	if (write_all(ctl, line, strlen(line)) != 0 ||
+	    write_all(ctl, buf, len) != 0) {
 		int save = errno;
+		int was_ours = 0;
 
 		/* The node is gone or refused the command it never answered.
 		 * Let the next frame open a fresh connection rather than
-		 * writing into a dead one for ever. */
-		close(s->ctl);
-		s->ctl = -1;
+		 * writing into a dead one for ever.  Only this entry's own
+		 * connection is closed: a concurrent close() may already
+		 * have taken the descriptor away. */
+		pthread_mutex_lock(&wampes_lock);
+		if (s->ctl == ctl) {
+			s->ctl = -1;
+			was_ours = 1;
+		}
+		pthread_mutex_unlock(&wampes_lock);
+		if (was_ours)
+			close(ctl);
 		errno = save;
+		sock_put(s);
 		return 1;
 	}
 	*ret = (ssize_t) len;
@@ -1600,6 +1786,7 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 	wampes_mirror_path(s, &sa->sax25_call, NULL,
 			   ndigis ? digis : NULL, ndigis,
 			   1, buf, len);
+	sock_put(s);
 	return 1;
 }
 
@@ -1626,31 +1813,55 @@ static void claim_ui(struct wampes_sock *s)
 {
 	char cmd[128];
 	char line[256];
+	char local[WAMPES_CALLLEN];
+	char port[32];
+	int pid;
 	int c;
 
+	/* The caller holds an in-flight reference, so s stays alive across
+	 * the node's answer below; the fields are settled under the lock and
+	 * the blocking service conversation runs without it. */
+	pthread_mutex_lock(&wampes_lock);
 	s->rxerr = ENOTCONN;
-	if (s->local[0] == '\0')
-		return;
-	if ((c = wampes_dial(wampes_address(s->port))) < 0) {
-		s->rxerr = errno;
+	if (s->local[0] == '\0') {
+		pthread_mutex_unlock(&wampes_lock);
 		return;
 	}
-	if (s->pid)
+	memcpy(local, s->local, sizeof(local));
+	memcpy(port, s->port, sizeof(port));
+	pid = s->pid;
+	pthread_mutex_unlock(&wampes_lock);
+
+	if ((c = wampes_dial(wampes_address(port))) < 0) {
+		int save = errno;
+
+		pthread_mutex_lock(&wampes_lock);
+		s->rxerr = save;
+		pthread_mutex_unlock(&wampes_lock);
+		return;
+	}
+	if (pid)
 		snprintf(cmd, sizeof(cmd), "listen ui %s pid=0x%02x\n",
-			 s->local, s->pid);
+			 local, pid);
 	else
-		snprintf(cmd, sizeof(cmd), "listen ui %s\n", s->local);
+		snprintf(cmd, sizeof(cmd), "listen ui %s\n", local);
 	if (axsock_debug)
 		fprintf(stderr, "wampes: -> %s", cmd);
 	if (write_all(c, cmd, strlen(cmd)) != 0) {
-		s->rxerr = errno;
+		int save = errno;
+
 		close(c);
+		pthread_mutex_lock(&wampes_lock);
+		s->rxerr = save;
+		pthread_mutex_unlock(&wampes_lock);
 		return;
 	}
 	for (;;) {
 		if (read_line(c, line, sizeof(line), NULL, 0) < 0) {
-			s->rxerr = ECONNRESET;
 			close(c);
+			pthread_mutex_lock(&wampes_lock);
+			s->rxerr = ECONNRESET;
+			pthread_mutex_unlock(&wampes_lock);
 			return;
 		}
 		if (axsock_debug)
@@ -1659,19 +1870,30 @@ static void claim_ui(struct wampes_sock *s)
 			continue;
 		if (strncmp(line, "*** listening", 13) == 0)
 			break;
-		s->rxerr = listen_errno(line);
 		close(c);
+		pthread_mutex_lock(&wampes_lock);
+		s->rxerr = listen_errno(line);
+		pthread_mutex_unlock(&wampes_lock);
 		return;
 	}
 	/* The connection becomes the descriptor, as it does for a listening
 	 * socket: from here poll() and select() answer for it and nothing of
-	 * ours is asked. */
+	 * ours is asked.  The descriptor exchange calls close() internally,
+	 * which would take the AGWPE lock while we hold ours; do it without
+	 * the lock, so the two backends' locks are never acquired in
+	 * opposite order.  The in-flight reference keeps the entry alive. */
 	if (axsock_replace(s->fd, c) < 0) {
-		s->rxerr = errno;
+		int save = errno;
+
+		pthread_mutex_lock(&wampes_lock);
+		s->rxerr = save;
+		pthread_mutex_unlock(&wampes_lock);
 		return;
 	}
+	pthread_mutex_lock(&wampes_lock);
 	s->rxclaimed = 1;
 	s->rxerr = 0;
+	pthread_mutex_unlock(&wampes_lock);
 }
 
 /* Exactly n bytes, however they arrive. */
@@ -1784,34 +2006,58 @@ ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
 	struct wampes_sock *s;
 	char count[16];
 	char hdr[160];
+	char local[WAMPES_CALLLEN];
 	char *end;
+	int rxclaimed;
+	int rxerr;
 	long n;
 
 	(void) flags;
-	if ((s = find_sock(fd)) == NULL || !s->dgram)
+	/* The read below blocks on the claim connection; the entry is kept
+	 * alive meanwhile so a concurrent close() cannot free it. */
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s != NULL) {
+		rxclaimed = s->rxclaimed;
+		rxerr = s->rxerr;
+		memcpy(local, s->local, sizeof(local));
+	}
+	pthread_mutex_unlock(&wampes_lock);
+	if (s == NULL || !s->dgram) {
+		if (s != NULL)
+			sock_put(s);
 		return 0;                   /* not ours, or not a datagram */
+	}
 	*ret = -1;
-	if (!s->rxclaimed) {
-		errno = s->rxerr ? s->rxerr : ENOTCONN;
+	if (!rxclaimed) {
+		errno = rxerr ? rxerr : ENOTCONN;
+		sock_put(s);
 		return 1;
 	}
 
 	/* "[n]" first, so the very first byte decides and no payload can be
 	 * read as a length. */
 	if (read_until(fd, '[', hdr, sizeof(hdr)) < 0 ||
-	    read_until(fd, ']', count, sizeof(count)) < 0)
+	    read_until(fd, ']', count, sizeof(count)) < 0) {
+		sock_put(s);
 		return 1;
+	}
 	n = strtol(count, &end, 10);
 	if (*end != '\0' || n < 0) {
 		errno = EPROTO;
+		sock_put(s);
 		return 1;
 	}
-	if (read_until(fd, ':', hdr, sizeof(hdr)) < 0)
+	if (read_until(fd, ':', hdr, sizeof(hdr)) < 0) {
+		sock_put(s);
 		return 1;
+	}
 
 	if ((size_t) n <= len) {
-		if (read_all(fd, buf, (size_t) n) != 0)
+		if (read_all(fd, buf, (size_t) n) != 0) {
+			sock_put(s);
 			return 1;
+		}
 		*ret = n;
 	} else {
 		/* A datagram is what it is: keep what fits and drop the rest,
@@ -1820,13 +2066,17 @@ ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
 		char waste[256];
 		size_t left = (size_t) n - len;
 
-		if (read_all(fd, buf, len) != 0)
+		if (read_all(fd, buf, len) != 0) {
+			sock_put(s);
 			return 1;
+		}
 		while (left > 0) {
 			size_t k = left > sizeof(waste) ? sizeof(waste) : left;
 
-			if (read_all(fd, waste, k) != 0)
+			if (read_all(fd, waste, k) != 0) {
+				sock_put(s);
 				return 1;
+			}
 			left -= k;
 		}
 		*ret = (ssize_t) len;
@@ -1849,12 +2099,13 @@ ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
 	{
 		ax25_address dest;
 
-		if (ax25_aton_entry(s->local, dest.ax25_call) == 0)
+		if (ax25_aton_entry(local, dest.ax25_call) == 0)
 			wampes_mirror_path(s, &dest, &him.fsa_ax25.sax25_call,
 					   him.fsa_digipeater,
 					   him.fsa_ax25.sax25_ndigis, 0,
 					   buf, (size_t) *ret);
 	}
+	sock_put(s);
 	return 1;
 }
 
@@ -1895,20 +2146,36 @@ int wampes_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,
 		       int *ret)
 {
 	struct wampes_sock *s;
+	int r;
 
-	if ((s = find_sock(fd)) == NULL)
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s == NULL) {
+		pthread_mutex_unlock(&wampes_lock);
 		return 0;
-	return answer_addr(&s->me, s->have_me, addr, addrlen, ret);
+	}
+	r = answer_addr(&s->me, s->have_me, addr, addrlen, ret);
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
+	return r;
 }
 
 int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
 		       int *ret)
 {
 	struct wampes_sock *s;
+	int r;
 
-	if ((s = find_sock(fd)) == NULL)
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s == NULL) {
+		pthread_mutex_unlock(&wampes_lock);
 		return 0;
-	return answer_addr(&s->him, s->have_him, addr, addrlen, ret);
+	}
+	r = answer_addr(&s->him, s->have_him, addr, addrlen, ret);
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
+	return r;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -1929,8 +2196,18 @@ int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
  */
 int wampes_setsockopt(int fd, int level, int optname, int *ret)
 {
-	if (level != SOL_AX25 || find_sock(fd) == NULL)
+	struct wampes_sock *s;
+
+	if (level != SOL_AX25)
 		return 0;
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s == NULL) {
+		pthread_mutex_unlock(&wampes_lock);
+		return 0;
+	}
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
 	if (axsock_opt_refuse(optname)) {
 		errno = ENOPROTOOPT;
 		*ret = -1;
@@ -1946,16 +2223,28 @@ int wampes_setsockopt(int fd, int level, int optname, int *ret)
 int wampes_close(int fd)
 {
 	struct wampes_sock *s;
+	int ctl;
 
-	if ((s = find_sock(fd)) == NULL)
+	/* Take the entry out of the list and drop the list reference while
+	 * holding the lock; the in-flight reference below keeps it alive
+	 * until the service connection has been closed too. */
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s == NULL) {
+		pthread_mutex_unlock(&wampes_lock);
 		return 0;
+	}
 	if (axsock_debug)
 		fprintf(stderr, "wampes: close fd=%d (close() reaches the session)\n",
 			fd);
 	/* The service connection a datagram socket sends over is ours, not the
 	 * application's: nothing else will ever close it. */
-	if (s->ctl >= 0)
-		close(s->ctl);
-	drop_sock(fd);
+	ctl = s->ctl;
+	s->ctl = -1;
+	sock_drop_locked(s);
+	pthread_mutex_unlock(&wampes_lock);
+	if (ctl >= 0)
+		close(ctl);
+	sock_put(s);
 	return 0;
 }

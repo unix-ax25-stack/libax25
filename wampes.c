@@ -118,8 +118,11 @@ static int Nsocks;
  * recursion is a safety net for pure re-entry, not a license to nest the
  * two locks.
  */
-static pthread_mutex_t wampes_lock =
-	PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+#ifdef PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
+static pthread_mutex_t wampes_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+#else
+static pthread_mutex_t wampes_lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+#endif
 
 static struct wampes_sock *sock_ref(struct wampes_sock *s)
 {

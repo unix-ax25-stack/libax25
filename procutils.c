@@ -31,6 +31,14 @@ static unsigned long safe_atox(const char *s)
 }
 
 /*
+ * Version of strtoul() that returns zero if s == NULL.
+ */
+static unsigned long safe_atod(const char *s)
+{
+	return s ? strtoul(s, NULL, 10) : 0;
+}
+
+/*
  * Version of strncpy() that returns NULL if either src or dest is NULL
  * and also makes sure destination string is always terminated.
  */
@@ -108,22 +116,22 @@ struct proc_ax25 *read_proc_ax25(void)
 		p->vr = safe_atoi(token(&cp, space));
 		p->va = safe_atoi(token(&cp, space));
 
-		p->t1timer = safe_atox(token(&cp, space));
-		p->t1      = safe_atox(token(&cp, space));
+		p->t1timer = safe_atod(token(&cp, space));
+		p->t1      = safe_atod(token(&cp, space));
 
-		p->t2timer = safe_atox(token(&cp, space));
-		p->t2      = safe_atox(token(&cp, space));
+		p->t2timer = safe_atod(token(&cp, space));
+		p->t2      = safe_atod(token(&cp, space));
 
-		p->t3timer = safe_atox(token(&cp, space));
-		p->t3      = safe_atox(token(&cp, space));
+		p->t3timer = safe_atod(token(&cp, space));
+		p->t3      = safe_atod(token(&cp, space));
 
-		p->idletimer = safe_atox(token(&cp, space));
-		p->idle      = safe_atox(token(&cp, space));
+		p->idletimer = safe_atod(token(&cp, space));
+		p->idle      = safe_atod(token(&cp, space));
 
 		p->n2count = safe_atoi(token(&cp, space));
 		p->n2      = safe_atoi(token(&cp, space));
 
-		p->rtt    = safe_atox(token(&cp, space));
+		p->rtt    = safe_atod(token(&cp, space));
 
 		p->window = safe_atoi(token(&cp, space));
 
@@ -132,7 +140,7 @@ struct proc_ax25 *read_proc_ax25(void)
 		p->sndq   = safe_atoi(token(&cp, space));
 		p->rcvq   = safe_atoi(token(&cp, space));
 
-		p->inode  = safe_atox(token(&cp, space));
+		p->inode  = safe_atod(token(&cp, space));
 
 		p->next = list;
 		list = p;
@@ -235,21 +243,21 @@ struct proc_nr *read_proc_nr(void)
 		p->vr = safe_atoi(token(&cp, space));
 		p->va = safe_atoi(token(&cp, space));
 
-		p->t1timer   = safe_atox(token(&cp, "/"));
-		p->t1        = safe_atox(token(&cp, "/ \t\r\n"));
-		p->t2timer   = safe_atox(token(&cp, "/"));
-		p->t2        = safe_atox(token(&cp, "/ \t\r\n"));
-		p->t4timer   = safe_atox(token(&cp, "/"));
-		p->t4        = safe_atox(token(&cp, "/ \t\r\n"));
-		p->idletimer = safe_atox(token(&cp, "/"));
-		p->idle      = safe_atox(token(&cp, "/ \t\r\n"));
+		p->t1timer   = safe_atod(token(&cp, "/"));
+		p->t1        = safe_atod(token(&cp, "/ \t\r\n"));
+		p->t2timer   = safe_atod(token(&cp, "/"));
+		p->t2        = safe_atod(token(&cp, "/ \t\r\n"));
+		p->t4timer   = safe_atod(token(&cp, "/"));
+		p->t4        = safe_atod(token(&cp, "/ \t\r\n"));
+		p->idletimer = safe_atod(token(&cp, "/"));
+		p->idle      = safe_atod(token(&cp, "/ \t\r\n"));
 		p->n2count   = safe_atoi(token(&cp, "/"));
 		p->n2        = safe_atoi(token(&cp, "/ \t\r\n"));
 
 		p->window = safe_atoi(token(&cp, space));
 		p->sndq   = safe_atoi(token(&cp, space));
 		p->rcvq   = safe_atoi(token(&cp, space));
-		p->inode  = safe_atox(token(&cp, space));
+		p->inode  = safe_atod(token(&cp, space));
 
 		p->next = list;
 		list = p;

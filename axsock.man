@@ -23,10 +23,17 @@ This page is about the interception itself \-\- which calls it answers, how to
 get it in front of a program that was not built for it, what it cannot reach,
 and which environment variables steer it.  Which backend serves which port is
 a different question, answered by
-.BR axports (5),
-.BR agwpe.conf (5)
+.BR axports (5)
 and
-.BR wampes.conf (5).
+.BR wampes.conf (5);
+the AGWPE backend itself keeps one connection to the server named by the
+environment variables
+.BR AXSOCK_HOST " / " AXSOCK_PORT .
+By default that server is an
+.BR ax25netd (8)
+on its loop port, 127.0.0.1:8100, which joins several radios; point the port
+at a radio program such as direwolf (8000) instead, and the daemon is
+skipped entirely.
 .LP
 It is built when
 .B configure
@@ -302,7 +309,13 @@ each descriptor, including the whole conversation with a WAMPES node.  This
 is the first thing to reach for.
 .TP
 .BR AXSOCK_HOST ", " AXSOCK_PORT
-Where the AGWPE backend looks for its server, by default 127.0.0.1 and 8100.
+Environment variables: where the AGWPE backend looks for its server, by
+default 127.0.0.1 and 8100, the loop port of an
+.BR ax25netd (8)
+multiplexing the radios its
+.BR agwpe.conf (5)
+lists.  To skip the daemon and speak to a radio program directly, set the
+port to 8000, where direwolf listens.
 A value beginning with
 .B /
 is a path and selects the server's unix socket instead, which is gated by its
@@ -396,11 +409,11 @@ belong; it is written down here because a station running an older library
 will meet it.
 .SH FILES
 .LP
-/etc/ax25/axports
+@@@AX25_SYSCONFDIR@@@/axports
 .br
-/etc/ax25/agwpe.conf
+@@@AX25_SYSCONFDIR@@@/agwpe.conf
 .br
-/etc/ax25/wampes.conf
+@@@AX25_SYSCONFDIR@@@/wampes.conf
 .SH "SEE ALSO"
 .BR call (1),
 .BR listen (1),

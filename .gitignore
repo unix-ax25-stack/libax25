@@ -36,4 +36,13 @@ missing
 stamp-h
 stamp-h1
 axprobe
+/axports
+/rsports
+/nrports
+/wampes.conf
+/axports.5
+/rsports.5
+/nrports.5
+/wampes.conf.5
+/axsock.7
 .DS_Store

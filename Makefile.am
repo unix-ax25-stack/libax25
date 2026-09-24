@@ -87,6 +87,35 @@ libax25io_la_LIBADD = @Z_LIB@
 dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5 \
 		axsock.7
 
+man_sed = sed -e 's|@@@AX25_SYSCONFDIR@@@|$(MAN_SC)|g' \
+	      -e 's|@@@AX25_LOCALSTATEDIR@@@|$(MAN_SD)|g'
+
+MAN_SC = $(sysconfdir)/ax25
+MAN_SD = $(localstatedir)/ax25
+
+axports.5: $(srcdir)/axports.man
+	$(man_sed) < $(srcdir)/axports.man > $@
+rsports.5: $(srcdir)/rsports.man
+	$(man_sed) < $(srcdir)/rsports.man > $@
+nrports.5: $(srcdir)/nrports.man
+	$(man_sed) < $(srcdir)/nrports.man > $@
+wampes.conf.5: $(srcdir)/wampes.conf.man
+	$(man_sed) < $(srcdir)/wampes.conf.man > $@
+axsock.7: $(srcdir)/axsock.man
+	$(man_sed) < $(srcdir)/axsock.man > $@
+
+axports: $(srcdir)/axports.in
+	$(man_sed) < $(srcdir)/axports.in > $@
+rsports: $(srcdir)/rsports.in
+	$(man_sed) < $(srcdir)/rsports.in > $@
+nrports: $(srcdir)/nrports.in
+	$(man_sed) < $(srcdir)/nrports.in > $@
+wampes.conf: $(srcdir)/wampes.conf.in
+	$(man_sed) < $(srcdir)/wampes.conf.in > $@
+
+CLEANFILES = axports rsports nrports wampes.conf \
+	   axports.5 rsports.5 nrports.5 wampes.conf.5 axsock.7
+
 # Built, never installed, and deliberately not linked against the library:
 # it is the one program here that can show whether preloading reaches a
 # program which does not use libax25.  See axsock(7).
@@ -101,7 +130,8 @@ axprobe_LDADD =
 endif
 
 
-EXTRA_DIST= glibc.patch $(etcfiles) libax25.spec axsock.c agwpe_sock.c \
+EXTRA_DIST= glibc.patch $(etcsrcfiles) axports.man rsports.man nrports.man \
+	    wampes.conf.man axsock.man libax25.spec axsock.c agwpe_sock.c \
 	    axsock_real.h agwpe_sock.h wampes.c wampes.h
 
 dist_doc_DATA = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
@@ -118,6 +148,7 @@ AX25_LOCALSTATEDIR=@localstatedir@/ax25/
 # Needed so that the install is optional
 etcdir = $(AX25_SYSCONFDIR)
 etcfiles =  axports rsports nrports wampes.conf
+etcsrcfiles = axports.in rsports.in nrports.in wampes.conf.in
 installconf:
 	$(mkinstalldirs) $(DESTDIR)$(etcdir)
 	@list='$(etcfiles)'; for p in $$list; do \

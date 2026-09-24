@@ -124,56 +124,25 @@ only — **and both build variants**, with and without
 
 ## Open
 
-**The has-been-repeated bit on anything we send — UI frames and I frames
-alike.**  A frame received through a node carries the `*` into the
-digipeater's SSID byte; a frame sent out drops it, in both directions and for
-the same reason: the header is written from the address as it stands, and
-nothing looks at the bit.  There are
-uses — forwarding a frame, recording that the first hop already happened.
+**The has-been-repeated bit on a connection, not on a datagram.**  The
+UI/datagram half is done: the library writes the `*` into the header it
+builds for the node, the node's `datagram` line carries it, and the receive
+path turns a reported mark back into the has-been-repeated bit of the SSID
+byte.  Both parsers refuse an unset `*` in a callsign — `setcall()` in the
+node and the library's own parser — so nothing is dropped in silence any
+more; the caller sets the bit itself.
 
-The library side is small: write the `*` into the header it already builds.
-The node side is where the work is, and it is not only "parse it too".
-`setcall()` treats the character inconsistently today:
-
-* `DB0AAA*` — no SSID, so the callsign field is seven characters and it
-  answers `-1`, "invalid call"
-* `DB0AAA-1*` — `atoi("1*")` is 1, so the call is accepted and **the `*` is
-  dropped without a word**
-
-Both parsers refuse the mark now — `setcall()` in the node, and
-`ax25_aton_entry()` here, which had arrived at the same asymmetry by itself.
-So nothing is dropped in silence any more, and the day the bit is carried the
-caller takes the mark off and sets it itself.
-
-**And it need not stop at datagrams.**  A connection can express the same
-thing, and the node is most of the way there already: `nextdigi` is the index
-of the first digipeater that has not repeated yet, `ax25hdr.c` sets the bit
-for everything before it when it writes the header, and it addresses the frame
-to `digis[nextdigi]`.  What is missing is that `ax25_parse_target()` never
-counts a mark, and that the connect path in `ax25user.c` sets `nextdigi = 0`
-outright — it would have to keep what the caller asked for.
-
-Nothing changes on the library side: an application marks a digipeater by
-setting the has-been-repeated bit in its SSID byte, which is exactly what the
-receiving path already produces, and the shim writes the `*` into the header
-it builds anyway.
-
-**But the service protocol has to be able to say it**, and today it cannot.
-`connect hfb:DL1AAA via DB0BBB,DB0CCC < DL1TST-1` and the counted form of a
-datagram both carry a path and no marks, so even once the library knows which
-hops are done there is no room on the wire to pass that on.  The mark belongs
-where an operator already writes it - `DB0BBB*` in the path - which is the
-notation `setcall()` refuses today and would then have to read.  Both
-directions want it: what we send, and what the node reports on an incoming
-frame.  So this is three pieces, not two - the library, the grammar on
-`sockets/ax25`, and the node's own handling - and the grammar is the one that
-has to be decided first, because the other two write against it.
-
-That gives back something the old world had: a station can emit a connect as
-though the first hops had already happened — which is what a node does when it
-inserts itself into a path.  Worth saying out loud that on a shared channel
-such a frame is indistinguishable from a real digipeat, so it is a tool and a
-footgun in the same hand.
+What remains is the connected form.  The node is most of the way there
+already: `nextdigi` is the index of the first digipeater that has not
+repeated yet, and the header builds itself around it.  What is missing is
+that `ax25_parse_target()` never counts a mark, that the connect path sets
+`nextdigi = 0` outright, and that the service protocol
+(`connect hfb:DL1AAA via DB0BBB* ...`) has no room on the wire to pass the
+marks on.  The grammar is the piece to decide first, because the library and
+the node write against it.  Worth saying out loud that on a shared channel a
+frame sent as though its early hops had already happened is
+indistinguishable from a real digipeat, so it is a tool and a footgun in the
+same hand.
 
 **`AX25_IAMDIGI`, to come back to.**  It makes a socket repeat what it hears —
 the socket becomes a digipeater — and `rsdwnlnk(8)` sets it.  It is refused
@@ -233,54 +202,6 @@ that looks like the answer and is not: `AGWPE_CTL_PARAM_WINDOW` reaches
 `ax25netd`, which stores it in `s->window`, never reads it again and does not
 pass it upstream.
 
-**UI reception off the monitor stream: built and measured.**
-It works through `ax25netd(8)` both ways now — the direct route on its loop
-port, and the monitor stream on every other port, which is the only way a real
-AGWPE server has and is what a monitor channel is for.  Measured on a radio
-port across two processes, byte-identical for the same fourteen payloads that
-torture the loop path.
-
-**Measured against direwolf, and the answer settles the echo filter.**
-direwolf does **not** mirror a client's own transmission into the raw monitor
-stream - zero `K` frames come back for a UI frame sent through it, where
-`ax25netd` mirrors one at once.  So the two behave oppositely, and the
-has-been-repeated condition is not a belt-and-braces on the AGWPE path but the
-thing that carries it: with no mirror the echo entry stays unused, and the
-first frame to match it is the digipeat.
-
-Driven end to end, over real audio, on the two cases that differ only in the
-mark:
-
-  same payload, no mark   suppressed as our own echo
-  same payload, DB0XYZ*   delivered, sender named
-
-which is what it is for.  Without the condition the second would have gone in
-the bin - and it is the frame that proves the hop happened.
-
-The rig is two things direwolf already ships plus one script: `gen_packets`
-turns TNC2 lines into audio and keeps the `*`, and `ADEVICE udp:7355` lets the
-audio in whenever we like rather than only at startup, where no client is
-connected yet.  `dwaudio.py` in the test tools is the feeder.  No patch, and
-the frame stays a received one - through modulator and demodulator - rather
-than something handed in at the side.
-
-**What must not be filtered out.**  The monitor copy of our own transmission
-has to be suppressed for a datagram socket — the kernel does not deliver a
-station its own frames — but only that, and the temptation is to cast the net
-too wide.  Two cases that must come through:
-
-* **A digipeated repeat.**  Send `A>APRS,WIDE1-1`, a repeater sends it on as
-  `A>APRS,DB0XYZ*`: same source callsign, different frame, and the one the
-  operator most wants to see - it is the proof the digipeat happened.
-  Filtering by source callsign would swallow it.
-* **The same frame heard on another port.**  Transmitted on port 1 and heard
-  back on port 2, for whatever reason, is real information about the network
-  and not an echo.
-
-So the test is all three at once: the identical frame, with no
-has-been-repeated bit set, on the port it was sent on.  Anything else is
-somebody's traffic, including when it started as ours.
-
 **`bind()` waits on the node without a bound.**  A datagram `bind()` claims
 the callsign for incoming UI frames, and the wait for the node's answer has no
 deadline — none of the service conversations do, except the descriptor
@@ -291,10 +212,6 @@ hangs in `bind()`.  The remedy is the one the handover already uses, a
 deadline and a recorded error, with sending left working; what wants deciding
 first is whether a claim that timed out should be retried later or stay
 failed for the life of the socket.
-
-**No monitor through a node.**  `listen(1)` and `mheardd(8)` see nothing: the
-service protocol has no stream that carries a copy of every frame, the way the
-AGWPE `K` record does.  Adding one is a protocol question, not a library one.
 
 **The silent disconnects during a login.**  Sessions are sometimes dropped
 without a word while `axspawn` is asking for a password.  The libax25 side of

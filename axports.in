@@ -1,4 +1,4 @@
-# /etc/ax25/axports
+# @@@AX25_SYSCONFDIR@@@/axports
 #
 # The format of this file is:
 #

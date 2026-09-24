@@ -1,4 +1,4 @@
-# /etc/ax25/wampes.conf
+# @@@AX25_SYSCONFDIR@@@/wampes.conf
 #
 # The WAMPES nodes this machine can reach.  One node per line:
 #

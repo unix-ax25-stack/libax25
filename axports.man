@@ -1,6 +1,6 @@
 .TH AXPORTS 5 "2008-Feb-04" Linux "Linux Programmer's Manual"
 .SH NAME
-.I /etc/ax25/axports
+.I @@@AX25_SYSCONFDIR@@@/axports
 \- AX.25 port configuration file.
 .SH DESCRIPTION
 .LP
@@ -211,7 +211,7 @@ the environment variables that steer it \-\- is described in
 .BR axsock (7).
 .SH FILES
 .LP
-/etc/ax25/axports
+@@@AX25_SYSCONFDIR@@@/axports
 .SH "SEE ALSO"
 .BR call (1),
 .BR ax25 (4),

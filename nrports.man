@@ -48,7 +48,7 @@ of the line. It may contain spaces.
 .RE
 .SH FILES
 .LP
-/etc/ax25/nrports
+@@@AX25_SYSCONFDIR@@@/nrports
 .SH "SEE ALSO"
 .BR call (1),
 .BR netrom (4),

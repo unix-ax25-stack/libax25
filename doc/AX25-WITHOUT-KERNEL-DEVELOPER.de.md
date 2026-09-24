@@ -622,6 +622,11 @@ Hinausrufen, eines zum Lauschen, eine PID, das repeated-bit.  Heute wird
 diese Frage gar nicht gestellt: der Modus des Sockets ist ein Tor, und dahinter
 ist alles erlaubt.
 
+Der Dienste-Socket trägt keine Identität.  Der Knoten fragt nie, wer am anderen
+Ende sitzt, und die Dateirechte sind die ganze Antwort — das ist einfach,
+wirksam und ein wenig grob: ein Benutzer, der den Socket nicht öffnen darf,
+kann auch nicht hinausrufen.
+
 Ein Unix-Socket ließe sich fragen, und zwar billig:
 
 ```
@@ -656,6 +661,40 @@ Text.  Das ist nah an dem, was `axparms --assoc` für die ausgehende Hälfte tat
 und es ist die Zeile, die den Unterschied macht zwischen „wer den Socket öffnen
 darf, ist Sysop" und „wer den Socket öffnen darf, darf ein gewöhnlicher
 Benutzer sein".
+
+Festzuhalten, weil beide Hälften heute ungeregelt sind — und zwar in
+entgegengesetzte Richtungen: **jedes** Quellrufzeichen darf für einen
+ausgehenden Ruf benutzt werden — nur seine Schreibweise wird geprüft —,
+während ein Listener nur die Rufzeichen haben darf, die der Sysop geöffnet
+hat.
+
+Kernel AX.25 bietet das Spiegelbild der ersten Hälfte, und es lohnt, genau zu
+sein, weil es *angeboten* statt *getan* ist.  `ax25_bind()`:
+
+```c
+user = ax25_findbyuid(current_euid());
+if (user) call = user->call;              /* REPLACES what he asked for */
+else if (ax25_uid_policy && !capable(CAP_NET_ADMIN))
+        return -EACCES;
+else call = addr->fsa_ax25.sax25_call;    /* he may call himself anything */
+```
+
+Die Zuordnung greift also nur für Benutzer, die **einen** Eintrag **haben**,
+und `ax25_uid_policy` ist **0** standardmäßig (`AX25_NOUID_DEFAULT`).  Ohne
+`axparms --assoc policy deny` bindet jeder lokale Benutzer ein beliebiges
+Rufzeichen — der Kernel benotet ausgehende Rufe nicht, er liefert einen
+Schalter zum Benoten und lässt ihn aus.  Wo sie greift, ist es eine uid zu
+genau einem Rufzeichen: keine SSID-Spanne, keine Gruppen, kein Unterschied
+zwischen Hinausrufen und Lauschen.  Und sie ersetzt **still** statt zu
+verweigern — der eine Teil, den es nicht zu kopieren lohnt: ein Programm, das
+glaubt, DL9SAU-7 zu sein, und still zu etwas anderem gemacht wird, hat keine
+Möglichkeit, es zu merken.
+
+Zum Lauschen brauchte es dort überhaupt keine Erlaubnis.  In dieser Hälfte
+sind wir also schon strenger als der Kernel-Default, und das ist ein Argument
+*für* das Verwaltungsmodell oben, nicht dagegen.  Keine der beiden Formen ist
+falsch; unsere ist einfach gewachsen statt gewählt worden, und ein Knoten, der
+nach Zugangsdaten fragte, könnte wählen.
 
 Die letzte Spalte ist das repeated-bit, falls es gesetzt wird: einen
 Rahmen so auszusenden, als hätte ein Sprung schon stattgefunden, ist das, was

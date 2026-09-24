@@ -4,8 +4,9 @@ Hints for hosts without a kernel AX.25 stack
 The AX.25 stack leaves the Linux kernel in 7.1, and macOS and BSD never had
 one.  Programs written against libax25 still expect socket(AF_AX25, ...) to
 work, and libax25 can answer them itself.  This file is the short version;
-axsock(7) is the whole story, axports(5), agwpe.conf(5) and wampes.conf(5)
-say which backend serves which port.
+axsock(7) is the whole story: axports(5) maps the AX.25 port names onto
+the AGWPE or WAMPES servers, agwpe.conf(5) tells ax25netd what to
+multiplex, and wampes.conf(5) names the WAMPES nodes.
 
 libax25 can intercept the AX.25 socket calls and serve them from userspace
 instead of from the kernel stack - from an AGWPE server (direwolf, or
@@ -26,9 +27,16 @@ it is left out.  So on Linux say --enable-userspace-ax25 when
     if it does not.
 
 AXSOCK_BACKEND=kernel|agwpe|wampes overrides that choice for one process.
-Which userspace backend serves a port follows from the configuration:
-agwpe.conf(5) describes the AGWPE upstreams, wampes.conf(5) the WAMPES
-nodes, and a port named in wampes.conf is handed to its node at bind(2).
+The AGWPE backend keeps one connection, to the server named by the
+environment variables AXSOCK_HOST and AXSOCK_PORT.  Their default,
+127.0.0.1:8100, is the loop port of an ax25netd(8), so by default every
+AGWPE socket goes through the daemon, which joins several radio programs
+and offers each upstream as an AGWPE port.  Point the variables at a radio
+program instead - a direwolf listens on 8000 - and the daemon is skipped
+and libax25 speaks AGWPE with that program directly.  agwpe.conf(5) is read
+by ax25netd alone and tells it which upstreams to join; libax25 never reads
+it.  wampes.conf(5) names the WAMPES nodes, and a port named there is
+handed to its node at bind(2).
 
 ax25-apps and ax25-tools have no such option - they use whatever the
 libax25 they were built and linked against provides.

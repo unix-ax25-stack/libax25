@@ -177,7 +177,7 @@ says so once per name, because whoever typed the suffix meant something by
 it.
 .SH FILES
 .LP
-/etc/ax25/wampes.conf
+@@@AX25_SYSCONFDIR@@@/wampes.conf
 .SH "SEE ALSO"
 .BR call (1),
 .BR ax25 (4),

@@ -1,4 +1,4 @@
-# /etc/ax25/nrports
+# @@@AX25_SYSCONFDIR@@@/nrports
 #
 # The format of this file is:
 #

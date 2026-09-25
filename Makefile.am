@@ -145,11 +145,22 @@ dist_doc_DATA = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/
 
+# The state directory is created on install so AX.25 consumers find it
+# ready: mheardd keeps mheard/mheard.dat here and ax25rtd keeps its route
+# cache and control socket under ax25rtd/.
+install-data-local:
+	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)
+	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/mheard
+	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/ax25rtd
+
 # Needed so that the install is optional
 etcdir = $(AX25_SYSCONFDIR)
 etcfiles =  axports rsports nrports wampes.conf
 etcsrcfiles = axports.in rsports.in nrports.in wampes.conf.in
 installconf:
+	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)
+	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/mheard
+	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/ax25rtd
 	$(mkinstalldirs) $(DESTDIR)$(etcdir)
 	@list='$(etcfiles)'; for p in $$list; do \
 	  echo " $(INSTALL_DATA) $$p $(DESTDIR)$(etcdir)/$$p"; \

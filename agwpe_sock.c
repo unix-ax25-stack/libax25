@@ -839,6 +839,18 @@ static const char *axsock_port_name(unsigned char port)
 		if (axsock_port_of_entry(name) == port)
 			return name;
 
+	/* The loopback port is the one name that needs no entry in axports.
+	 * axsock_port_of_entry() hands "loop" the number AGWPE_PORT_LOOP
+	 * without asking anybody, so the reverse lookup has to be able to
+	 * hand the number its name back - otherwise the two disagree about
+	 * a port whose name is not in question.  A file that has no loop
+	 * line is perfectly usable, since nothing needs the line to put
+	 * frames on the port, and every frame that crossed a WAMPES node
+	 * arrives on it.  A loop line, if there is one, was found above and
+	 * wins.  */
+	if (port == AGWPE_PORT_LOOP)
+		return "loop";
+
 	return NULL;
 }
 

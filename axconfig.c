@@ -18,6 +18,7 @@
 
 #include "pathnames.h"
 #include "util.h"
+#include "axsock_real.h"
 
 typedef struct _axport
 {
@@ -29,6 +30,7 @@ typedef struct _axport
 	int  Window;
 	int  Paclen;
 	char *Description;
+	int  Kernel;		/* the callsign is an interface that is up */
 } AX_Port;
 
 static AX_Port *ax25_ports;
@@ -282,6 +284,120 @@ int ax25_config_get_baud(char *name)
 	return p->Baud;
 }
 
+/*
+ * Is this the name of a port the kernel answers for?
+ *
+ * The load is where the verdict is reached, because that is where the AX.25
+ * address of every interface that is up is in hand and can be compared with
+ * the callsign in the file; afterwards nothing here can tell the two kinds
+ * apart again.  Not from the device name, either, which is the trap: the
+ * commonest axports line names a port exactly like the interface behind it
+ * ("bpq0  TE1ST-1 ..." with an interface bpq0 that is up), so the device of
+ * a kernel port and the name of a userspace one are the same string in the
+ * one case that is easiest to get wrong.  The answer is remembered instead of
+ * rederived.
+ *
+ * The backends ask this to keep their hands off the kernel's ports.  A bind
+ * that names a kernel port has already been answered by socket() and belongs
+ * to the kernel, and taking it over would put frames on a radio that the
+ * process never asked for.
+ */
+int ax25_config_port_is_kernel(const char *name)
+{
+	AX_Port *p;
+
+	if (name == NULL || ax25_ports == NULL)
+		return FALSE;
+
+	for (p = ax25_ports; p != NULL; p = p->Next)
+		if (p->Name != NULL && strcasecmp(name, p->Name) == 0)
+			return p->Kernel;
+
+	return FALSE;
+}
+
+/*
+ * Which port a bind address names, as the name in axports.
+ *
+ * This used to be wampes.c's port_of_bind(), and having a second copy of it
+ * is what made an AGWPE port unusable on a dualstack host: the copy here
+ * resolved the callsign to a name, the copy there compared the callsign
+ * itself against the server's port table, never matched, and answered no.
+ * The two disagreed about the same bind and the port was left to the kernel,
+ * which has no such port.  One lookup, here, where the port list and the lazy
+ * map it has to consult both live.
+ *
+ * The port is named by the callsign in the first digipeater slot - but only
+ * by programs that put it there.  call(1) always does; beacon(8) does it only
+ * when its -c differs from the port's own callsign, and binds the bare
+ * callsign otherwise.  A socket bound that way could not be recognised as a
+ * WAMPES one and stayed with AGWPE without a word, which is a quiet way to
+ * send a beacon nowhere.  So when there is no digipeater, ask the source
+ * callsign instead: it resolves only if it is a port's callsign, and a
+ * user's own callsign has no entry and answers nothing, which is the right
+ * outcome for it.
+ *
+ * Only reads it, but says otherwise in the header.
+ *
+ * Returns 0 and the name, or 1 with an empty name.
+ */
+int ax25_config_bind_port(const struct sockaddr *addr, socklen_t len,
+			  char *port, size_t portlen)
+{
+	const struct full_sockaddr_ax25 *fsa =
+		(const struct full_sockaddr_ax25 *) addr;
+	ax25_address *which;
+	char *name;
+
+	if (port == NULL || portlen == 0)
+		return 1;
+	*port = '\0';
+	if (len < (socklen_t) sizeof(*fsa))
+		return 1;
+
+	which = fsa->fsa_ax25.sax25_ndigis > 0
+		? (ax25_address *) &fsa->fsa_digipeater[0]
+		: (ax25_address *) &fsa->fsa_ax25.sax25_call;
+
+	/* Before the reverse lookup: a "wampes:xnet" resolved through the lazy
+	 * hook has told axconfig.c the intended name against this callsign,
+	 * and what the lookup could answer with - the base entry "wampes" -
+	 * would throw the suffix away and let the node route.  Consumed here,
+	 * so the node gets the interface prefix; a bind that resolved no name
+	 * finds nothing and goes on below.
+	 */
+	if (ax25_config_lazy_take(ax25_ntoa(which), port, portlen) == 0)
+		return 0;
+
+	name = ax25_config_get_port(which);
+	if (name == NULL && ax25_config_get_next(NULL) == NULL) {
+		/* The port table belongs to the application: every program in
+		 * the suite calls ax25_config_load_ports() at startup, and a
+		 * program that only had the library preloaded calls nothing at
+		 * all.  With an empty table the port cannot be named, so the
+		 * socket went to AGWPE without a word - and then righted itself
+		 * on the next bind, because the AGWPE path loads the table as a
+		 * side effect.  Load it here, once, rather leave the backend to
+		 * depend on the order of the binds.
+		 */
+		ax25_config_load_ports();
+		name = ax25_config_get_port(which);
+	}
+	if (name == NULL)
+		return 1;
+
+	/* A name that does not fit is no answer rather than a wrong one.  The
+	 * backends compare what comes back against whole names, and a name cut
+	 * short matches none of them - which for the AGWPE backend would read
+	 * as "not the kernel's" and claim a port that is. */
+	if (strlen(name) >= portlen)
+		return 1;
+
+	strncpy(port, name, portlen - 1);
+	port[portlen - 1] = '\0';
+	return 0;
+}
+
 char *ax25_config_get_desc(char *name)
 {
 	AX_Port *p = ax25_port_ptr(name);
@@ -297,7 +413,7 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	AX_Port *p;
 	char *name, *call, *baud, *paclen, *window, *desc;
 	const char *dev = NULL;
-	int found;
+	int kernel = FALSE;
 
 	name   = strtok(line, " \t");
 	call   = strtok(NULL, " \t");
@@ -339,34 +455,52 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	}
 
 	strupr(call);
-	found = 0;
 	char *cp;
 	if ((cp = strstr(call, "-0")) != NULL)
 		*cp = '\0';
 
-	if (ifcalls == NULL) {
-		/*
-		 * No kernel interface list is available because there is
-		 * no kernel AX.25 support (BSD, SysV, macOS, ...).  Accept
-		 * all configured ports and use the port name as device.
-		 */
-		found = 1;
-		dev = name;
-	} else {
-		for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
-			if (strcmp(call, *ifcalls) == 0) {
-				found = 1;
-				dev = *ifdevs;
-				break;
-			}
+	/*
+	 * What a port is, and the only question here worth answering.
+	 *
+	 * A kernel port is one whose callsign is the AX.25 address of an
+	 * interface that is up.  The device name recorded for it is what the
+	 * ioctls behind axparms and ifconfig need, and it is the only kind
+	 * of port that names a device.
+	 *
+	 * A port of a node or of an AGWPE server is served without any
+	 * interface existing, so nothing here can recognise it: the node's
+	 * answer is in wampes.conf, but a server's is in its port table,
+	 * which is reached over TCP and may be on the other side of a LAN -
+	 * or of the world.  Asking for it would put a network round trip,
+	 * and its three second timeout on netd's side, into the startup of
+	 * every AX.25 program on the machine, axparms and ifconfig
+	 * included, to learn one bit per entry that the bind is about to ask
+	 * anyway - and to learn it less well, since a server that is merely
+	 * slow or unreachable at that moment would have the port dropped.
+	 *
+	 * So the entry is kept, its callsign - which is right here in the
+	 * file - and the verdict is left to the bind, where the backend that
+	 * can answer is asked and a port that nothing serves is refused by
+	 * whoever is left: the kernel, with EADDRNOTAVAIL, which names the
+	 * callsign that has no interface.  Which is the truth about a
+	 * mistyped port, where "invalid port setting" was a guess made
+	 * before anybody had looked.
+	 */
+	for (;ifcalls && *ifcalls; ++ifcalls, ++ifdevs) {
+		if (strcmp(call, *ifcalls) == 0) {
+			dev = *ifdevs;
+			kernel = TRUE;
+			break;
 		}
 	}
-
-	if (!found) {
-#if 0 /* None of your business to complain about some port being down... */
-		fprintf(stderr, "axconfig: port with call '%s' is not active\n", call);
-#endif
-		return FALSE;
+	if (dev == NULL) {
+		/* Not a kernel port.  The name is the best device there is,
+		 * and it is what the backends and the monitor match on. */
+		dev = name;
+		if (axsock_debug && ifcalls != NULL)
+			fprintf(stderr, "axconfig: port '%s' (call '%s') is not "
+				"an AX.25 interface that is up, so it is served "
+				"by a userspace backend if any\n", name, call);
 	}
 
 	if ((p = (AX_Port *)malloc(sizeof(AX_Port))) == NULL) {
@@ -381,6 +515,7 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	p->Window      = atoi(window);
 	p->Paclen      = atoi(paclen);
 	p->Description = strdup(desc);
+	p->Kernel      = kernel;
 
 	if (ax25_ports == NULL)
 		ax25_ports = p;

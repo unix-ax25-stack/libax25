@@ -98,16 +98,19 @@ int axsock_debug = 0;
  * backend is always 'agwpe'.  'kernel' is only meaningful where
  * HAVE_KERNEL_AX25 is defined.
  *
- * This is a stop-gap.  Because socket() must return an fd before the
- * callsign (and therefore the port) is known at bind()/connect(), the
- * backend cannot be derived per port here.  The eventual replacement is
- * socket caching: socket() hands back a placeholder fd, bind() resolves
- * the callsign against axports and the port's device name (the 'agwpe-'
- * prefix marks an AGWPE port) to a backend and dup2()s the real (kernel
- * or AGWPE socketpair) fd over the placeholder, keeping the visible fd
- * number stable.  That removes the need for AXSOCK_BACKEND entirely and
- * lets kernel and AGWPE ports coexist in one process.
- */static int	axsock_backend = -1;	/* -1 undecided, 0 = agwpe, 1 = kernel */
+ * A probe cannot be the whole answer, and no longer is.  socket() has to
+ * return a descriptor before the callsign, and with it the port, is known,
+ * so the choice made here is for the program and not for the port.  bind()
+ * is where the port is finally named, and it corrects the choice: a
+ * descriptor that names a port of a userspace backend is taken over there
+ * and put behind the same number (axsock_placeholder(), then the backend's
+ * own adopt), so kernel and userspace ports coexist in one process.  What
+ * the probe decides is left over: a port nobody claims, and every
+ * AF_PACKET monitor, which is a packet socket rather than an AX.25 one and
+ * so has no bind() to be corrected at - see agwpe_socket_packet() and
+ * listen(1).
+ */
+static int	axsock_backend = -1;	/* -1 undecided, 0 = agwpe, 1 = kernel */
 
 /*
  * The descriptor number belongs to whoever handed it out, which is this file:
@@ -292,6 +295,33 @@ static void axsock_real_init(void)
 		pthread_once(&axsock_real_once,		\
 			     axsock_real_init);		\
 	} while (0)
+
+/*
+ * The type of what stands behind fd, asked of the descriptor itself.
+ *
+ * The table behind agwpe_socktype() knows the type of every socket this
+ * library built.  A descriptor that came from the kernel has no entry there,
+ * and a backend that is about to take such a descriptor over has to be told
+ * datagram from connection before it puts something else behind the number:
+ * a datagram socket says with its bind() which callsign it wants to hear and
+ * sends with sendto(), neither of which a connection does.  Once the handover
+ * has happened the question is unanswerable, so it is asked here and first.
+ *
+ * Asking the descriptor costs one getsockopt(); a wrong answer is quiet, the
+ * sendto() of a socket that believes itself to be a connection falls through
+ * to the descriptor underneath and answers there, which says nothing about
+ * AX.25.
+ */
+int axsock_fdtype(int fd)
+{
+	int type = 0;
+	socklen_t len = sizeof(type);
+
+	AXSOCK_NEED_REAL();
+	if (real_getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) < 0)
+		return -1;
+	return type;
+}
 
 int AXSOCK_ENTRY(socket)(int domain, int type, int protocol)
 {

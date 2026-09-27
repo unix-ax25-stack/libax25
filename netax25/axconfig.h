@@ -94,6 +94,28 @@ extern char *ax25_config_get_dev(char *);
 extern char *ax25_config_get_port(ax25_address *);
 
 /*
+ * Nonzero if the named port is one the kernel answers for, i.e. its callsign
+ * is the AX.25 address of an interface that was up when the port list was
+ * loaded.  Only the backends ask this, to leave the kernel's ports alone: a
+ * bind naming one of those was already answered by socket() and does not
+ * belong to a userspace backend, however much the server behind it might
+ * also be able to send.
+ */
+extern int ax25_config_port_is_kernel(const char *);
+
+/*
+ * The name in axports of the port a bind address names, 0 on success and 1
+ * with an empty name.  The callsign in the first digipeater slot names the
+ * port, or the source callsign when no slot is given; a "base:suffix" name
+ * that ax25_port_ptr() resolved through the lazy hook is taken from the
+ * remembered entry instead, so the suffix survives the round trip.
+ *
+ * Both backends resolve binds this way and must agree on the answer, so it is
+ * here once rather than in either of them.
+ */
+extern int ax25_config_bind_port(const struct sockaddr *, socklen_t, char *, size_t);
+
+/*
  * This function takes the port name and returns the default window size. On
  * error 0 is returned.
  */

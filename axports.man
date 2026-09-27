@@ -92,9 +92,64 @@ of the upstream in question: the name before the colon picks the
 upstream, the suffix the channel inside it.  This is how the channels
 of one radio server (one upstream in
 .BR agwpe.conf (5))
-are addressed.  When the server's port list is not reachable, the
-position of the entry is used as the upstream index, so the port number
-is position * 16 + channel.
+are addressed.  The suffix belongs to the name in the entry and is not
+something a program adds at run time, so the channels are entries like any
+other port:
+.PP
+.RS
+.nf
+agwpe-direwolf2    DL9SAU-2   0  256  7   Direwolf, 2m
+agwpe-direwolf2:1  DL9SAU-3   0  256  7   Direwolf, 70cm
+agwpe-direwolf2:2  DL9SAU-4   0  256  7   Direwolf, 2m, backup
+.fi
+.RE
+.PP
+A program is pointed at one of them by that name, as at any other port,
+and channel 0 may be written out as
+.I agwpe-direwolf2:0
+as well \-
+the plain name is the short form of that same entry.  A monitor reports
+the entry as well, so a frame is named after the channel it arrived on
+rather than after the radio, which is what
+.BR listen (1)
+prints and what
+.BI "listen \-p " name :1
+matches against.
+.PP
+Every entry has a callsign of its own because this file refuses two entries
+with the same one.  That is also how an AGWPE radio server is put together:
+its ports are given one SSID each, and the callsign an entry carries here is
+the address that channel transmits, so it is the configuration of the radio
+that has to agree with it.  The callsign is the source address of an outgoing
+connection unless the program binds one itself
+.RI ( "call \-s" ).
+.PP
+The suffix needs the server's port list, because only the server knows
+which number a channel has: AGWPE numbers the channels of upstream
+.I i
+as
+.IR i *16 + c ,
+and which
+.I i
+an upstream has is not written down in this file.  A channel the server does
+not list is refused when the socket is bound
+.RB ( EADDRNOTAVAIL ),
+rather than guessed at \-
+a frame sent to the wrong channel cannot be taken back.  When the server is
+running on the machine itself, which is the case for the default
+.B 127.0.0.1:8100
+and for a
+.B /var/run
+socket, the order of
+.BR agwpe.conf (5)
+supplies the index without a server, so a channel resolves there even
+against a server that does not answer the port information query.  A
+suffix above 15 is a mistake in any case: an upstream has sixteen
+channels, and
+.I i *16 + c
+for a
+.I c
+of 99 would name a port of the seventh upstream.
 .PP
 Ports that are served by the AGWPE shim are conventionally named with an
 .B agwpe-
@@ -157,43 +212,36 @@ unchanged.  If libax25 was built with it as well
 .RB ( --enable-userspace-ax25 ),
 the
 .B AXSOCK_BACKEND
-environment variable selects the backend for a whole process:
+environment variable can force one backend for a whole process:
 .B kernel
 passes AF_AX25 and packet sockets through to the OS,
 .B agwpe
 routes them through the shim, and
 .B wampes
-hands them to a WAMPES node.  Without the variable the choice is made
-once per process: on Linux a single probe asks whether the kernel
-answers AF_AX25 (kernel module loaded); if it does the kernel is used,
-otherwise AGWPE.  On platforms without a native stack (macOS, BSD) the
-backend is always
+hands them to a WAMPES node.  It is an override and not the normal way of
+working; without it each port is decided on its own, as described above.  On
+platforms without a native stack (macOS, BSD) there is no kernel to choose,
+so the backend is always
 .B agwpe
 and AXSOCK_BACKEND is ignored.
 .PP
-The per-process switch is a stop-gap.  socket(2) must return a file
-descriptor before the callsign \-\- and therefore the port \-\- is known
-at bind(2)/connect(2) time, so the backend cannot be derived per port
-today.  The planned replacement is socket caching: socket() hands back a
-placeholder descriptor, bind() resolves the callsign against
-.I axports
-and the device field of the matching entry (the
-.B agwpe-
-prefix marks an AGWPE port, anything else a kernel port) and dup2()s
-the real descriptor (kernel socket or AGWPE socketpair) over the
-placeholder, keeping the descriptor number visible to the application
-stable.  That removes AXSOCK_BACKEND altogether and lets kernel,
-AGWPE and WAMPES ports coexist in one process without an environment
-variable.
+What is left of a process-wide decision is only what a port cannot say: a
+port that no backend claims, and a monitor socket, which has no port to name
+at all.  Both fall back to a single probe asking whether the kernel answers
+AF_AX25, and take the kernel if it does, AGWPE if it does not.
 .PP
-The WAMPES backend already works this way.  Its sockets change hands at
+The switch itself is at
 .BR bind (2),
-the first moment the port is known: whoever made the descriptor lets go of it
-and the number the application holds does not change, so kernel, AGWPE and
-WAMPES ports are usable side by side in one process today.  After
+the first moment the port is known.
+.BR socket (2)
+has to return a descriptor before the callsign \-
+and therefore the port \-
+is known, so it returns a placeholder; bind() resolves the name against this
+file and hands the descriptor to whichever backend owns the port, leaving
+the number the application holds untouched.  After
 .BR connect (2)
-it costs nothing at all:
-the descriptor the application holds becomes the connection itself, so
+it costs nothing at all: the descriptor the application holds becomes the
+connection itself, so
 .BR read (2),
 .BR write (2),
 .BR poll (2)

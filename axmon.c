@@ -31,6 +31,7 @@
 #include <sys/socket.h>
 
 #include "netax25/axmon.h"
+#include "axsock_real.h"
 
 /*
  * Is this descriptor the shim's monitor rather than a kernel packet socket?
@@ -61,12 +62,19 @@ int axmon_framed(int fd)
 }
 
 /* recvfrom(), retrying signals: a partial length prefix must not be lost
- * to EINTR or the frame stream desynchronizes.  */
+ * to EINTR or the frame stream desynchronizes.
+ *
+ * The call goes to the shim's entry point rather than to recvfrom().  This
+ * file is part of the image that provides the interposition, and dyld does
+ * not redirect the bindings of that image - see axsock_framed() below for
+ * the same trap, measured - so a plain recvfrom() here went to libc, the
+ * framed stream arrived undecoded, and the monitor was handed a length
+ * where a callsign belonged.  */
 static ssize_t mon_read(int fd, void *buf, size_t len,
 			struct sockaddr *sa, socklen_t *asize)
 {
 	for (;;) {
-		ssize_t n = recvfrom(fd, buf, len, 0, sa, asize);
+		ssize_t n = AXSOCK_ENTRY(recvfrom)(fd, buf, len, 0, sa, asize);
 
 		if (n >= 0)
 			return n;
@@ -78,40 +86,13 @@ static ssize_t mon_read(int fd, void *buf, size_t len,
 ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
 		   struct sockaddr *sa, socklen_t *asize)
 {
-	unsigned char *p = buf;
-	unsigned char hdr[AXMON_PREFIX_LEN];
-	size_t plen = 0;
-	size_t off;
-	ssize_t n;
-
-	if (!framed)
-		return mon_read(fd, buf, buflen, sa, asize);
-
-	for (off = 0; off < AXMON_PREFIX_LEN; ) {
-		n = mon_read(fd, hdr + off, AXMON_PREFIX_LEN - off, sa, asize);
-		if (n <= 0) {
-			if (n == 0)
-				errno = ECONNRESET;
-			return -1;
-		}
-		off += (size_t)n;
-		sa = NULL;	/* the source is fixed within one frame */
-		asize = NULL;
-	}
-	for (off = 0; off < AXMON_PREFIX_LEN; off++)
-		plen = (plen << 8) | hdr[off];
-	if (plen == 0 || plen > buflen) {
-		errno = E2BIG;
-		return -1;
-	}
-	for (off = 0; off < plen; ) {
-		n = mon_read(fd, p + off, plen - off, NULL, NULL);
-		if (n <= 0) {
-			if (n == 0)
-				errno = ECONNRESET;
-			return -1;
-		}
-		off += (size_t)n;
-	}
-	return (ssize_t)plen;
+	/* Both kinds of descriptor hand over one frame per call: the kernel
+	 * one because a packet socket is message oriented, the shim one
+	 * because it takes its header off in recvfrom() before the
+	 * payload reaches us (see netax25/axmon.h).  That is what the
+	 * framing is for - a stream would otherwise run two frames that
+	 * arrive back to back into one read - and it is why the header
+	 * moved into the shim, where the writer of it already was.  */
+	(void) framed;
+	return mon_read(fd, buf, buflen, sa, asize);
 }

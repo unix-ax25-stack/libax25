@@ -55,6 +55,18 @@ extern int axsock_debug;
  */
 #ifdef __APPLE__
 #define AXSOCK_ENTRY(name)	axsock_ep_##name
+/*
+ * A call from inside this library to recvfrom() does not reach the shim:
+ * dyld leaves the bindings of the image that provides the interpose table
+ * alone, so netax25/axmon.c - which is in that image - would read the
+ * framed stream itself and hand the monitor four bytes of length in front
+ * of every frame.  Naming the entry point is what puts the shim back in the
+ * path, and it is why axmon_read() can leave the header to it.  Elsewhere
+ * the entry point is recvfrom() itself, and the strong symbol is already
+ * the shim, which is why the same line works on both.
+ */
+extern ssize_t	axsock_ep_recvfrom(int, void *, size_t, int,
+				     struct sockaddr *, socklen_t *);
 #define real_socket		socket
 #define real_bind		bind
 #define real_connect		connect
@@ -115,6 +127,14 @@ int axsock_backend_now(void);
  */
 int axsock_replace(int fd, int newfd);
 int axsock_placeholder(int fd);
+
+/*
+ * SOCK_DGRAM or SOCK_SEQPACKET behind a descriptor, asked of the descriptor.
+ * A backend taking a descriptor over from somebody else needs this before the
+ * handover, not after: the table that answers for descriptors of ours is gone
+ * by then, and the descriptor behind the number is not ours any more.
+ */
+int axsock_fdtype(int fd);
 
 /*
  * Which SOL_AX25 options may be accepted and ignored, and which must be

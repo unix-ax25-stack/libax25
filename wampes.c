@@ -775,58 +775,15 @@ int wampes_socket(int type)
 static void port_of_bind(const struct sockaddr *addr, socklen_t len,
 			 char *port, size_t portlen)
 {
-	const struct full_sockaddr_ax25 *fsa =
-		(const struct full_sockaddr_ax25 *) addr;
-	ax25_address *which;
-	char *name;
-
-	*port = '\0';
-	if (len < (socklen_t) sizeof(*fsa))
-		return;
-	/* The port is named by the callsign in the first digipeater slot - but
-	 * only by programs that put it there.  call(1) always does; beacon(8)
-	 * does it only when its -c differs from the port's own callsign, and
-	 * binds the bare callsign otherwise.  A socket bound that way could
-	 * not be recognised as a WAMPES one and stayed with AGWPE without a
-	 * word, which is a quiet way to send a beacon nowhere.  So when there
-	 * is no digipeater, ask the source callsign instead: it resolves only
-	 * if it is a port's callsign, and a user's own callsign has no entry
-	 * and answers nothing, which is the right outcome for it.
-	 *
-	 * Only reads it, but says otherwise in the header.
+	/*
+	 * Which port an address names is one question with one answer, and
+	 * agwpe_bind_take() has to be given the same one: a second copy of
+	 * this lookup is what left the AGWPE backend comparing a callsign
+	 * against names and never matching.  The rule and why it is that way
+	 * are with it, in ax25_config_bind_port().
 	 */
-	which = fsa->fsa_ax25.sax25_ndigis > 0
-		? (ax25_address *) &fsa->fsa_digipeater[0]
-		: (ax25_address *) &fsa->fsa_ax25.sax25_call;
-	/* Before the reverse lookup: a "wampes:xnet" resolved through the lazy
-	 * hook has told axconfig.c the intended name against this callsign,
-	 * and what the lookup could answer with - the base entry "wampes" -
-	 * would throw the suffix away and let the node route.  Consumed here,
-	 * so the node gets the interface prefix; a bind that resolved no name
-	 * finds nothing and goes on below.
-	 */
-	if (ax25_config_lazy_take(ax25_ntoa(which), port, portlen) == 0)
-		return;
-	name = ax25_config_get_port(which);
-	if (name == NULL && ax25_config_get_next(NULL) == NULL) {
-		/* The port table belongs to the application: every program in
-		 * the suite calls ax25_config_load_ports() at startup, and a
-		 * program that only had the library preloaded calls nothing at
-		 * all.  With an empty table the port cannot be named, so the
-		 * socket went to AGWPE without a word - and then righted itself
-		 * on the next bind, because the AGWPE path loads the table as a
-		 * side effect.  Load it here, once, rather than leave the
-		 * backend to depend on the order of the binds.
-		 */
-		ax25_config_load_ports();
-		name = ax25_config_get_port(which);
-	}
-	if (name == NULL)
-		return;
-	strncpy(port, name, portlen - 1);
-	port[portlen - 1] = '\0';
+	ax25_config_bind_port(addr, len, port, portlen);
 }
-
 
 /* Defined with the rest of the receiving side, below. */
 static void claim_ui(struct wampes_sock *s);
@@ -876,6 +833,16 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
 		 * about AX.25.
 		 */
 		int type = agwpe_socktype(fd);
+
+		if (type < 0)
+			/* The table has no entry: the descriptor was not built
+			 * here, so a kernel AF_AX25 socket on a host that has
+			 * one - the AGWPE backend and socket() having chosen
+			 * the kernel for the process.  The descriptor itself
+			 * still knows, and once the handover below has put a
+			 * placeholder behind the number nothing does.
+			 */
+			type = axsock_fdtype(fd);
 
 		if (agwpe_forget(fd) != 0 && axsock_placeholder(fd)) {
 			*ret = -1;

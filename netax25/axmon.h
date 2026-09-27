@@ -42,7 +42,13 @@
  *
  * The shim therefore delivers every raw frame as one unit:
  *
- *	[4 byte big-endian payload length][payload]
+ *	[4 byte big-endian payload length][1 byte port][payload]
+ *
+ * The shim takes that header off again in recvfrom(), so an application
+ * reads one payload per call and never sees it.  The port is in the header
+ * because the payload does not say which channel it arrived on, and one
+ * value per socket cannot say it either: the frame an application reads is
+ * not the frame written last once two channels are busy at once.
  *
  * Applications detect the shim backend with
  *
@@ -50,8 +56,8 @@
  *
  * which the shim answers with ENOPROTOOPT for its virtual sockets; a
  * kernel packet socket answers SO_TYPE == SOCK_PACKET and is read one
- * frame per recvfrom() exactly as before.  Either way the payload is
- * the KISS framed packet (leading channel byte) listen(1) expects.
+ * frame per recvfrom() exactly as before.  Either way the payload is the
+ * KISS framed packet (leading channel byte) listen(1) expects.
  */
 
 #ifndef	_AXMON_H
@@ -60,7 +66,9 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-#define	AXMON_PREFIX_LEN	4
+/* Both ends of this are inside this library, so it is not a protocol
+ * anything outside has to agree on.  */
+#define	AXMON_HDR_LEN		5
 #define	AXMON_FRAME_MAX		1500
 
 #ifdef __cplusplus
@@ -80,6 +88,11 @@ extern int axmon_framed(int fd);
  * errno set - E2BIG if the frame does not fit in buflen, ECONNRESET if
  * the monitor closed mid frame.  sa/asize are filled in as recvfrom()
  * would, and may be NULL.
+ *
+ * The shim strips its own header before the payload arrives, so both kinds
+ * of descriptor hand over exactly one frame per call and the answer from
+ * axmon_framed() no longer changes what this does.  It is still worth
+ * asking: the two are not told apart anywhere else.
  */
 extern ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
 			  struct sockaddr *sa, socklen_t *asize);

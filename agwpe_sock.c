@@ -61,8 +61,10 @@
 #include "netax25/agwpe.h"
 #include "netax25/agwpe_client.h"
 #include "netax25/axmon.h"
+#include "netax25/agwpe_config.h"
 #include "axsock_real.h"
 #include "agwpe_sock.h"
+#include "pathnames.h"
 
 #define	AXSOCK_MAX_SOCK		128
 #define	AXSOCK_CONNECT_TIMEOUT	60
@@ -300,6 +302,9 @@ struct axsock_gport {
 #define	AXSOCK_GPORTS	(AGWPE_PORT_LOOP + 1)	/* flat ports 0..255 */
 static struct axsock_gport	axsock_gports[AXSOCK_GPORTS];
 static int			axsock_gnports = -1;	/* -1 = not fetched */
+static time_t			axsock_gports_asked;	/* last ask, for the
+							 * retry below */
+#define AXSOCK_GPORTS_RETRY	30	/* seconds before asking again */
 
 static int axsock_read_full(int fd, void *buf, size_t len)
 {
@@ -404,6 +409,20 @@ static int axsock_ports_fetch(void)
 
 	if (axsock_gnports >= 0)
 		return 0;
+
+	/* A server that does not answer the query must not be asked again
+	 * for every frame that arrives: the ask is a connect and a round
+	 * trip, and the name a frame is reported under is wanted far more
+	 * often than the table behind it can change.  Wait a while before
+	 * asking again, so a server that starts answering is still picked
+	 * up on its own.  */
+	if (axsock_gports_asked != 0) {
+		time_t now = time(NULL);
+
+		if (now - axsock_gports_asked < AXSOCK_GPORTS_RETRY)
+			return -1;
+	}
+	axsock_gports_asked = time(NULL);
 
 	host = getenv("AXSOCK_HOST");
 	axsock_host = (host != NULL && host[0] != '\0') ?
@@ -570,15 +589,73 @@ static const char *axsock_strip_prefix(const char *name)
  */
 static int axsock_call_base_equal(const char *a, const char *b);
 
-static unsigned char axsock_port_for(const char *call)
+static int agwpe_local_upstream(const char *base);
+static int axsock_port_of_entry(const char *entry);
+
+/*
+ * Is the AGWPE server this shim talks to on this machine?
+ *
+ * That decides where an upstream's index may be read from.  On this host
+ * the agwpe.conf in front of us is the server's own file, and the position
+ * of an upstream in it is the index AGWPE numbers its ports from.  A server
+ * elsewhere has an agwpe.conf of its own, which this one need not be, so
+ * nothing here says anything about it.
+ */
+static int axsock_server_local(void)
+{
+	static int cached = -1;
+	const char *host;
+	struct addrinfo hints, *res, *ai;
+	int local = 0;
+
+	if (cached >= 0)
+		return cached;
+
+	host = getenv("AXSOCK_HOST");
+	if (host == NULL || host[0] == '\0') {
+		/* The default server is ax25netd on 127.0.0.1.  */
+		cached = 1;
+		return cached;
+	}
+	if (host[0] == '/') {
+		/* A unix socket is on this machine by definition.  */
+		cached = 1;
+		return cached;
+	}
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	if (getaddrinfo(host, NULL, &hints, &res) == 0) {
+		for (ai = res; ai != NULL; ai = ai->ai_next) {
+			if (ai->ai_family == AF_INET &&
+			    (ntohl(((struct sockaddr_in *)ai->ai_addr)
+				    ->sin_addr.s_addr) >> 24) == 127) {
+				local = 1;
+				break;
+			}
+			if (ai->ai_family == AF_INET6 &&
+			    IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)
+						   ai->ai_addr)->sin6_addr)) {
+				local = 1;
+				break;
+			}
+		}
+		freeaddrinfo(res);
+	}
+	cached = local;
+	return cached;
+}
+
+/* The AGWPE port of the entry that owns this callsign, or -1 when nothing
+ * can say which port that is.  A callsign that is in no entry at all is -1
+ * as well: a caller that named no port has nothing to go on and has to
+ * hear that rather than be handed the first one.  */
+static int axsock_port_for(const char *call)
 {
 	char *name, *addr;
-	unsigned char i = 0, pos = 0;
-	char base[24];
+	unsigned char i = 0;
 	const char *entry = NULL;
-	const char *colon;
-	int idx;
-	size_t blen;
 
 	ax25_config_load_ports();
 
@@ -589,7 +666,6 @@ static unsigned char axsock_port_for(const char *call)
 		addr = ax25_config_get_addr(name);
 		if (addr != NULL && strcasecmp(addr, call) == 0) {
 			entry = name;
-			pos = i;
 			break;
 		}
 	}
@@ -600,18 +676,51 @@ static unsigned char axsock_port_for(const char *call)
 			addr = ax25_config_get_addr(name);
 			if (addr != NULL && axsock_call_base_equal(addr, call)) {
 				entry = name;
-				pos = i;
 				break;
 			}
 		}
 	}
 	if (entry == NULL)
-		return 0;
+		return -1;
+
+	return axsock_port_of_entry(entry);
+}
+
+/*
+ * The AGWPE port of one axports entry.
+ *
+ * The server's port list decides, because the numbering belongs to the
+ * server: AGWPE gives the channels of upstream i the numbers i*16+c, and
+ * which i a given upstream has is not written down in axports.  The list
+ * is one command away whenever the server is a real AGWPE server.
+ *
+ * It is not there when the server does not answer it - a stub in front of
+ * the socket, a server that has not finished coming up, or a test rig with
+ * nothing behind it at all.  When the server is on this machine then
+ * agwpe.conf is the server's own file and the position of an upstream in it
+ * is that index, so i*16+c is exact and no server is needed for it.  A
+ * server elsewhere cannot be answered for that way, and then there is
+ * nothing left but to refuse.
+ *
+ * Refusing is the point of the whole arrangement.  The guess that stood
+ * here took the position of the entry in axports for the index of the
+ * upstream, which is a different number: it agreed while an upstream had
+ * one entry, and from the second entry on it was out by a whole stride, so
+ * the second channel of the first radio went out on a port that belongs to
+ * the second radio.  It did so quietly.  A frame on the wrong frequency is
+ * the one mistake in this file that cannot be taken back, and nothing at
+ * the sending end of it says so.
+ */
+static int axsock_port_of_entry(const char *entry)
+{
+	char base[24];
+	const char *colon;
+	int idx, p, up;
+	size_t blen;
 
 	/* Optional ":N" suffix selects a channel of the named upstream,
-	 * not a second upstream: "direwolf:1" is interface 1 (channel 1)
-	 * of the upstream "direwolf", the way netd numbers the channels
-	 * of one radio server.  */
+	 * not a second upstream: "direwolf:1" is channel 1 of the upstream
+	 * "direwolf", the way AGWPE numbers the channels of one server.  */
 	idx = -1;
 	colon = strrchr(entry, ':');
 	if (colon != NULL && colon != entry && colon[1] != '\0') {
@@ -636,19 +745,31 @@ static unsigned char axsock_port_for(const char *call)
 	if (strcasecmp(base, "loop") == 0)
 		return AGWPE_PORT_LOOP;
 
-	if (axsock_ports_fetch() == 0) {
-		int p = axsock_gport_channel(axsock_strip_prefix(base),
-					     (idx >= 0) ? idx : 0);
-
-		if (p >= 0)
-			return (unsigned char)p;
+	/* An upstream has sixteen channels and no more, so a suffix beyond
+	 * that names nothing: i*16+c for c of 99 is a port of the seventh
+	 * upstream, and letting the arithmetic produce one is the very thing
+	 * this function refuses to do.  */
+	if (idx >= 16) {
+		if (axsock_debug)
+			fprintf(stderr, "axsock: '%s': an upstream has 16 "
+				"channels, 0 to 15\n", entry);
+		return -1;
 	}
 
-	/* Best effort without the table: the positional mapping extended
-	 * with the channel (upstream index = position in axports).  */
-	if (idx >= 0)
-		return (unsigned char)(pos * 16 + idx);
-	return (unsigned char)pos;
+	if (axsock_ports_fetch() == 0) {
+		p = axsock_gport_channel(axsock_strip_prefix(base),
+					 (idx >= 0) ? idx : 0);
+		if (p >= 0)
+			return p;
+	}
+
+	if (axsock_server_local()) {
+		up = agwpe_local_upstream(axsock_strip_prefix(base));
+		if (up >= 0)
+			return up * 16 + (idx >= 0 ? idx : 0);
+	}
+
+	return -1;
 }
 
 /*
@@ -670,54 +791,53 @@ static unsigned char axsock_port_for(const char *call)
  * differs.
  */
 
-static unsigned char axsock_bind_port(const struct sockaddr *addr,
-				      socklen_t len, const char *local,
-				      int *named)
+static int axsock_bind_port(const struct sockaddr *addr,
+			    socklen_t len, const char *local,
+			    int *named)
 {
 	const struct full_sockaddr_ax25 *fsa =
 		(const struct full_sockaddr_ax25 *) addr;
+	int p;
 
 	if (len >= sizeof(struct full_sockaddr_ax25) &&
 	    fsa->fsa_ax25.sax25_ndigis > 0) {
 		*named = 1;
+		/* A port was named, so it has to be a port.  If the entry
+		 * says a channel the server does not list, that is a
+		 * mistake in axports and this is where it is caught.  */
 		return axsock_port_for(ax25_ntoa(&fsa->fsa_digipeater[0]));
 	}
+
 	*named = 0;
-	return axsock_port_for(local);
+	/* Nothing named a port.  A source callsign that is itself a port's
+	 * still says which one; anything else has nothing to go on, and the
+	 * first port is what such a socket has always used.  */
+	p = axsock_port_for(local);
+	return (p >= 0) ? p : 0;
 }
 
 /* Reverse of axsock_port_for(): the configured port name for an AGWPE
  * port number, as seen in the sockaddr of a raw monitor socket.  */
+/* The axports entry that is on the given AGWPE port, as seen in the
+ * sockaddr of a raw monitor socket.
+ *
+ * The name is the entry and not the upstream, because one upstream has one
+ * entry per channel: a monitor that reported only the upstream could not
+ * tell channel 0 from channel 1, and "listen -p radio0:5" would have nothing
+ * to match.  Asking each entry which port it is answers both with the same
+ * code that does the sending, so the name a frame is reported under and the
+ * port it went out on cannot disagree.  The loop port is no special case
+ * here: the entry named loop is on it like any other.
+ */
 static const char *axsock_port_name(unsigned char port)
 {
 	char *name;
-	unsigned char i = 0;
-
-	if (axsock_gnports < 0)
-		(void)axsock_ports_fetch();
-	if (axsock_gnports >= 0) {
-		int k;
-
-		for (k = 0; k < axsock_gnports; k++)
-			if (axsock_gports[k].port == port &&
-			    axsock_gports[k].up[0] != '\0')
-				return axsock_gports[k].up;
-	}
 
 	ax25_config_load_ports();
 	for (name = ax25_config_get_next(NULL); name != NULL;
-	     name = ax25_config_get_next(name), i++) {
-		if (i == port)
+	     name = ax25_config_get_next(name))
+		if (axsock_port_of_entry(name) == port)
 			return name;
-	}
-
-	if (port == AGWPE_PORT_LOOP) {
-		for (name = ax25_config_get_next(NULL); name != NULL;
-		     name = ax25_config_get_next(name)) {
-			if (strcasecmp(name, "loop") == 0)
-				return name;
-		}
-	}
 
 	return NULL;
 }
@@ -1381,27 +1501,32 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 	 * strips again.  */
 	if (hdr->datakind == AGWPE_DK_RAW) {
 		for (s = axsock_list; s != NULL; s = s->next) {
-			unsigned char fbuf[AXMON_PREFIX_LEN + AXMON_FRAME_MAX];
+			unsigned char fbuf[AXMON_HDR_LEN + AXMON_FRAME_MAX];
 			ssize_t n;
 
 			if (!s->raw || s->peer < 0)
 				continue;
 			if (!axsock_raw_match(s, hdr->port))
 				continue;
-			/* Deliver each frame as one length prefixed unit
-			 * (see netax25/axmon.h): the monitor socketpair is
-			 * a byte stream, and a stream merges frames that
+			/* Deliver each frame as one headed unit (see
+			 * netax25/axmon.h): the monitor socketpair is a
+			 * byte stream, and a stream merges frames that
 			 * arrive back to back, which would make listen(1)
-			 * decode past the end of the first frame.  */
+			 * decode past the end of the first frame.  The
+			 * port rides along in the header - one value per
+			 * socket cannot name them, because the frame an
+			 * application reads is not the frame written
+			 * last once two channels are busy at once.  */
 			if (len == 0 || len > AXMON_FRAME_MAX)
 				continue;	/* monitor cannot show it */
 			fbuf[0] = (unsigned char)(len >> 24);
 			fbuf[1] = (unsigned char)(len >> 16);
 			fbuf[2] = (unsigned char)(len >> 8);
 			fbuf[3] = (unsigned char)len;
-			memcpy(fbuf + AXMON_PREFIX_LEN, data, len);
-			n = real_write(s->peer, fbuf, AXMON_PREFIX_LEN + len);
-			if (n != (ssize_t)(AXMON_PREFIX_LEN + len))
+			fbuf[4] = hdr->port;
+			memcpy(fbuf + AXMON_HDR_LEN, data, len);
+			n = real_write(s->peer, fbuf, AXMON_HDR_LEN + len);
+			if (n != (ssize_t)(AXMON_HDR_LEN + len))
 				continue;	/* monitor fell behind: drop */
 			s->port = hdr->port;
 		}
@@ -2062,6 +2187,117 @@ int agwpe_socktype(int fd)
 	return type;
 }
 
+/*
+ * Do the upstream names of the local ax25netd include this one?
+ *
+ * agwpe.conf is where the upstreams of an ax25netd on this machine are named,
+ * and it is the file the axports entry corresponds to.  Reading it answers the
+ * question for the ordinary single-machine setup without anything on the wire,
+ * which matters: a bind that had to ask the server would put a TCP connection
+ * and netd's three second answer time in the way of every call on a port of
+ * ours, and of every program that happens to bind one.
+ *
+ * Read once per process, and only if the file is there - agwpe_config_load()
+ * fails quietly with ENOENT when it is not, which is the normal state of a
+ * machine whose server is on the other side of the network and whose answer
+ * has to come from the port table instead.  A file that exists and does not
+ * parse says so, as it should: it is the server's own configuration and the
+ * operator wrote it.
+ *
+ * The path is the compiled-in one, the same default netd reads.  A netd that
+ * was pointed somewhere else is not served from here - the name is simply not
+ * found, and the port table answers for it, so a shim configured for a remote
+ * server keeps working.
+ */
+/* The position of this upstream in the local agwpe.conf, or -1 when the
+ * file has no such upstream.  That position is the index AGWPE numbers the
+ * upstream's ports from, so it is worth having: it is the only way to learn
+ * a port number without asking the server, and it is exact whenever the
+ * server is on this machine and therefore reads this very file.  */
+static int agwpe_local_upstream(const char *base)
+{
+	static struct agwpe_config cfg;
+	static int loaded = -1;		/* -1 not read yet, 0 no, 1 read */
+	int i;
+
+	if (loaded < 0) {
+		if (agwpe_config_load(CONF_AGWPE_FILE, &cfg) < 0)
+			loaded = 0;		/* no file, or unreadable */
+		else
+			loaded = 1;
+	}
+	if (!loaded)
+		return -1;
+
+	for (i = 0; i < cfg.count; i++)
+		if (strcasecmp(cfg.upstreams[i].name, base) == 0)
+			return i;
+
+	return -1;
+}
+
+/*
+ * Does the AGWPE server serve this port?
+ *
+ * The kernel's ports are not up for discussion and are asked about first: a
+ * bind that names one was already answered by socket(), and taking it over
+ * would put frames on a radio the process never asked for.  Only the port
+ * list can say that, and it can say it wrongly - "is a kernel port" is asked
+ * of interfaces that were up while it was read, so a port whose TNC is
+ * unplugged, or on a machine with no ax25 module loaded at all, looks exactly
+ * like a port of a node.  Every port there is one.  Ownership decided that way
+ * is decided by a cable, and a port meant for the local stack was handed to
+ * netd and sent out of the AGWPE upstream instead.
+ *
+ * So the rest comes from the configuration.  The name is compared the way the
+ * rest of the code compares it: an optional "agwpe-" marker and a ":N"
+ * channel suffix come off first, since the prefix only ever said which
+ * upstream of several was meant, and the suffix which of its channels.  The
+ * virtual loopback upstream is ours by construction wherever it is named,
+ * because axsock_port_for() sends it there and the two answers have to agree.
+ *
+ * The local agwpe.conf decides the ordinary case; the server's own port table
+ * is asked only for a name the file does not have, which is the machine whose
+ * server is elsewhere.  A name neither knows is not ours, and the descriptor
+ * goes back to bind() to be refused in the kernel's words - the port is
+ * either mistyped or meant for a stack that has no such port, and both are
+ * better said than guessed at.
+ */
+static int agwpe_owns_port(const char *name)
+{
+	const char *base;
+	char n[32];
+	const char *colon;
+	size_t len;
+
+	if (ax25_config_port_is_kernel(name))
+		return 0;
+
+	colon = strrchr(name, ':');
+	len = colon ? (size_t) (colon - name) : strlen(name);
+	if (len == 0 || len >= sizeof(n))
+		return 0;
+	memcpy(n, name, len);
+	n[len] = '\0';
+	base = axsock_strip_prefix(n);
+
+	if (strcasecmp(base, "loop") == 0)
+		return 1;
+	if (agwpe_local_upstream(base) >= 0)
+		return 1;
+
+	if (axsock_gnports < 0 && axsock_ports_fetch() != 0) {
+		if (axsock_debug)
+			fprintf(stderr, "axsock: no AGWPE port table at %s:%d "
+				"and no upstream '%s' in %s, so port '%s' is "
+				"not ours\n", axsock_host, axsock_port, base,
+				CONF_AGWPE_FILE, name);
+		return 0;
+	}
+
+	return axsock_gport_channel(base, 0) >= 0;
+}
+
 int agwpe_forget(int fd)
 {
 	struct axsock_sock *s, **pp;
@@ -2207,6 +2443,99 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 	return 1;
 }
 
+/*
+ * A socket entry for a descriptor number this backend did not hand out.
+ *
+ * axsock_alloc_sock_locked() builds the pair and keeps the application end
+ * for itself; here the application already holds a number and only the pair is
+ * new.  So the pair's own application end is closed and the given number takes
+ * its place, which leaves the router end - the one the dispatcher writes
+ * inbound frames into and reads outbound frames from - exactly as it was.
+ * Call with the lock held.
+ */
+static struct axsock_sock *axsock_adopt_sock_locked(int fd, int type)
+{
+	struct axsock_sock *s;
+	int old;
+
+	if ((s = axsock_alloc_sock_locked(type)) == NULL)
+		return NULL;
+	old = s->fd;
+	s->fd = fd;
+	close(old);
+	return s;
+}
+
+/*
+ * Take a descriptor over that socket() gave to somebody else.
+ *
+ * bind() is the first moment the port is known, and therefore the first moment
+ * the backend can be chosen per port rather than per process - the one
+ * comment in axsock.c has been promising for both backends since a node could
+ * do it and the server could not.  socket() had to settle the question for
+ * the whole process before the port was known, and on a machine that has a
+ * kernel stack the answer is always the kernel, so a program opening an AGWPE
+ * port there got a kernel socket and handed it to a kernel that has no such
+ * port: bind() answered EADDRNOTAVAIL, which says nothing about where the port
+ * really is.
+ *
+ * The port belongs to us when the kernel does not have it.  Its name comes from
+ * the port list, not from the address: the address carries a callsign, and it
+ * was compared with a table of names here, so an AGWPE port of the user's was
+ * never recognised and bind() left the descriptor to a kernel that has no
+ * such port.  ax25_config_bind_port() resolves the address to the axports
+ * name, the same way wampes_bind() does it, and the verdict is the one bit the
+ * port list remembered.
+ */
+static int agwpe_bind_take(int fd, const struct sockaddr *addr, socklen_t len,
+			   struct axsock_sock **sp, int *ret)
+{
+	char port[32];
+	int type;
+
+	if (!axsock_is_ax25(addr, len))
+		return 0;			/* not ours, and not AX.25 */
+
+	/* Which port the address names, as a name in axports: the digipeater
+	 * slot first, the source callsign where there is none, and a lazy
+	 * "base:suffix" where one was resolved through the hook. */
+	if (ax25_config_bind_port(addr, len, port, sizeof(port)) != 0)
+		return 0;			/* names no port at all */
+	if (!agwpe_owns_port(port)) {
+		if (axsock_debug)
+			fprintf(stderr, "axsock: fd=%d stays with the kernel, "
+				"port '%s' is a kernel port\n", fd, port);
+		return 0;
+	}
+
+	/* What kind of socket this is was decided at socket() and the
+	 * descriptor still knows; after the placeholder below nothing does.
+	 * Only the two kinds this backend serves are taken - a raw or
+	 * packet socket bound to a port of ours is none of our business, and
+	 * the kernel's answer to it is a better one than ours would be. */
+	if ((type = axsock_fdtype(fd)) != SOCK_SEQPACKET && type != SOCK_DGRAM)
+		return 0;
+
+	/* The kernel socket leaves the number now and an inert one takes its
+	 * place, so that from here on the application is talking to us and
+	 * not also holding a live socket for a port the server serves. */
+	*ret = -1;
+	if (axsock_placeholder(fd) != 0)
+		return 1;
+
+	pthread_mutex_lock(&axsock_lock);
+	*sp = axsock_adopt_sock_locked(fd, type);
+	pthread_mutex_unlock(&axsock_lock);
+	if (*sp == NULL)
+		return 1;			/* errno from the allocator */
+
+	if (axsock_debug)
+		fprintf(stderr, "axsock: fd=%d taken over for port '%s'\n",
+			fd, port);
+	*ret = 0;
+	return 0;				/* ours now: carry on below */
+}
+
 int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 		      int *ret)
 {
@@ -2217,8 +2546,10 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 	s = axsock_find_locked(fd);
 	pthread_mutex_unlock(&axsock_lock);
 
+	if (s == NULL && agwpe_bind_take(fd, addr, len, &s, ret))
+		return 1;			/* taken over, or refused with *ret */
 	if (s == NULL)
-		return 0;
+		return 0;			/* a port of the kernel's */
 
 	/* SOCK_PACKET monitor (ax25-apps/listen -p, net2kiss -i): the app
 	 * binds it to a device name (the name sits in sa_data; the family is
@@ -2253,7 +2584,21 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 
 	sa = (const struct sockaddr_ax25 *)addr;
 	axsock_copy_call(s->local, ax25_ntoa(&sa->sax25_call));
-	s->port = axsock_bind_port(addr, len, s->local, &s->port_named);
+	{
+		int p = axsock_bind_port(addr, len, s->local,
+					 &s->port_named);
+
+		if (p < 0) {
+			if (axsock_debug)
+				fprintf(stderr, "axsock: bind fd=%d local='%s': "
+					"the AGWPE server does not list that "
+					"channel\n", fd, s->local);
+			errno = EADDRNOTAVAIL;
+			*ret = -1;
+			return 1;
+		}
+		s->port = (unsigned char)p;
+	}
 
 	/*
 	 * A datagram socket says with its bind() which callsign it wants to
@@ -2334,8 +2679,12 @@ int agwpe_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	 * station, and a station is not in axports, so the lookup fails
 	 * and lands the call on port 0.
 	 */
-	if (!s->port_named)
-		s->port = axsock_port_for(s->remote);
+	if (!s->port_named) {
+		int p = axsock_port_for(s->remote);
+
+		if (p >= 0)
+			s->port = (unsigned char)p;
+	}
 
 	axsock_register_locked(s->local, s->port, 0);
 	s->registered = 1;
@@ -2468,8 +2817,12 @@ int agwpe_sendto(int fd, const void *buf, size_t len,
 		 * beacon addressed to a station therefore left on port 0
 		 * whatever port it had been bound to.
 		 */
-		if (!s->port_named)
-			s->port = axsock_port_for(target);
+		if (!s->port_named) {
+			int p = axsock_port_for(target);
+
+			if (p >= 0)
+				s->port = (unsigned char)p;
+		}
 
 		if (axsock_debug)
 			fprintf(stderr, "axsock: sendto fd=%d type=%d local='%s' port=%d target='%s' len=%zd\n",
@@ -2641,6 +2994,88 @@ static ssize_t agwpe_ui_read(struct axsock_sock *s, void *buf, size_t len,
 	return (ssize_t) take;
 }
 
+/*
+ * One frame from a raw monitor, with the header taken off.
+ *
+ * The header never leaves this file: the writer above and axmon_read()
+ * below are both part of this library, so there is no version to keep in
+ * step with anything outside it.  Splitting it here is what lets the port
+ * travel with its own frame - see the writer - instead of the reader
+ * guessing it from one value per socket.
+ *
+ * A short read in the middle is normal on a stream, and a signal in the
+ * middle must not be mistaken for one: the frame is assembled across both,
+ * because a reader that restarted the header would desynchronize the stream
+ * for good.
+ */
+static ssize_t agwpe_mon_read(int fd, void *buf, size_t len,
+			      unsigned char *portp)
+{
+	unsigned char hdr[AXMON_HDR_LEN];
+	unsigned char *p = buf;
+	size_t off, plen;
+	ssize_t n;
+
+	for (off = 0; off < AXMON_HDR_LEN; ) {
+		n = real_read(fd, hdr + off, AXMON_HDR_LEN - off);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (n == 0) {
+			/* Closed between frames is the end of the
+			 * monitor; closed inside one is a cut frame. */
+			errno = off == 0 ? EPIPE : ECONNRESET;
+			return -1;
+		}
+		off += (size_t)n;
+	}
+	plen = ((size_t)hdr[0] << 24) | ((size_t)hdr[1] << 16) |
+	       ((size_t)hdr[2] << 8) | (size_t)hdr[3];
+	*portp = hdr[4];
+	if (axsock_debug)
+		fprintf(stderr, "axsock: mon_read len=%zu port=%u buflen=%zu\n",
+			plen, *portp, len);
+
+	if (plen == 0 || plen > AXMON_FRAME_MAX) {
+		/* The writer never produces either, so this is a peer we do
+		 * not understand.  Nothing can resynchronize that. */
+		errno = EPROTO;
+		return -1;
+	}
+	if (plen > len) {
+		/* Too small a buffer is the caller's, not the stream's:
+		 * drop the frame whole so the next one still lines up. */
+		for (off = 0; off < plen; ) {
+			n = real_read(fd, hdr, sizeof(hdr));
+			if (n < 0 && errno == EINTR)
+				continue;
+			if (n <= 0) {
+				errno = ECONNRESET;
+				return -1;
+			}
+			off += (size_t)n;
+		}
+		errno = E2BIG;
+		return -1;
+	}
+	for (off = 0; off < plen; ) {
+		n = real_read(fd, p + off, plen - off);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (n == 0) {
+			errno = ECONNRESET;
+			return -1;
+		}
+		off += (size_t)n;
+	}
+	return (ssize_t)plen;
+}
+
 int agwpe_recvfrom(int fd, void *buf, size_t len,
 			struct sockaddr *addr, socklen_t *addrlen, ssize_t *ret)
 {
@@ -2658,6 +3093,35 @@ int agwpe_recvfrom(int fd, void *buf, size_t len,
 	 * frame - see agwpe_ui_deliver_locked() - so it is not read raw. */
 	if (s->type == SOCK_DGRAM && !s->raw) {
 		*ret = agwpe_ui_read(s, buf, len, addr, addrlen);
+		return 1;
+	}
+
+	/* A monitor is fed by the writer in axsock_dispatch(), so it is read
+	 * the same way: header first, then exactly the one frame it named. */
+	if (s->raw && s->peer >= 0) {
+		unsigned char port = 0;
+
+		n = agwpe_mon_read(fd, buf, len, &port);
+		if (n < 0) {
+			*ret = n;
+			return 1;
+		}
+		if (addr != NULL && addrlen != NULL) {
+			struct sockaddr *sa = addr;
+			const char *name;
+			socklen_t want = *addrlen;
+
+			if (want > sizeof(struct sockaddr))
+				want = sizeof(struct sockaddr);
+			memset(sa, 0, want);
+			sa->sa_family = AF_PACKET;
+			name = axsock_port_name(port);
+			if (name != NULL)
+				strncpy(sa->sa_data, name,
+					sizeof(sa->sa_data) - 1);
+			*addrlen = sizeof(struct sockaddr);
+		}
+		*ret = n;
 		return 1;
 	}
 
@@ -3135,8 +3599,22 @@ int agwpe_ioctl(int fd, unsigned long request, void *arg, int *ret)
 			plen = 7;
 		}
 
-		agwpe_header_init(&hdr, axsock_port_for(portcall),
-				  AGWPE_CMD_CTL, 0, sfrom, sto, plen);
+		{
+			/* A control frame belongs to a port.  If the address
+			 * names an entry whose port cannot be resolved, say
+			 * so rather than set the parameters of some other
+			 * channel's link.  */
+			int p = axsock_port_for(portcall);
+
+			if (p < 0) {
+				pthread_mutex_unlock(&axsock_lock);
+				errno = EADDRNOTAVAIL;
+				*ret = -1;
+				return 1;
+			}
+			agwpe_header_init(&hdr, (unsigned char)p,
+					  AGWPE_CMD_CTL, 0, sfrom, sto, plen);
+		}
 		if (agwpe_client_send_frame(axsock_agwpe, &hdr, payload) != 0) {
 			int e = agwpe_client_err(axsock_agwpe);
 

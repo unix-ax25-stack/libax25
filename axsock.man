@@ -22,12 +22,25 @@ node.  Everything that is not AX.25 falls through to the real call.
 This page is about the interception itself \-\- which calls it answers, how to
 get it in front of a program that was not built for it, what it cannot reach,
 and which environment variables steer it.  Which backend serves which port is
-a different question, answered by
+a different question, and it is settled per port, at
+.BR bind (2),
+out of the configuration rather than out of a probe:
 .BR axports (5)
-and
-.BR wampes.conf (5);
-the AGWPE backend itself keeps one connection to the server named by the
-environment variables
+names the ports, the ones whose callsign is the AX.25 address of an interface
+that is up are the kernel's, and of the rest the ones named in
+.BR wampes.conf (5)
+belong to a node while the AGWPE backend takes those it recognises as an
+upstream name.  The AGWPE backend recognises an upstream by the name
+.BR agwpe.conf (5)
+gives it, or, where that file does not have it, by the port table the server
+reports over the connection described below.  An entry of
+.B axports
+that no backend claims stays with the kernel, which refuses it in its own
+words if it has no such port.
+.LP
+The AGWPE backend keeps one connection
+to the server named by
+the environment variables
 .BR AXSOCK_HOST " / " AXSOCK_PORT .
 By default that server is an
 .BR ax25netd (8)
@@ -270,7 +283,8 @@ or
 .BR direwolf )
 has to be reachable, or
 .BR socket (2)
-fails.
+fails unless a WAMPES node is configured, in which case the socket is handed
+out and stays quiet instead.
 .TP 8
 WAMPES
 works through the same monitor.  The WAMPES service protocol has no monitor
@@ -281,6 +295,10 @@ raw monitor as
 records, where a packet socket picks them up like any AGWPE frame, with the
 digipeaters that have already repeated a frame marked
 .BR * .
+The frames are UI frames, and only UI frames: a node keeps AX.25 level 2 to
+itself, so a connection it carries is traced on its own console and not here.
+An AGWPE upstream is not limited this way \-\- it hands over the frames it
+hears raw, link establishment included.
 So an AGWPE server
 .RB ( ax25netd (8))
 has to be reachable here too.  When none is, a packet socket is handed out
@@ -288,6 +306,19 @@ all the same and stays quiet rather than failing, because a program that
 opens a monitor beside its real work should lose one feature and not its
 whole run; a line on standard error says so under
 .BR AXSOCK_DEBUG .
+.LP
+A packet socket is not an AX.25 socket and has no
+.BR bind (2)
+that could name a port, so this is the one place where the per-port choice
+above does not apply: a monitor follows the backend of the whole program, and
+a program that has a kernel AX.25 stack monitors the kernel and sees only
+what the kernel carries.  The frames served from userspace were never given
+to the kernel and are not in that stream.  Set
+.B AXSOCK_BACKEND
+to
+.B agwpe
+to monitor the AGWPE feed instead, and the kernel's own frames are then the
+ones that go unseen.
 .SH ENVIRONMENT
 .TP
 .B AXSOCK_BACKEND
@@ -297,10 +328,11 @@ or
 .BR wampes ,
 forcing one backend for the whole process.  It is an override and not the
 normal way: without it the choice falls per port at
-.BR bind (2)
-for WAMPES ports, and once per process otherwise \-\- a single probe asks
-whether the kernel answers AF_AX25 and takes it if it does, AGWPE if it does
-not.  See
+.BR bind (2),
+out of the configuration as described above, and what is left over \-\- a port
+no backend claims, and every monitor socket \-\- is decided once per process,
+a single probe asking whether the kernel answers AF_AX25 and taking it if it
+does, AGWPE if it does not.  See
 .BR axports (5).
 .TP
 .B AXSOCK_DEBUG

@@ -136,6 +136,14 @@ struct axsock_sock {
 	int			port_named;	/* bind named the port itself, in
 					 * the digipeater slot - connect()
 					 * must not talk it over */
+	char			portname[16];	/* the name the bind asked for,
+					 * kept because a port that no
+					 * upstream serves still gets frames
+					 * to ax25netd, and this is the only
+					 * half of the answer that can be
+					 * printed afterwards: the number
+					 * alone is not the name and cannot
+					 * be read back as one */
 	int			has_peer_thread; /* accepted: a reader thread
 						   * forwards outbound data and
 						   * owns the teardown */
@@ -647,6 +655,79 @@ static int axsock_server_local(void)
 	return cached;
 }
 
+/* The name of the axports entry that owns this callsign, into a buffer the
+ * caller owns, or nothing at all when no entry has it.
+ *
+ * This is axsock_port_for()'s answer to the same question, kept separate
+ * because the number and the name have to be able to disagree.  Both walk
+ * the same list and find the same entry, but axsock_port_for() then asks a
+ * second question - which upstream serves this entry - and that one is
+ * allowed to fail.  An entry no agwpe.conf upstream serves is exactly the
+ * case worth being able to see: axsock_port_for() answers -1 for it and the
+ * bind is refused, while a monitor on the raw stream still sees frames,
+ * because those frames got to ax25netd and ax25netd is what puts them on
+ * the wire.
+ *
+ * Printing the port number there would say less and mislead.  The number is
+ * this machine's answer to "which upstream index", neither axports nor
+ * agwpe.conf ever wrote it down, and it does not read back as a name: one
+ * upstream's channels share its stride, so a number cannot tell channel 0
+ * from channel 5.  The name is what the operator wrote and can go and fix.
+ *
+ * An empty result stays empty.  A source callsign that is nobody's port is
+ * not a misconfiguration - it is what a program that only transmits looks
+ * like - so there is nothing to report about it.
+ *
+ * Not axsock_copy_call(): a port name is written the way axports spells it,
+ * and uppercasing would print RADIO0 where the operator wrote radio0.  A
+ * callsign has no spelling to lose, which is why that one can fold.
+ */
+
+static void axsock_port_name_of_call(const char *call, char *name,
+				     size_t namelen)
+{
+	char *entry, *addr;
+	size_t n;
+
+	if (name == NULL || namelen == 0)
+		return;
+
+	name[0] = '\0';
+	if (call == NULL || call[0] == '\0')
+		return;
+
+	ax25_config_load_ports();
+
+	/* Exact match first, then the base-call fallback, and in the same
+	 * order as axsock_port_for() uses: an entry has to be the same one
+	 * here, or a monitor could name an entry that the port it is
+	 * reporting did not come from.  */
+	for (entry = ax25_config_get_next(NULL); entry != NULL;
+	     entry = ax25_config_get_next(entry)) {
+		addr = ax25_config_get_addr(entry);
+		if (addr != NULL && strcasecmp(addr, call) == 0) {
+			n = strlen(entry);
+			if (n >= namelen)
+				n = namelen - 1;
+			memcpy(name, entry, n);
+			name[n] = '\0';
+			return;
+		}
+	}
+	for (entry = ax25_config_get_next(NULL); entry != NULL;
+	     entry = ax25_config_get_next(entry)) {
+		addr = ax25_config_get_addr(entry);
+		if (addr != NULL && axsock_call_base_equal(addr, call)) {
+			n = strlen(entry);
+			if (n >= namelen)
+				n = namelen - 1;
+			memcpy(name, entry, n);
+			name[n] = '\0';
+			return;
+		}
+	}
+}
+
 /* The AGWPE port of the entry that owns this callsign, or -1 when nothing
  * can say which port that is.  A callsign that is in no entry at all is -1
  * as well: a caller that named no port has nothing to go on and has to
@@ -816,17 +897,26 @@ static int axsock_addr_names_port(const struct sockaddr *addr, socklen_t len)
 
 static int axsock_bind_port(const struct sockaddr *addr,
 			    socklen_t len, const char *local,
-			    int *named)
+			    int *named, char *name, size_t namelen)
 {
 	const struct full_sockaddr_ax25 *fsa =
 		(const struct full_sockaddr_ax25 *) addr;
 	int p;
 
+	if (name != NULL && namelen > 0)
+		name[0] = '\0';
+
 	if (axsock_addr_names_port(addr, len)) {
 		*named = 1;
 		/* A port was named, so it has to be a port.  If the entry
 		 * says a channel the server does not list, that is a
-		 * mistake in axports and this is where it is caught.  */
+		 * mistake in axports and this is where it is caught.  The
+		 * name goes out with the number: a number alone cannot be
+		 * read back as a name once the port does not exist, and a
+		 * monitor that then has nothing to print says less than
+		 * the one line that got the frame onto the wire.  */
+		axsock_port_name_of_call(ax25_ntoa(&fsa->fsa_digipeater[0]),
+					 name, namelen);
 		return axsock_port_for(ax25_ntoa(&fsa->fsa_digipeater[0]));
 	}
 
@@ -834,6 +924,7 @@ static int axsock_bind_port(const struct sockaddr *addr,
 	/* Nothing named a port.  A source callsign that is itself a port's
 	 * still says which one; anything else has nothing to go on, and the
 	 * first port is what such a socket has always used.  */
+	axsock_port_name_of_call(local, name, namelen);
 	p = axsock_port_for(local);
 	return (p >= 0) ? p : 0;
 }
@@ -851,6 +942,40 @@ static int axsock_bind_port(const struct sockaddr *addr,
  * port it went out on cannot disagree.  The loop port is no special case
  * here: the entry named loop is on it like any other.
  */
+/* The name to report a raw frame on, into sa_data.
+ *
+ * axsock_port_name() is the right answer when it has one: it is the entry
+ * that is actually on the port number, so a monitor on one port of a
+ * two-channel upstream is told which channel it is looking at.  It answers
+ * nothing for a port number that no axports entry is on, and that is not a
+ * corner but the ordinary result of an upstream that agwpe.conf does not
+ * list - and the raw stream still carries its frames, because they got to
+ * ax25netd, which is what put them on the wire.
+ *
+ * s->portname is the answer for that case: the name the bind asked for, kept
+ * since the bind.  It is the one half of the answer that means something to
+ * the operator, who can go and put the upstream in agwpe.conf, and it is
+ * not recoverable later - the number does not say which entry wanted it, and
+ * for a port no upstream serves there is no index to compute one from.
+ *
+ * With neither, sa_data stays as the memset left it.  A caller that has
+ * nothing to print is not a mistake to paper over: a source callsign that is
+ * nobody's port is what a program that only transmits looks like, and
+ * listen(1) prints that as no name rather than inventing one.
+ */
+static const char *axsock_port_name(unsigned char port);
+
+static void axsock_raw_name(struct axsock_sock *s, unsigned char port,
+			    struct sockaddr *sa, size_t datalen)
+{
+	const char *name = axsock_port_name(port);
+
+	if (name == NULL)
+		name = s->portname;
+	if (name != NULL)
+		strncpy(sa->sa_data, name, datalen - 1);
+}
+
 static const char *axsock_port_name(unsigned char port)
 {
 	char *name;
@@ -2709,7 +2834,8 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 	axsock_copy_call(s->local, ax25_ntoa(&sa->sax25_call));
 	{
 		int p = axsock_bind_port(addr, len, s->local,
-					 &s->port_named);
+					 &s->port_named, s->portname,
+					 sizeof(s->portname));
 
 		if (p < 0) {
 			axsock_port_unserved(addr, len);
@@ -3228,17 +3354,13 @@ int agwpe_recvfrom(int fd, void *buf, size_t len,
 		}
 		if (addr != NULL && addrlen != NULL) {
 			struct sockaddr *sa = addr;
-			const char *name;
 			socklen_t want = *addrlen;
 
 			if (want > sizeof(struct sockaddr))
 				want = sizeof(struct sockaddr);
 			memset(sa, 0, want);
 			sa->sa_family = AF_PACKET;
-			name = axsock_port_name(port);
-			if (name != NULL)
-				strncpy(sa->sa_data, name,
-					sizeof(sa->sa_data) - 1);
+			axsock_raw_name(s, port, sa, sizeof(sa->sa_data));
 			*addrlen = sizeof(struct sockaddr);
 		}
 		*ret = n;
@@ -3252,16 +3374,13 @@ int agwpe_recvfrom(int fd, void *buf, size_t len,
 	}
 	if (addr != NULL && addrlen != NULL && s->raw) {
 		struct sockaddr *sa = addr;
-		const char *name;
 		socklen_t want = *addrlen;
 
 		if (want > sizeof(struct sockaddr))
 			want = sizeof(struct sockaddr);
 		memset(sa, 0, want);
 		sa->sa_family = AF_PACKET;
-		name = axsock_port_name(s->port);
-		if (name != NULL)
-			strncpy(sa->sa_data, name, sizeof(sa->sa_data) - 1);
+		axsock_raw_name(s, s->port, sa, sizeof(sa->sa_data));
 		*addrlen = sizeof(struct sockaddr);
 		*ret = n;
 		return 1;

@@ -61,6 +61,17 @@ extern int ax25_config_lazy_take(const char *call, char *name, size_t namelen);
 extern int ax25_config_load_ports(void);
 
 /*
+ * The axports file that ax25_config_load_ports() reads.
+ *
+ * A caller that wants to say something about the entries has to name the
+ * file it looked at, and it may not have a second opinion about where that
+ * is: the shim in a libax25-using program and a daemon that compares the
+ * two configuration files can be built with different sysconfdir, and then
+ * a name of its own would be about a file nobody read.
+ */
+extern const char *ax25_config_ports_file(void);
+
+/*
  * This function allows the enumeration of all the active configured ports.
  * Passing NULL as the argument returns the first port name in the list,
  * subsequent calls to this function should be made with the last port name

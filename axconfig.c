@@ -529,6 +529,11 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 	return TRUE;
 }
 
+const char *ax25_config_ports_file(void)
+{
+	return CONF_AXPORTS_FILE;
+}
+
 int ax25_config_load_ports(void)
 {
 	FILE *fp = NULL;

@@ -113,6 +113,25 @@ The file is optional.  Without it a single node at
 is assumed, which is what a machine with one WAMPES on it wants and spares it
 a configuration file that would only ever hold one line.
 .LP
+That fallback is a guess, and on a Linux machine it is the wrong one: WAMPES
+there is built with
+.B TCPDIR=/tcp
+by default, so the socket of the node on this machine is
+.IR /tcp/sockets/ax25 .
+libax25 cannot ask a WAMPES which TCPDIR it was built with, so the example
+line that installs with this file carries the directory this package was
+configured for
+.RB ( @@@WAMPES_TCPDIR@@@ )
+and stays commented out: a path that is only probably right is worse than one
+that has to be uncommented on purpose.  A WAMPES built with a TCPDIR of its
+own wants its line here, named as that WAMPES knows itself
+.RB ( wampes.conf (5)),
+and
+.BR ax25netd (8)
+refuses a bind to a
+.I wampes
+port that this file does not mention instead of failing later on the socket.
+.LP
 The environment variable
 .B WAMPES_SOCKET
 overrides both, for every node, and is meant for trying something out rather
@@ -124,9 +143,19 @@ than for running a station.
 # name          address                         description
 wampes          /usr/local/wampes/sockets/ax25  the node on this machine
 db0aaa          192.168.1.5:8010                the club node, over TCP
-db0bbb          [fd00::5]:8010                  the same, over IPv6
+db0aaa-1        [fd00::5]:8010                  the same, over IPv6
 .fi
 .RE
+.LP
+The first line is the one to adjust: its path is where the WAMPES on this
+machine put their socket, which is the
+.I TCPDIR
+they were built with followed by
+.IR /sockets/ax25 .
+A WAMPES that took its own default therefore needs nothing here; a WAMPES
+built with a
+.I TCPDIR
+of its own wants that path instead.
 .LP
 and in
 .BR axports (5),
@@ -135,9 +164,11 @@ one entry per port of a node, each with a callsign of its own:
 .RS
 .nf
 # name          callsign  baud  paclen  window  description
-wampes:hfb      DL9SAU-1  9600  256     2       node wampes, port hfb
-wampes:70cm     DL9SAU-2  9600  256     2       node wampes, port 70cm
-db0aaa:hf1      DL9SAU-3  1200  128     1       club node, HF
+wampes          DL9SAU-0  9600  256     7       the node on this machine
+wampes:hfb      DL9SAU-1  9600  256     7       node wampes, port hfb
+wampes:70cm     DL9SAU-2  9600  256     7       node wampes, port 70cm
+db0aaa:hf1      DB0AAA    1200  128     7       club node, HF
+db0aaa-1:hf2    DB0AAA-1  1200  128     7       club node, HF
 .fi
 .RE
 .LP

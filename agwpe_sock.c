@@ -791,6 +791,29 @@ static int axsock_port_of_entry(const char *entry)
  * differs.
  */
 
+/*
+ * Did this bind name a port?
+ *
+ * It did when the first digipeater slot is filled: that is where every
+ * program in the suite puts the callsign of the axports entry it means
+ * (call(1) resolves the name the user typed with ax25_config_get_addr()
+ * and passes the result here), and it is what makes the name recoverable
+ * at all - the address carries a callsign, not a name.  A bind without
+ * that slot named no port, and the two cases are not the same question:
+ * a program is free to bind a source callsign that is nobody's port, and
+ * the kernel may well have an interface with it even though axports does
+ * not list one.  Refusing those would break kernel AX.25 for every
+ * callsign outside the port table, which is most of them.
+ */
+static int axsock_addr_names_port(const struct sockaddr *addr, socklen_t len)
+{
+	const struct full_sockaddr_ax25 *fsa =
+		(const struct full_sockaddr_ax25 *) addr;
+
+	return len >= sizeof(struct full_sockaddr_ax25) &&
+	       fsa->fsa_ax25.sax25_ndigis > 0;
+}
+
 static int axsock_bind_port(const struct sockaddr *addr,
 			    socklen_t len, const char *local,
 			    int *named)
@@ -799,8 +822,7 @@ static int axsock_bind_port(const struct sockaddr *addr,
 		(const struct full_sockaddr_ax25 *) addr;
 	int p;
 
-	if (len >= sizeof(struct full_sockaddr_ax25) &&
-	    fsa->fsa_ax25.sax25_ndigis > 0) {
+	if (axsock_addr_names_port(addr, len)) {
 		*named = 1;
 		/* A port was named, so it has to be a port.  If the entry
 		 * says a channel the server does not list, that is a
@@ -2479,6 +2501,71 @@ static struct axsock_sock *axsock_adopt_sock_locked(int fd, int type)
 }
 
 /*
+ * A bind named a port in axports and no backend turned out to serve it.
+ *
+ * Both shapes of that answer are here.  A socket the shim made itself has
+ * its port resolved in agwpe_bind(); a descriptor a program opened on a
+ * machine that has a kernel stack is only claimed in agwpe_bind_take(),
+ * and the kernel's EADDRNOTAVAIL is what a program sees when it is not.
+ * Only one of the two happens on any given machine, so the note has to
+ * come from both or it appears on exactly the hosts that need it least.
+ *
+ * The kernel's answer is the documented one - a port nobody serves is
+ * refused by whoever is left, and EADDRNOTAVAIL is the truth about a
+ * mistyped port.  What it cannot say is why: it names the callsign, which
+ * is right, and not the mistake.
+ *
+ * Which mistake it is, is not knowable here, and the temptation is to guess:
+ * a name with a colon looks like a WAMPES "node:port" and a name without one
+ * looks like an AGWPE upstream, so each can be blamed on a file.  But both
+ * backends take a colon - WAMPES reads "node:port", AGWPE reads
+ * "upstream:channel" - so the shape does not tell them apart, and a name
+ * belongs to whichever file happens to list it.  A guess would be wrong in
+ * exactly the case the operator needs reading: a typo in the base name of a
+ * WAMPES port reads as an AGWPE channel, and vice versa.  So this reports
+ * the checks that ran and stops there, and leaves the two files to the
+ * operator, who knows which one they were writing.
+ */
+static void axsock_port_unserved(const struct sockaddr *addr, socklen_t len)
+{
+	char port[32];
+
+	if (ax25_config_bind_port(addr, len, port, sizeof(port)) == 0) {
+		/* The entry exists, so this is the one case where the name is
+		 * still known.  All three backends have now said no to it, and
+		 * each of those was a lookup that ran, so each can be stated. */
+		fprintf(stderr,
+			"axsock: the port '%s' that this bind names is served by "
+			"no backend.  %s lists it, but it is not an AX.25 "
+			"interface that is up, and %s has no node by that name.  "
+			"The AGWPE backend at %s does not know it either: it is "
+			"neither an upstream in %s nor a port the server there "
+			"lists.\n"
+			"axsock: whichever of those was meant, the name has to be "
+			"the one that file says - not the name of the program "
+			"or device behind the port.\n",
+			port, CONF_AXPORTS_FILE, CONF_WAMPES_FILE,
+			axsock_host != NULL ? axsock_host : "the configured "
+			"server", CONF_AGWPE_FILE);
+		return;
+	}
+
+	/* No entry at all.  The name died with the lookup that would have
+	 * recovered it and only the callsign is left, so nothing can be said
+	 * about its shape - and nothing was asked of the kernel or of a
+	 * server either, so this must not claim to know those. */
+	if (axsock_addr_names_port(addr, len))
+		fprintf(stderr,
+			"axsock: this bind names the port '%s', but no entry in "
+			"%s has that callsign, so no port table, no WAMPES "
+			"node and no AX.25 interface can match it.  A program "
+			"that names a port has to name one of these.\n",
+			ax25_ntoa(&((const struct full_sockaddr_ax25 *) addr)
+				  ->fsa_digipeater[0]),
+			CONF_AXPORTS_FILE);
+}
+
+/*
  * Take a descriptor over that socket() gave to somebody else.
  *
  * bind() is the first moment the port is known, and therefore the first moment
@@ -2511,12 +2598,36 @@ static int agwpe_bind_take(int fd, const struct sockaddr *addr, socklen_t len,
 	/* Which port the address names, as a name in axports: the digipeater
 	 * slot first, the source callsign where there is none, and a lazy
 	 * "base:suffix" where one was resolved through the hook. */
-	if (ax25_config_bind_port(addr, len, port, sizeof(port)) != 0)
-		return 0;			/* names no port at all */
-	if (!agwpe_owns_port(port)) {
+	if (ax25_config_bind_port(addr, len, port, sizeof(port)) != 0) {
+		/* Nothing in axports answers.  A program that named a port
+		 * and got this far has named one that does not exist: the
+		 * digipeater slot is where the suite puts the callsign of an
+		 * axports entry, and no entry carries this one.  call(1) has
+		 * already refused it with "invalid port setting", so a bind
+		 * that arrives here is a program that named a port behind
+		 * the suite's back, and a kernel that has no such interface
+		 * answers EADDRNOTAVAIL for a reason that has nothing to do
+		 * with the port.  Refuse it here, where the name is still
+		 * known, rather than pass it on and be right by accident. */
+		if (axsock_addr_names_port(addr, len)) {
+			axsock_port_unserved(addr, len);
+			errno = EADDRNOTAVAIL;
+			*ret = -1;
+			return 1;		/* ours to refuse */
+		}
+		/* No port was named: the program bound a source callsign
+		 * that is nobody's port, which the kernel may have an
+		 * interface for.  Leave that to the kernel. */
+		return 0;
+	}
+	if (ax25_config_port_is_kernel(port)) {
 		if (axsock_debug)
 			fprintf(stderr, "axsock: fd=%d stays with the kernel, "
 				"port '%s' is a kernel port\n", fd, port);
+		return 0;
+	}
+	if (!agwpe_owns_port(port)) {
+		axsock_port_unserved(addr, len);
 		return 0;
 	}
 
@@ -2601,10 +2712,7 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 					 &s->port_named);
 
 		if (p < 0) {
-			if (axsock_debug)
-				fprintf(stderr, "axsock: bind fd=%d local='%s': "
-					"the AGWPE server does not list that "
-					"channel\n", fd, s->local);
+			axsock_port_unserved(addr, len);
 			errno = EADDRNOTAVAIL;
 			*ret = -1;
 			return 1;

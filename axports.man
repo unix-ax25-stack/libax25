@@ -37,10 +37,16 @@ The field descriptions are:
 .B name
 is the unique identifier of the port.
 This is the name given as the port argument of many of the AX.25 support
-programs.
-This is
-.I not
-in any way related to actual device identities, just unique
+programs, and for a port served by a userspace backend it is also what
+selects that backend: the name of an upstream in
+.BR agwpe.conf (5)
+or of a node in
+.BR wampes.conf (5),
+optionally with a
+.BI : N
+or
+.BI : interface
+suffix.  For a kernel port it is the interface name.
 .TP 14
 .B callsign
 the callsign of the physical interface to bind to.
@@ -77,16 +83,18 @@ instead of the kernel, the AGWPE port number is no longer the position of
 the entry in this file: the shim resolves the
 .B name
 against the "port information" reply of the AGWPE server
-.RB ( ax25netd ).
+.RB ( ax25netd ),
+or, for a server on this machine, against the upstream names in
+.BR agwpe.conf (5).
 An entry whose
 .B name
-matches the upstream name reported by the server selects the first
+matches such an upstream name selects the first
 channel of that upstream; a
 .B :N
 suffix on the
 .B name
 (e.g.\&
-.IR agwpe-direwolf2:4 )
+.IR radio0:1 )
 selects channel N of that upstream, i.e.\& the (N+1)-th radio interface
 of the upstream in question: the name before the colon picks the
 upstream, the suffix the channel inside it.  This is how the channels
@@ -98,17 +106,38 @@ other port:
 .PP
 .RS
 .nf
-agwpe-direwolf2    DL9SAU-2   0  256  7   Direwolf, 2m
-agwpe-direwolf2:1  DL9SAU-3   0  256  7   Direwolf, 70cm
-agwpe-direwolf2:2  DL9SAU-4   0  256  7   Direwolf, 2m, backup
+radio0     DL9SAU-2   0  256  7   radio0, channel 0
+radio0:1   DL9SAU-3   0  256  7   radio0, channel 1
+radio0:2   DL9SAU-4   0  256  7   radio0, channel 2
 .fi
 .RE
 .PP
 A program is pointed at one of them by that name, as at any other port,
 and channel 0 may be written out as
-.I agwpe-direwolf2:0
+.I radio0:0
 as well \-
-the plain name is the short form of that same entry.  A monitor reports
+the plain name is the short form of that same entry.
+.PP
+The
+.B name
+is the name of the upstream, and nothing else.  It is not the name of the
+program behind it, and not the name of the device it drives: an upstream
+called
+.B radio0
+in
+.BR agwpe.conf (5)
+that happens to be a Direwolf is still
+.B radio0
+here, and an entry called
+.B direwolf
+or
+.B vhfdrop
+reaches no upstream and no channel at all.  Such a name is a mistake rather
+than a port of its own, and a bind that names one is refused with a note
+saying so, rather than handed to the kernel \- which answers
+.B EADDRNOTAVAIL
+about a callsign and says nothing about the name that was wrong.  A monitor
+reports
 the entry as well, so a frame is named after the channel it arrived on
 rather than after the radio, which is what
 .BR listen (1)
@@ -151,29 +180,29 @@ for a
 .I c
 of 99 would name a port of the seventh upstream.
 .PP
-Ports that are served by the AGWPE shim are conventionally named with an
+Ports that are served by the AGWPE shim are named after the upstream they
+reach, without a prefix
+(e.g.\&
+.IR radio0 ),
+so the same name appears in this file and in
+.BR agwpe.conf (5)
+and there is nothing to keep in step but the spelling.  A prefix is not
+needed to keep an AGWPE port distinguishable from a kernel interface: a name
+that matches no upstream is refused at
+.BR bind (2)
+rather than passed on, and a name that matches one is served by it.  An
 .B agwpe-
-prefix (e.g.\&
-.IR agwpe-direwolf2 ).
-The
-.B name
-is the interface identity that routing daemons and digipeater programs
-see on the wire, so the prefix keeps AGWPE ports distinguishable from
-kernel AX.25 interfaces and makes the backend of an entry obvious from
-the configuration alone.  This matters once both backends are present on
-one system (see below).  The prefix is a pure namespace marker: when the
-entry is resolved, it is stripped before the remaining name is matched
-against the upstream name in
-.BR agwpe.conf (5),
-which carries no prefix
-.RB ( agwpe-direwolf2
-is the interface name for the upstream
-.IR direwolf2 ).
+prefix is still accepted where an existing file uses one, and is stripped
+before the match, so a file that has to keep a name for its kernel interface
+can say
+.I agwpe-radio0
+to say which one it means.
 .PP
+
 Ports served by a
 .B WAMPES
 node are named
-.BI wampes: interface
+.BI node : interface
 \-\- the part before the colon says which node, the part after it which of
 that node's own AX.25 ports the traffic leaves by.  The node part is
 resolved on this side and never reaches WAMPES; the interface part travels
@@ -181,11 +210,27 @@ as the port prefix WAMPES understands
 .RI ( "connect hfb:DB0AAA-8" ),
 the same one an operator types at an RMNC or XNET.
 .PP
-One entry per WAMPES interface rather than one per node, because this file
-refuses duplicate callsigns and every WAMPES interface has a callsign of its
-own anyway.  The callsign in the entry is what an outgoing connection uses as
-its source unless the program binds one itself.  Where the node listens is
-named in
+The node part is the name of a node in
+.BR wampes.conf (5),
+and any name may be given to a node there, so the "wampes" above is a
+convention and not a keyword.  A node-wide entry is enough for a station with
+one WAMPES: with
+.PP
+.RS
+.nf
+wampes    DL9SAU-0  9600  256  7  the node on this machine
+.fi
+.RE
+.PP
+every port of the node is reachable, and
+.I wampes:hfb
+then names one of them with the same callsign.  Give a
+.IB name : interface
+entry a callsign of its own when one specific port has to be meant every time,
+because WAMPES routes by the prefix and two entries with the same callsign are
+refused here.
+.PP
+Where the node listens is named in
 .BR wampes.conf (5),
 one node per line.  That file is also what makes an entry a WAMPES entry: a
 port belongs to a WAMPES node when the name before the colon appears there,
@@ -198,8 +243,18 @@ remains only as an override.
 .PP
 A name whose node is not in
 .BR wampes.conf (5)
-is refused here, before any socket is opened; an interface the node does not
-have is refused by the node, and
+is refused here, before any socket is opened.
+A name shaped like
+.IB name : interface
+is ambiguous between the two backends: a WAMPES node reads the part before
+the colon as a node and the part after it as one of the node's own ports,
+while
+.BR axsock (7)
+reads the part before it as an AGWPE upstream and the part after it as a
+channel number, so the refusal says which files were asked and what each of
+them answered, rather than deciding which one the name was meant for.  An
+interface the node does not have is a different matter and is refused by the
+node, so
 .BR connect (2)
 fails with ENODEV.  A name whose node is configured but which has no entry of
 its own is accepted and the node's own entry is used \-\- the node then routes

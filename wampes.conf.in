@@ -14,12 +14,17 @@
 # own.  Reach a node over TCP only where every local account may use the
 # transmitter.
 #
-# This file is optional.  Without it the single node at
-# /usr/local/wampes/sockets/ax25 is assumed, which is what a machine with
-# one WAMPES on it wants.
+# The line for the node on this machine is the one that has to be right:
+# its path is where the WAMPES on this machine put their socket, which is
+# the TCPDIR they were built with, followed by /sockets/ax25.  This package
+# was configured for @@@WAMPES_TCPDIR@@@, so the line below is right for a
+# WAMPES that took the default; it is left commented out because a path that
+# is only probably right is worse than one that has to be uncommented on
+# purpose.  libax25 cannot know what a WAMPES was actually built with, so a
+# WAMPES installed somewhere else wants its own line here.
 #
 # See wampes.conf(5) and axports(5).
 
-wampes		/usr/local/wampes/sockets/ax25	the node on this machine
+#wampes		@@@WAMPES_TCPDIR@@@/sockets/ax25	the node on this machine
 #db0aaa		192.168.1.5:8010		the club node, over TCP
-#db0bbb		[fd00::5]:8010			the same, over IPv6
+#db0aaa-1	[fd00::5]:8010			db0aaa-1 over TCP IPv6

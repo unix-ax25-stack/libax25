@@ -88,10 +88,12 @@ dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5 \
 		axsock.7
 
 man_sed = sed -e 's|@@@AX25_SYSCONFDIR@@@|$(MAN_SC)|g' \
-	      -e 's|@@@AX25_LOCALSTATEDIR@@@|$(MAN_SD)|g'
+	      -e 's|@@@AX25_LOCALSTATEDIR@@@|$(MAN_SD)|g' \
+	      -e 's|@@@WAMPES_TCPDIR@@@|$(MAN_WTD)|g'
 
 MAN_SC = $(sysconfdir)/ax25
 MAN_SD = $(localstatedir)/ax25
+MAN_WTD = @wampes_sockdir@
 
 axports.5: $(srcdir)/axports.man
 	$(man_sed) < $(srcdir)/axports.man > $@
@@ -148,19 +150,34 @@ AX25_LOCALSTATEDIR=@localstatedir@/ax25/
 # The state directory is created on install so AX.25 consumers find it
 # ready: mheardd keeps mheard/mheard.dat here and ax25rtd keeps its route
 # cache and control socket under ax25rtd/.
+#
+# Same trailing slash story as AX25_SYSCONFDIR: the C macro needs it, a
+# make target path does not, so the paths here come from statedir.
 install-data-local:
-	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)
-	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/mheard
-	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/ax25rtd
+	$(mkinstalldirs) $(DESTDIR)$(statedir)
+	$(mkinstalldirs) $(DESTDIR)$(statedir)/mheard
+	$(mkinstalldirs) $(DESTDIR)$(statedir)/ax25rtd
 
 # Needed so that the install is optional
-etcdir = $(AX25_SYSCONFDIR)
+#
+# AX25_SYSCONFDIR keeps its trailing slash because pathnames.h appends the
+# file name to it directly (AX25_SYSCONFDIR"axports"), and a slash there is
+# load bearing.  A make target path is spelled the other way round and gets
+# one from the recipe, so it uses a variable of its own without the slash.
+# Sharing one variable for both is what produced "/etc/ax25//axports".
+etcdir = @sysconfdir@/ax25
+statedir = @localstatedir@/ax25
 etcfiles =  axports rsports nrports wampes.conf
 etcsrcfiles = axports.in rsports.in nrports.in wampes.conf.in
-installconf:
-	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)
-	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/mheard
-	$(mkinstalldirs) $(DESTDIR)$(AX25_LOCALSTATEDIR)/ax25rtd
+
+# The configuration files are generated from the .in sources, and nothing in
+# the normal build makes them: "make all" leaves them unbuilt, so
+# "make installconf" after a clean tree failed with "cannot stat 'axports'".
+# Naming them as prerequisites builds them here, where they are needed.
+installconf: $(etcfiles)
+	$(mkinstalldirs) $(DESTDIR)$(statedir)
+	$(mkinstalldirs) $(DESTDIR)$(statedir)/mheard
+	$(mkinstalldirs) $(DESTDIR)$(statedir)/ax25rtd
 	$(mkinstalldirs) $(DESTDIR)$(etcdir)
 	@list='$(etcfiles)'; for p in $$list; do \
 	  echo " $(INSTALL_DATA) $$p $(DESTDIR)$(etcdir)/$$p"; \

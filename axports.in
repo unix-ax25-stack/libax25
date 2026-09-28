@@ -4,24 +4,38 @@
 #
 # name callsign speed paclen window description
 #
-# Ports served by the AGWPE shim (through ax25netd) carry an "agwpe-"
-# prefix so they cannot be confused with kernel AX.25 interfaces.  The
-# name after the prefix is the upstream in agwpe.conf; a ":N" suffix
-# selects the N-th radio interface (channel) of that upstream.  The
-# callsign is the default source call of the interface, paclen the
-# default packet size (mtu), window the default MAXFRAME.
+# The name is what a program passes to say which port it wants, and which
+# backend serves it follows from the name:
 #
-# The WAMPES node needs only this one line: the port on the node (xnet,
+#   - a name in agwpe.conf is served by ax25netd.  "radio0" is the first
+#     channel of upstream radio0, "radio0:1" its second, and so on.  The
+#     name is the upstream's name from agwpe.conf, not the name of the
+#     program behind it - an upstream called radio0 that is a Direwolf is
+#     still "radio0" here, and calling the entry "direwolf" or "vhfdrop"
+#     is what makes a bind land on a port nobody serves.  An "agwpe-"
+#     prefix is accepted and stripped, for a file that also has kernel
+#     interfaces of the same name.
+#   - a name in wampes.conf is served by that node.  "wampes" is the node
+#     itself; "wampes:hfb" pins one of its ports.
+#   - anything else is a kernel AX.25 interface, and the callsign has to
+#     be the one that interface carries.
+#
+# The callsign is the default source call of the port, paclen the default
+# packet size (mtu), window the default MAXFRAME.  It is also how a
+# program names the port: it lands in the first digipeater slot of the
+# bind address, so a program that put a callsign there which no line below
+# carries is naming a port that does not exist.
+#
+# The WAMPES node needs only the node-wide line: a port on the node (xnet,
 # hfb, 70cm, ...) is named by a "wampes:<port>" name, and one that has no
-# entry of its own is accepted under this node-wide entry and routed to
-# whatever port is actually reachable.  To always mean one specific port,
-# give the "wampes:<port>" name its own line and callsign - the explicit
-# entry wins over the fallback.
+# entry of its own is accepted under that line and routed to whatever port
+# is actually reachable.  To always mean one specific port, give the
+# "wampes:<port>" name its own line and callsign - the explicit entry wins
+# over the fallback.
 
-#agwpe-radio0		DL1AAA	9600	256	2	VHF (Direwolf interface 1)
-#agwpe-direwolf		DL1AAA-1	9600	256	2	VHF (Direwolf interface 1)
-#agwpe-direwolf:1	DL1AAA-2	9600	256	2	UHF (Direwolf interface 2)
-#agwpe-direwolf2	DL1AAA-10	1200	128	1	1200 bd (Direwolf 2, iface 1)
-#wampes			DL9SAU-0	9600	256	2	WAMPES node
-#wampes:hfb		DL9SAU-1	9600	256	2	WAMPES node, port hfb (pinned by its own call)
-#wampes:70cm		DL9SAU-2	9600	256	2	WAMPES node, port 70cm (pinned by its own call)
+#radio0		DL1AAA	9600	256	7	agwpe.conf upstream radio0, channel 0
+#radio0:1	DL1AAA-1	9600	256	7	agwpe.conf upstream radio0, channel 1
+#radio0:2	DL1AAA-2	9600	256	7	agwpe.conf upstream radio0, channel 2
+#wampes		DL9SAU-0	9600	256	7	WAMPES node
+#wampes:hfb	DL9SAU-1	9600	256	7	WAMPES node, port hfb (pinned by its own call)
+#bpq0		DL9SAU-2	9600	256	7	kernel AX.25 interface bpq0

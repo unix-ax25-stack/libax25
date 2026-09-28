@@ -120,6 +120,33 @@ AC_SUBST(BASEVERSION, [$basever])
 extraver=$(echo $PACKAGE_VERSION | sed -e 's@@<:@^-@:>@*-@@' -e 's@-@_@')
 AC_SUBST(EXTRAVERSION, [$extraver])
 
+dnl Where the WAMPES on this machine keep their unix sockets, for the
+dnl commented-out example line in wampes.conf.  That is WAMPES's own
+dnl TCPDIR, and libax25 has no way of asking a WAMPES which one it was
+dnl built with, so it is a question for configure rather than something to
+dnl guess: the default below is WAMPES's own default for this platform, so
+dnl a station that took the default gets a line that is right, and one that
+dnl did not says so here.  The line is commented out either way, because a
+dnl path that happens to be wrong is worse than one that has to be
+dnl uncommented on purpose.
+AC_ARG_WITH([wampes-tcpdir],
+	AS_HELP_STRING([--with-wampes-tcpdir=DIR], [where the local WAMPES keeps its sockets, for the example in wampes.conf (default: the platform default of the WAMPES itself)]),
+	[wampes_tcpdir=$withval],
+	[case `uname -s` in
+		Darwin) wampes_tcpdir=/usr/local/wampes ;;
+		*)      wampes_tcpdir=/tcp ;;
+	esac])
+case "$wampes_tcpdir" in
+	/*) ;;
+	*)  AC_MSG_ERROR([--with-wampes-tcpdir has to be an absolute path, not "$wampes_tcpdir"]) ;;
+esac
+dnl Spelled differently from the @@@WAMPES_TCPDIR@@@ token it fills on
+dnl purpose: config.status replaces @name@ wherever it finds it, and a
+dnl token of that shape contains "@WAMPES_TCPDIR@" - one @ on either side of
+dn: the name - as a substring, so a substitution of that name would rewrite
+dn: the token before make ever sees it.
+AC_SUBST(wampes_sockdir, [$wampes_tcpdir])
+
 AM_CONDITIONAL([BUILD_STATIC], [test "$enable_static" = yes])
 AC_CONFIG_FILES([Makefile libax25.spec])
 AC_OUTPUT

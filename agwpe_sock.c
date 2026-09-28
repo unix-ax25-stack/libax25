@@ -2709,18 +2709,9 @@ static void axsock_port_unserved(const struct sockaddr *addr, socklen_t len)
 		 * still known.  All three backends have now said no to it, and
 		 * each of those was a lookup that ran, so each can be stated. */
 		fprintf(stderr,
-			"axsock: the port '%s' that this bind names is served by "
-			"no backend.  %s lists it, but it is not an AX.25 "
-			"interface that is up, and %s has no node by that name.  "
-			"The AGWPE backend at %s does not know it either: it is "
-			"neither an upstream in %s nor a port the server there "
-			"lists.\n"
-			"axsock: whichever of those was meant, the name has to be "
-			"the one that file says - not the name of the program "
-			"or device behind the port.\n",
-			port, CONF_AXPORTS_FILE, CONF_WAMPES_FILE,
-			axsock_host != NULL ? axsock_host : "the configured "
-			"server", CONF_AGWPE_FILE);
+			"axsock: no backend serves the port '%s': it is no AX.25 "
+			"interface, no wampes.conf node, and no AGWPE upstream or "
+			"server port.\n", port);
 		return;
 	}
 

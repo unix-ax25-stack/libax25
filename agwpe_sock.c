@@ -1076,12 +1076,29 @@ static void axsock_raw_name(struct axsock_sock *s, unsigned char port,
 static const char *axsock_port_name(unsigned char port)
 {
 	char *name;
+	int i;
 
 	ax25_config_load_ports();
 	for (name = ax25_config_get_next(NULL); name != NULL;
 	     name = ax25_config_get_next(name))
 		if (axsock_port_of_entry(name) == port)
 			return name;
+
+	/*
+	 * The port table the server sent, which is the one that answers for
+	 * a port of its own numbering whatever axports says - and the only
+	 * thing left when the name in axports is one the local agwpe.conf
+	 * does not list, so axsock_port_of_entry() can only return -1 for
+	 * it.  A bind of "radio0" against an axports entry no upstream
+	 * backs is refused by the kernel's fallback rules but names a real
+	 * port of the server all the same, and the monitor is then reading
+	 * a frame that came in on it.
+	 */
+	if (axsock_ports_fetch() != 0) {
+		for (i = 0; i < axsock_gnports; i++)
+			if (axsock_gports[i].port == port)
+				return axsock_gports[i].up;
+	}
 
 	/* The loopback port is the one name that needs no entry in axports.
 	 * axsock_port_of_entry() hands "loop" the number AGWPE_PORT_LOOP

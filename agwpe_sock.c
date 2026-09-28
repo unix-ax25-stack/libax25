@@ -136,6 +136,15 @@ struct axsock_sock {
 	int			port_named;	/* bind named the port itself, in
 					 * the digipeater slot - connect()
 					 * must not talk it over */
+	int			port_known;	/* the port number on this socket
+					 * means a port.  It does not when
+					 * nothing was known at bind time and
+					 * the number is only the first port
+					 * such a socket has always used, and
+					 * a monitor must not read a name into
+					 * that one.  It is the answer to the
+					 * question a port number on the wire
+					 * cannot answer by itself.  */
 	char			portname[32];	/* the name the bind asked for,
 					 * kept because a port that no
 					 * upstream serves still gets frames
@@ -922,7 +931,7 @@ static int axsock_addr_names_port(const struct sockaddr *addr, socklen_t len)
 
 static int axsock_bind_port(const struct sockaddr *addr,
 			    socklen_t len, const char *local,
-			    int *named, char *name, size_t namelen)
+			    int *named, int *known, char *name, size_t namelen)
 {
 	const struct full_sockaddr_ax25 *fsa =
 		(const struct full_sockaddr_ax25 *) addr;
@@ -930,6 +939,8 @@ static int axsock_bind_port(const struct sockaddr *addr,
 
 	if (name != NULL && namelen > 0)
 		name[0] = '\0';
+	if (known != NULL)
+		*known = 0;
 
 	if (axsock_addr_names_port(addr, len)) {
 		*named = 1;
@@ -948,74 +959,18 @@ static int axsock_bind_port(const struct sockaddr *addr,
 	*named = 0;
 	/* Nothing named a port.  A source callsign that is itself a port's
 	 * still says which one; anything else has nothing to go on, and the
-	 * first port is what such a socket has always used.  */
+	 * first port is what such a socket has always used.
+	 *
+	 * The first port and no port are the same number on the wire, and
+	 * that is worth being careful about further down: a frame that goes
+	 * out on 0 because nothing was known is not a frame of port 0, and a
+	 * monitor must not read a name into it.  port_known() says which of
+	 * the two this is, and axsock_port_name() is asked only when it does.
+	 */
 	axsock_port_name_of_call(local, name, namelen);
 	p = axsock_port_for(local);
+	*known = (p >= 0);
 	return (p >= 0) ? p : 0;
-}
-
-/* Reverse of axsock_port_for(): the configured port name for an AGWPE
- * port number, as seen in the sockaddr of a raw monitor socket.  */
-/* The axports entry that is on the given AGWPE port, as seen in the
- * sockaddr of a raw monitor socket.
- *
- * The name is the entry and not the upstream, because one upstream has one
- * entry per channel: a monitor that reported only the upstream could not
- * tell channel 0 from channel 1, and "listen -p radio0:5" would have nothing
- * to match.  Asking each entry which port it is answers both with the same
- * code that does the sending, so the name a frame is reported under and the
- * port it went out on cannot disagree.  The loop port is no special case
- * here: the entry named loop is on it like any other.
- */
-/*
- * The upstream name of a local ax25netd that this port number belongs to, or
- * nothing when no configured upstream can claim it.
- *
- * agwpe_local_upstream() is the forward direction and this is the backward
- * one, and it is needed because that is the direction a monitor reads in.  A
- * frame that arrives on the raw stream arrives with the port number ax25netd
- * put on the wire, and there is no name anywhere in it: the monitor header is
- * five bytes, a length and that number.  Turning the number back into the
- * name the operator wrote is the only way a monitor can print one.
- *
- * The stride is AGWPE's, not ours: upstream i owns the ports i*16+c, c of 0
- * to 15, so the name is the one at index port/16 and the channel is the rest.
- * The virtual loop upstream is not in this table - it answers on the loop port
- * instead of on a numbered one, and it is named by its own constant.
- *
- * Only for a netd on this machine, and only while it reads this very file.
- * A server on the other side of the network numbers its upstreams by a table
- * that is not here, and nothing on the wire says which one it used, so there
- * is no answer to give and the caller says so rather than inventing one.
- */
-static const char *agwpe_local_upstream_of_port(unsigned char port,
-					       char *buf, size_t buflen)
-{
-	static struct agwpe_config cfg;
-	static int loaded = -1;
-	int i;
-
-	if (buf == NULL || buflen == 0)
-		return NULL;
-	buf[0] = '\0';
-
-	if (loaded < 0) {
-		if (agwpe_config_load(CONF_AGWPE_FILE, &cfg) < 0)
-			loaded = 0;
-		else
-			loaded = 1;
-	}
-	if (!loaded)
-		return NULL;
-
-	i = port / 16;
-	if (i >= cfg.count)
-		return NULL;
-	if (cfg.upstreams[i].virtual)
-		return NULL;	/* the loop upstream, and it has no number */
-
-	axsock_copy_port_name(buf, buflen, cfg.upstreams[i].name);
-	return buf;
 }
 
 /* The name to report a raw frame on, into sa_data.
@@ -1044,61 +999,41 @@ static const char *axsock_port_name(unsigned char port);
 static void axsock_raw_name(struct axsock_sock *s, unsigned char port,
 			    struct sockaddr *sa, size_t datalen)
 {
-	char up[AGWPE_UPSTREAM_NAME_MAX];
-	const char *name = axsock_port_name(port);
+	const char *name = NULL;
 
-	if (name != NULL) {
-		/* Marked when it does not fit, which for an axports name is
-		 * a configuration fact rather than a hope: nothing bounds
-		 * them.  */
-		axsock_copy_port_name(sa->sa_data, datalen, name);
+	/*
+	 * Only a port that is known to be a port may be read back as a name.
+	 * When the bind could not determine one, the number that went on the
+	 * wire is the first port such a socket has always used, and it is
+	 * indistinguishable there from channel 0 of the first upstream.  An
+	 * axports entry that happens to sit on that number would then be
+	 * reported for a frame that never went near it, which is worse than
+	 * saying nothing: an operator who reads a name off a monitor takes
+	 * it as the answer to "which port was this on".
+	 */
+	if (s->port_known)
+		name = axsock_port_name(port);
+	if (name == NULL)
+		name = s->portname;
+	if (name == NULL || datalen == 0)
 		return;
-	}
 
-	/* No axports entry is on this number.  That is the ordinary result of
-	 * an upstream agwpe.conf does not list, and it is not the same as a
-	 * port nobody configured: the name is in the file, the axports entry
-	 * that would have carried it is not what is on the wire, and the
-	 * monitor can still say which upstream the frame came in on.  Which
-	 * is the half of the answer the operator can act on.  */
-	if (agwpe_local_upstream_of_port(port, up, sizeof(up)) != NULL) {
-		axsock_copy_port_name(sa->sa_data, datalen, up);
-		return;
-	}
-
-	/* Last: the name the bind asked for.  It is the only source that can
-	 * answer for a port no backend serves, and the only one that is left
-	 * when the frame belongs to a socket rather than to a netd.  */
-	if (s->portname[0] != '\0')
-		axsock_copy_port_name(sa->sa_data, datalen, s->portname);
+	/* Marked when it does not fit, which for an axports name is a
+	 * configuration fact rather than a hope: nothing bounds them.  The
+	 * frame is still real either way, and the callsign on it is still the
+	 * whole of the answer.  */
+	axsock_copy_port_name(sa->sa_data, datalen, name);
 }
 
 static const char *axsock_port_name(unsigned char port)
 {
 	char *name;
-	int i;
 
 	ax25_config_load_ports();
 	for (name = ax25_config_get_next(NULL); name != NULL;
 	     name = ax25_config_get_next(name))
 		if (axsock_port_of_entry(name) == port)
 			return name;
-
-	/*
-	 * The port table the server sent, which is the one that answers for
-	 * a port of its own numbering whatever axports says - and the only
-	 * thing left when the name in axports is one the local agwpe.conf
-	 * does not list, so axsock_port_of_entry() can only return -1 for
-	 * it.  A bind of "radio0" against an axports entry no upstream
-	 * backs is refused by the kernel's fallback rules but names a real
-	 * port of the server all the same, and the monitor is then reading
-	 * a frame that came in on it.
-	 */
-	if (axsock_ports_fetch() != 0) {
-		for (i = 0; i < axsock_gnports; i++)
-			if (axsock_gports[i].port == port)
-				return axsock_gports[i].up;
-	}
 
 	/* The loopback port is the one name that needs no entry in axports.
 	 * axsock_port_of_entry() hands "loop" the number AGWPE_PORT_LOOP
@@ -2948,8 +2883,8 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 	axsock_copy_call(s->local, ax25_ntoa(&sa->sax25_call));
 	{
 		int p = axsock_bind_port(addr, len, s->local,
-					 &s->port_named, s->portname,
-					 sizeof(s->portname));
+					 &s->port_named, &s->port_known,
+					 s->portname, sizeof(s->portname));
 
 		if (p < 0) {
 			axsock_port_unserved(addr, len);

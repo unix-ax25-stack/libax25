@@ -132,17 +132,26 @@ axprobe_LDADD =
 endif
 
 
-EXTRA_DIST= glibc.patch $(etcsrcfiles) axports.man rsports.man nrports.man \
+# The documentation is installed from install-data-hook rather than from
+# dist_doc_DATA, which automake emits into install-data ahead of the
+# headers.  A failure there therefore stopped the install with a fresh
+# library and a stale header beside it, and the next package to be built
+# failed on a declaration its own source already had - which reads as a
+# mistake in the package being built and is not one.  The hook runs after
+# the generated install-data, so the library, its headers and its manual
+# pages are in place whatever happens to this.
+docdir = $(datadir)/doc/libax25
+docfiles = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
+	README-linux-systemd.txt \
+	doc/AX25-WITHOUT-KERNEL-SYSOP.md \
+	doc/AX25-WITHOUT-KERNEL-DEVELOPER.md \
+	doc/TODO.md \
+	doc/AX25-WITHOUT-KERNEL-SYSOP.de.md \
+	doc/AX25-WITHOUT-KERNEL-DEVELOPER.de.md
+
+EXTRA_DIST= glibc.patch $(etcsrcfiles) $(docfiles) axports.man rsports.man nrports.man \
 	    wampes.conf.man axsock.man libax25.spec axsock.c agwpe_sock.c \
 	    axsock_real.h agwpe_sock.h wampes.c wampes.h
-
-dist_doc_DATA = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
-		README-linux-systemd.txt \
-		doc/AX25-WITHOUT-KERNEL-SYSOP.md \
-		doc/AX25-WITHOUT-KERNEL-DEVELOPER.md \
-		doc/TODO.md \
-		doc/AX25-WITHOUT-KERNEL-SYSOP.de.md \
-		doc/AX25-WITHOUT-KERNEL-DEVELOPER.de.md
 
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/
@@ -157,6 +166,17 @@ install-data-local:
 	$(mkinstalldirs) $(DESTDIR)$(statedir)
 	$(mkinstalldirs) $(DESTDIR)$(statedir)/mheard
 	$(mkinstalldirs) $(DESTDIR)$(statedir)/ax25rtd
+
+# install-data-hook, not install-data-local: automake makes the latter a
+# prerequisite of install-data-am, so it runs first, which is the opposite
+# of what this wants.  The hook is appended to the recipe of install-data
+# and so runs after the headers.
+install-data-hook:
+	$(mkinstalldirs) $(DESTDIR)$(docdir)
+	@list='$(docfiles)'; for p in $$list; do \
+	  echo " $(INSTALL_DATA) $$p $(DESTDIR)$(docdir)"; \
+	  $(INSTALL_DATA) $$p $(DESTDIR)$(docdir); \
+	done
 
 # Needed so that the install is optional
 #

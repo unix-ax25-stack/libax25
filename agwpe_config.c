@@ -165,8 +165,14 @@ int agwpe_config_load(const char *path, struct agwpe_config *cfg)
 			goto error;
 		}
 
+		/* A virtual ("loop") entry names no host at all, so host is
+		 * NULL there - and it is the documented spelling of the line,
+		 * not an abbreviation of one.  Check its length only when
+		 * there is something to check: strlen(NULL) is a crash, and
+		 * it was reached on a config file the documentation gives as
+		 * an example.  */
 		if (strlen(name) >= AGWPE_UPSTREAM_NAME_MAX ||
-		    strlen(host) >= AGWPE_UPSTREAM_HOST_MAX) {
+		    (host != NULL && strlen(host) >= AGWPE_UPSTREAM_HOST_MAX)) {
 			fprintf(stderr, "agwpe_config: name or host too long on line %d of %s\n",
 				lineno, path);
 			goto error;
@@ -196,8 +202,12 @@ int agwpe_config_load(const char *path, struct agwpe_config *cfg)
 		       sizeof(struct agwpe_upstream));
 		strncpy(cfg->upstreams[cfg->count].name, name,
 			sizeof(cfg->upstreams[cfg->count].name) - 1);
-		strncpy(cfg->upstreams[cfg->count].host, host,
-			sizeof(cfg->upstreams[cfg->count].host) - 1);
+		/* Leave the host empty for a virtual ("loop") entry: there is
+		 * none, and copying a NULL into it is a crash too.  The memset
+		 * above has already zeroed the field.  */
+		if (host != NULL)
+			strncpy(cfg->upstreams[cfg->count].host, host,
+				sizeof(cfg->upstreams[cfg->count].host) - 1);
 
 		if (virtual) {
 			cfg->upstreams[cfg->count].virtual = 1;

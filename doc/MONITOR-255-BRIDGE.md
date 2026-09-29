@@ -24,8 +24,10 @@ nothing to tap, so the libax25 side of the wampes bridge lays those frames on
 the loop port itself.
 
 Where the mirror connects is the same place the AGWPE backend looks:
-`AXSOCK_HOST`/`AXSOCK_PORT` (default 127.0.0.1:8100; a leading `/` is a unix
-socket; `AXSOCK_USER`/`AXSOCK_PASSWORD` log in where the server asks).  A link
+`AXSOCK_HOST` decides, a leading `/` being a unix socket and anything else a
+TCP host, and `AXSOCK_PORT` gives the port of a TCP host.  Unset, both come
+from `ax25common.conf`, so the mirror and ax25netd cannot drift apart.
+`AXSOCK_USER`/`AXSOCK_PASSWORD` log in where the server asks.  A link
 that has dropped is thrown away and re-established at the next frame.  An
 unreachable server fails silently — the wampes bridge itself keeps working
 without ax25netd.

@@ -28,15 +28,19 @@ it is left out.  So on Linux say --enable-userspace-ax25 when
 
 AXSOCK_BACKEND=kernel|agwpe|wampes overrides that choice for one process.
 The AGWPE backend keeps one connection, to the server named by the
-environment variables AXSOCK_HOST and AXSOCK_PORT.  Their default,
-127.0.0.1:8100, is the loop port of an ax25netd(8), so by default every
-AGWPE socket goes through the daemon, which joins several radio programs
-and offers each upstream as an AGWPE port.  Point the variables at a radio
-program instead - a direwolf listens on 8000 - and the daemon is skipped
-and libax25 speaks AGWPE with that program directly.  agwpe.conf(5) is read
-by ax25netd alone and tells it which upstreams to join; libax25 never reads
-it.  wampes.conf(5) names the WAMPES nodes, and a port named there is
-handed to its node at bind(2).
+environment variable AXSOCK_HOST.  A value starting with / is a unix
+socket and is used as given; anything else is a TCP host, and AXSOCK_PORT
+then gives the port (default 8100).  With neither variable set, libax25
+reads ax25common.conf - the same file ax25netd(8) reads - and uses the
+loop port it finds there, so the two cannot drift apart.  That is a unix
+socket by default, /var/run/ax25/sockets/ax25netd.sock, so by default
+every AGWPE socket goes through the daemon, which joins several radio
+programs and offers each upstream as an AGWPE port.  Point AXSOCK_HOST at
+a radio program instead - a direwolf listens on 8000 - and the daemon is
+skipped and libax25 speaks AGWPE with that program directly.  agwpe.conf(5)
+is read by ax25netd alone and tells it which upstreams to join; libax25
+never reads it.  wampes.conf(5) names the WAMPES nodes, and a port named
+there is handed to its node at bind(2).
 
 ax25-apps and ax25-tools have no such option - they use whatever the
 libax25 they were built and linked against provides.

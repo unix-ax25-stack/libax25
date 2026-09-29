@@ -62,6 +62,7 @@
 #include "netax25/agwpe_client.h"
 #include "netax25/axmon.h"
 #include "netax25/agwpe_config.h"
+#include "netax25/axcommon.h"
 #include "axsock_real.h"
 #include "agwpe_sock.h"
 #include "pathnames.h"
@@ -218,6 +219,7 @@ static int			axsock_nregistered;
 
 static const char		*axsock_host;
 static int			axsock_port;
+static char			axsock_hostbuf[AX25COMMON_SOCKET_MAX];
 
 static struct axsock_sock *axsock_find_locked(int fd)
 {
@@ -405,6 +407,65 @@ static void axsock_ports_parse(const unsigned char *data, size_t len)
  */
 
 /*
+ * Where the AGWPE server is, worked out once.
+ *
+ * AXSOCK_HOST decides the transport, and it wins: a leading '/' is taken
+ * as given, anything else is a TCP host.  That is also how a station
+ * points the shim at a radio program instead of an ax25netd.
+ *
+ * Without it we read ax25common.conf - the same file ax25netd reads - and
+ * use whatever loop port it serves there.  That is the point of the file:
+ * server and client cannot drift apart.  It also has to be so, because
+ * the loop port is a unix socket by default and 127.0.0.1:8100 is not
+ * what answers then.
+ *
+ * AXSOCK_PORT is a TCP port and is only looked at when the host turned
+ * out to be a TCP host.  Setting it alone does not throw the configured
+ * socket away - otherwise a port set for some other reason would
+ * disconnect a socket that was there for a reason.
+ *
+ * A missing or unreadable ax25common.conf is not an error; what the load
+ * leaves in place is the built-in default, which is the socket path
+ * ax25netd uses when it is not told otherwise.  Nothing is invented here.
+ */
+static void axsock_resolve_server(void)
+{
+	static int done;
+	struct ax25common com;
+	const char *host, *portstr;
+
+	if (done)
+		return;
+	done = 1;
+
+	axsock_port = AXSOCK_DEFAULT_PORT;
+	axsock_host = AXSOCK_DEFAULT_HOST;
+
+	host = getenv("AXSOCK_HOST");
+	if (host == NULL || host[0] == '\0') {
+		if (ax25common_config_load(ax25common_default_config(),
+					   &com) == 0 &&
+		    com.loop_socket[0] != '\0') {
+			strncpy(axsock_hostbuf, com.loop_socket,
+				sizeof(axsock_hostbuf) - 1);
+			axsock_hostbuf[sizeof(axsock_hostbuf) - 1] = '\0';
+			axsock_host = axsock_hostbuf;
+		}
+	} else {
+		axsock_host = host;
+	}
+
+	if (axsock_host[0] == '/')
+		return;			/* a socket has no port */
+
+	portstr = getenv("AXSOCK_PORT");
+	if (portstr != NULL && portstr[0] != '\0')
+		axsock_port = atoi(portstr);
+	if (axsock_port <= 0 || axsock_port > 65535)
+		axsock_port = AXSOCK_DEFAULT_PORT;
+}
+
+/*
  * Connect the AGWPE client to the configured server.  A leading '/'
  * in AXSOCK_HOST selects a unix domain socket (a path), anything else
  * a TCP host:port.  The unix socket is gated by its file permissions,
@@ -413,6 +474,7 @@ static void axsock_ports_parse(const unsigned char *data, size_t len)
  */
 static int axsock_transport_connect(agwpe_client_t *c)
 {
+	axsock_resolve_server();
 	if (axsock_host[0] == '/')
 		return agwpe_client_connect_unix(c, axsock_host);
 	return agwpe_client_connect_host(c, axsock_host, axsock_port);
@@ -420,7 +482,6 @@ static int axsock_transport_connect(agwpe_client_t *c)
 
 static int axsock_ports_fetch(void)
 {
-	const char *host, *portstr;
 	const char *user, *pass;
 	struct addrinfo hints, *res, *ai;
 	char service[16];
@@ -445,14 +506,7 @@ static int axsock_ports_fetch(void)
 	}
 	axsock_gports_asked = time(NULL);
 
-	host = getenv("AXSOCK_HOST");
-	axsock_host = (host != NULL && host[0] != '\0') ?
-		host : AXSOCK_DEFAULT_HOST;
-	portstr = getenv("AXSOCK_PORT");
-	axsock_port = (portstr != NULL && portstr[0] != '\0') ?
-		atoi(portstr) : AXSOCK_DEFAULT_PORT;
-	if (axsock_port <= 0 || axsock_port > 65535)
-		axsock_port = AXSOCK_DEFAULT_PORT;
+	axsock_resolve_server();
 
 	snprintf(service, sizeof(service), "%d", axsock_port);
 	memset(&hints, 0, sizeof(hints));
@@ -632,12 +686,8 @@ static int axsock_server_local(void)
 	if (cached >= 0)
 		return cached;
 
-	host = getenv("AXSOCK_HOST");
-	if (host == NULL || host[0] == '\0') {
-		/* The default server is ax25netd on 127.0.0.1.  */
-		cached = 1;
-		return cached;
-	}
+	axsock_resolve_server();
+	host = axsock_host;
 	if (host[0] == '/') {
 		/* A unix socket is on this machine by definition.  */
 		cached = 1;
@@ -2071,7 +2121,6 @@ static int axsock_ensure_locked(void)
 	const struct agwpe_client_cb cb = {
 		.raw_frame = axsock_dispatch,
 	};
-	const char *host, *portstr;
 
 	if (axsock_up)
 		return 0;
@@ -2079,16 +2128,10 @@ static int axsock_ensure_locked(void)
 	if (axsock_agwpe != NULL)
 		axsock_client_retire();
 
-	host = getenv("AXSOCK_HOST");
-	axsock_host = (host != NULL && host[0] != '\0') ?
-		host : AXSOCK_DEFAULT_HOST;
-	portstr = getenv("AXSOCK_PORT");
-	axsock_port = (portstr != NULL && portstr[0] != '\0') ?
-		atoi(portstr) : AXSOCK_DEFAULT_PORT;
-	if (axsock_port <= 0 || axsock_port > 65535)
-		axsock_port = AXSOCK_DEFAULT_PORT;
+	axsock_resolve_server();
 
 	axsock_agwpe = agwpe_client_new(&cb, NULL);
+
 	if (axsock_agwpe == NULL) {
 		errno = ENOMEM;
 		return -1;

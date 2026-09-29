@@ -147,6 +147,29 @@ dn: the name - as a substring, so a substitution of that name would rewrite
 dn: the token before make ever sees it.
 AC_SUBST(wampes_sockdir, [$wampes_tcpdir])
 
+dnl Where the ax25netd loop port keeps its unix socket, used as the default
+dnl for "loop socket" in ax25common.conf.  This is a compiled-in default only:
+dnl a station that wants a different one writes "loop socket" into the file,
+dnl which is the same file ax25netd and every local client read, so server
+dnl and client cannot drift apart.
+dnl
+dnl /var/run rather than /run on purpose.  Linux has /run and knows
+dnl /var/run as a symlink to it, macOS has /var/run and no /run at all, and
+dnl this is built on both.  /var/run is the one spelling that is correct
+dnl without asking which system we are on.
+AC_ARG_WITH([loop-socket],
+	AS_HELP_STRING([--with-loop-socket=PATH], [where the ax25netd loop port listens by default, i.e. without a "loop socket" line in ax25common.conf (default: /var/run/ax25/sockets/ax25netd.sock)]),
+	[loop_socket=$withval],
+	[loop_socket=/var/run/ax25/sockets/ax25netd.sock])
+case "$loop_socket" in
+	/*) ;;
+	*)  AC_MSG_ERROR([--with-loop-socket has to be an absolute path, not "$loop_socket"]) ;;
+esac
+AC_MSG_CHECKING([where the ax25netd loop port listens by default])
+AC_MSG_RESULT([$loop_socket])
+AC_DEFINE_UNQUOTED([AX25COMMON_SOCKET_DEFAULT], ["$loop_socket"],
+	[Default for "loop socket" in ax25common.conf.  An absolute path.])
+
 AM_CONDITIONAL([BUILD_STATIC], [test "$enable_static" = yes])
 AC_CONFIG_FILES([Makefile libax25.spec])
 AC_OUTPUT

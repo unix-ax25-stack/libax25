@@ -69,7 +69,11 @@ extern "C" {
  * user (uid and primary gid after the privilege drop), so the daemon's
  * own user and group can connect.  AGWPE_GROUP_NAMED restricts access
  * to a single group (e.g. "hams", see ax25-tools/ax25/axspawn.conf),
- * AGWPE_GROUP_ALL makes the socket world accessible.  */
+ * AGWPE_GROUP_ALL makes the socket world accessible.
+ *
+ * AGWPE_GROUP_DEFAULT is no longer what an absent "group" directive
+ * means - that is AGWPE_GROUP_ALL - but the "default" value of the
+ * directive still selects it, so the choice remains available.  */
 #define	AGWPE_GROUP_DEFAULT	0
 #define	AGWPE_GROUP_NAMED	1
 #define	AGWPE_GROUP_ALL		2

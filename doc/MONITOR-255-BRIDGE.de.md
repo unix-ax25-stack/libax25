@@ -24,9 +24,12 @@ inklusive der H-Bits, an seine Monitor-Clients weiter. Ein WAMPES-Node ist kein
 AGWPE-Upstream und gibt ax25netd nichts zum Abgreifen — deshalb legt die
 libax25-Seite der wampes-Brücke diese Frames selbst auf den Loop-Port.
 
-Wo der Spiegel anbindet, sucht auch das AGWPE-Backend: `AXSOCK_HOST`/
-`AXSOCK_PORT` (Default `127.0.0.1:8100`; führendes `/` ist ein Unix-Socket;
-`AXSOCK_USER`/`AXSOCK_PASSWORD` melden sich an, wo der Server das verlangt).
+Wo der Spiegel anbindet, sucht auch das AGWPE-Backend: `AXSOCK_HOST`
+entscheidet — ein führendes `/` ist ein Unix-Socket, alles andere ein
+TCP-Host — und `AXSOCK_PORT` nennt den Port eines TCP-Hosts. Sind beide
+nicht gesetzt, kommen sie aus der `ax25common.conf`, können also nicht
+auseinanderlaufen. `AXSOCK_USER`/`AXSOCK_PASSWORD` melden sich an, wo der
+Server das verlangt.
 Eine abgerissene Verbindung wird verworfen und beim nächsten Frame neu
 aufgebaut. Ein nicht erreichbarer Server scheitert **still** — die wampes-
 Brücke selbst funktioniert ohne ax25netd weiter.

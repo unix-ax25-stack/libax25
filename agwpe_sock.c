@@ -1067,15 +1067,23 @@ static void axsock_raw_name(struct axsock_sock *s, unsigned char port,
 
 	/*
 	 * Only a port that is known to be a port may be read back as a name.
-	 * When the bind could not determine one, the number that went on the
-	 * wire is the first port such a socket has always used, and it is
+	 * When the bind could not determine one, the number that went on
+	 * the wire is the first port such a socket has always used, and it is
 	 * indistinguishable there from channel 0 of the first upstream.  An
 	 * axports entry that happens to sit on that number would then be
 	 * reported for a frame that never went near it, which is worse than
 	 * saying nothing: an operator who reads a name off a monitor takes
 	 * it as the answer to "which port was this on".
+	 *
+	 * The loop port is the one exception, and it is not a corner: 255 is
+	 * reserved by the protocol for exactly this upstream, so its number
+	 * names it as unambiguously as any axports entry could, whether or
+	 * not the monitor was bound and whether or not a loop line exists.
+	 * Every frame that crossed a WAMPES node lands on it, and it is the
+	 * port the mirror itself sends on, so leaving it unnamed is what
+	 * made a mirrored frame show up as "?" instead of "loop:".
 	 */
-	if (s->port_known)
+	if (s->port_known || port == AGWPE_PORT_LOOP)
 		name = axsock_port_name(port);
 	if (name == NULL)
 		name = s->portname;

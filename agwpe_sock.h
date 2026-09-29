@@ -65,6 +65,12 @@ int agwpe_write(int fd, const void *buf, size_t len, ssize_t *ret);
 int agwpe_socktype(int fd);
 int agwpe_forget(int fd);
 
+/* The one resolution of the endpoint both backends use, so the monitor
+ * mirror in wampes.c reaches the same ax25netd the client here does.  Without
+ * it the mirror keeps the built-in 127.0.0.1:8100 and never finds a node that
+ * serves a loop socket.  *port is ignored when the returned host is a path. */
+const char *axsock_server_endpoint(int *port);
+
 /* Named agwpe_* since the split, because that is what they are: this
  * backend letting go.  They used to be axsock_*, from when everything lived
  * in one file and the prefix said nothing. */

@@ -466,6 +466,20 @@ static void axsock_resolve_server(void)
 }
 
 /*
+ * The endpoint both backends connect to, resolved exactly once by
+ * axsock_resolve_server() so the AGWPE client here and the monitor mirror in
+ * wampes.c can never disagree about it.  *port is meaningless when the host
+ * is a socket path, because a path carries no port.
+ */
+const char *axsock_server_endpoint(int *port)
+{
+	axsock_resolve_server();
+	if (port != NULL)
+		*port = axsock_port;
+	return axsock_host;
+}
+
+/*
  * Connect the AGWPE client to the configured server.  A leading '/'
  * in AXSOCK_HOST selects a unix domain socket (a path), anything else
  * a TCP host:port.  The unix socket is gated by its file permissions,

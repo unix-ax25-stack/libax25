@@ -1436,7 +1436,8 @@ static agwpe_client_t *wampes_mirror_client;
 static int wampes_mirror_open(void)
 {
 	const struct agwpe_client_cb cb = { 0 };
-	const char *host, *portstr, *user, *pass;
+	const char *host, *user, *pass;
+	int port;
 
 	if (wampes_mirror_client != NULL) {
 		if (agwpe_client_connected(wampes_mirror_client))
@@ -1448,13 +1449,10 @@ static int wampes_mirror_open(void)
 		wampes_mirror_client = NULL;
 	}
 
-	host = getenv("AXSOCK_HOST");
-	if (host == NULL || host[0] == '\0')
-		host = AXSOCK_DEFAULT_HOST;
-	portstr = getenv("AXSOCK_PORT");
-	if (portstr == NULL || portstr[0] == '\0' ||
-	    atoi(portstr) <= 0 || atoi(portstr) > 65535)
-		portstr = NULL;
+	/* One resolution, the one the AGWPE client itself uses: ax25common.conf
+	 * first, so a node whose loop port is a unix socket is found there and
+	 * not on the old 127.0.0.1:8100 this used to assume on its own. */
+	host = axsock_server_endpoint(&port);
 
 	wampes_mirror_client = agwpe_client_new(&cb, NULL);
 	if (wampes_mirror_client == NULL)
@@ -1464,9 +1462,7 @@ static int wampes_mirror_open(void)
 		if (agwpe_client_connect_unix(wampes_mirror_client, host) != 0)
 			goto fail;
 	} else if (agwpe_client_connect_host(wampes_mirror_client, host,
-					     portstr != NULL ?
-					     atoi(portstr) :
-					     AXSOCK_DEFAULT_PORT) != 0) {
+					     port) != 0) {
 		goto fail;
 	}
 

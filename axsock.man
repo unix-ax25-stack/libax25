@@ -31,22 +31,38 @@ that is up are the kernel's, and of the rest the ones named in
 .BR wampes.conf (5)
 belong to a node while the AGWPE backend takes those it recognises as an
 upstream name.  The AGWPE backend recognises an upstream by the name
-.BR agwpe.conf (5)
+.BR ax25netd_agwpe.conf (5)
 gives it, or, where that file does not have it, by the port table the server
 reports over the connection described below.  An entry of
 .B axports
 that no backend claims stays with the kernel, which refuses it in its own
 words if it has no such port.
 .LP
-The AGWPE backend keeps one connection
-to the server named by
-the environment variables
-.BR AXSOCK_HOST " / " AXSOCK_PORT .
-By default that server is an
+The AGWPE backend keeps one connection to a server, and
+.B AXSOCK_HOST
+decides which transport it uses: a value beginning with
+.B /
+is a unix socket and is used as given, anything else is a TCP host.  The
+socket file, or the TCP port through
+.BR AXSOCK_PORT ,
+is the one thing that is not decided here, and that is deliberate - it is
+read from
+.BR ax25common.conf (5),
+the same file the daemon reads for its own listener, so the backend
+cannot end up at an endpoint
 .BR ax25netd (8)
-on its loop port, 127.0.0.1:8100, which joins several radios; point the port
-at a radio program such as direwolf (8000) instead, and the daemon is
-skipped entirely.
+does not serve.  The loop port is a unix socket by default,
+.IR /var/run/ax25/sockets/ax25netd.sock ,
+and
+.B loop socket no
+together with
+.B loop tcp
+is how a station says it is a TCP port instead.
+.LP
+Set
+.B AXSOCK_HOST
+to name a radio program directly - direwolf listens on 8000 - and the
+daemon is skipped entirely.
 .LP
 It is built when
 .B configure
@@ -341,16 +357,26 @@ each descriptor, including the whole conversation with a WAMPES node.  This
 is the first thing to reach for.
 .TP
 .BR AXSOCK_HOST ", " AXSOCK_PORT
-Environment variables: where the AGWPE backend looks for its server, by
-default 127.0.0.1 and 8100, the loop port of an
+Environment variables: where the AGWPE backend looks for its server.
+.B AXSOCK_HOST
+decides the transport - a leading
+.B /
+is a path, anything else is a TCP host - and with it unset the backend
+falls back on
+.BR ax25common.conf (5),
+so by default it finds the loop port of an
 .BR ax25netd (8)
 multiplexing the radios its
-.BR agwpe.conf (5)
-lists.  To skip the daemon and speak to a radio program directly, set the
-port to 8000, where direwolf listens.
-A value beginning with
-.B /
-is a path and selects the server's unix socket instead, which is gated by its
+.BR ax25netd_agwpe.conf (5)
+lists: a unix socket,
+.IR /var/run/ax25/sockets/ax25netd.sock .
+.BR AXSOCK_PORT
+then gives the TCP port, 8100 where the file does not say.  To skip the
+daemon and speak to a radio program directly, name it:
+.B AXSOCK_HOST=127.0.0.1 AXSOCK_PORT=8000
+for direwolf.  A value of
+.B AXSOCK_HOST
+that is a path selects the server's unix socket instead, which is gated by its
 file permissions \-\- an
 .BR ax25netd (8)
 configured with
@@ -443,7 +469,7 @@ will meet it.
 .LP
 @@@AX25_SYSCONFDIR@@@/axports
 .br
-@@@AX25_SYSCONFDIR@@@/agwpe.conf
+@@@AX25_SYSCONFDIR@@@/ax25netd_agwpe.conf
 .br
 @@@AX25_SYSCONFDIR@@@/wampes.conf
 .SH "SEE ALSO"
@@ -452,7 +478,8 @@ will meet it.
 .BR ax25 (3),
 .BR ax25 (4),
 .BR axports (5),
-.BR agwpe.conf (5),
+.BR ax25common.conf (5),
+.BR ax25netd_agwpe.conf (5),
 .BR wampes.conf (5),
 .BR ax25d (8),
 .BR ax25netd (8),

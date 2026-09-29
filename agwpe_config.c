@@ -17,7 +17,7 @@
  * <https://www.gnu.org/licenses/>.
  */
 /*
- * Parser for agwpe.conf.  One upstream per line:
+ * Parser for ax25netd_agwpe.conf.  One upstream per line:
  *
  *	<name>	<host>	<tcp-port>	[description]
  *
@@ -52,8 +52,9 @@
 
 #include <netax25/agwpe_config.h>
 
-/* Credentials go into agwpe_shadow.conf, never into agwpe.conf, so that
- * agwpe.conf stays readable for orientation while the passwords live in
+/* Credentials go into ax25netd_agwpe_shadow.conf, never into
+ * ax25netd_agwpe.conf, so that ax25netd_agwpe.conf stays readable for
+ * orientation while the passwords live in
  * a mode 0600 root owned file.  */
 #define	AGWPE_SHADOW_SUFFIX	"-shadow.conf"
 
@@ -241,11 +242,13 @@ error:
 
 /*
  * Read the credentials for an ax25netd instance from path (typically
- * "agwpe_shadow.conf" in the directory of agwpe.conf).  Lines are
+ * "ax25netd_agwpe_shadow.conf" in the directory of
+ * ax25netd_agwpe.conf).  Lines are
  *
  *	<target>	<user>		<password>
  *
- * where target is an upstream name from agwpe.conf, or AGWPE_AUTH_TARGET
+ * where target is an upstream name from ax25netd_agwpe.conf, or
+ * AGWPE_AUTH_TARGET
  * ("ax25netd") for the general client authentication of the daemon.  A
  * missing file is not an error; a target that matches neither is.
  * The file is expected to be mode 0600 and owned by root.

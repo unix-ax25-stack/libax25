@@ -5,7 +5,7 @@ The AX.25 stack leaves the Linux kernel in 7.1, and macOS and BSD never had
 one.  Programs written against libax25 still expect socket(AF_AX25, ...) to
 work, and libax25 can answer them itself.  This file is the short version;
 axsock(7) is the whole story: axports(5) maps the AX.25 port names onto
-the AGWPE or WAMPES servers, agwpe.conf(5) tells ax25netd what to
+the AGWPE or WAMPES servers, ax25netd_agwpe.conf(5) tells ax25netd what to
 multiplex, and wampes.conf(5) names the WAMPES nodes.
 
 libax25 can intercept the AX.25 socket calls and serve them from userspace
@@ -37,8 +37,9 @@ socket by default, /var/run/ax25/sockets/ax25netd.sock, so by default
 every AGWPE socket goes through the daemon, which joins several radio
 programs and offers each upstream as an AGWPE port.  Point AXSOCK_HOST at
 a radio program instead - a direwolf listens on 8000 - and the daemon is
-skipped and libax25 speaks AGWPE with that program directly.  agwpe.conf(5)
-is read by ax25netd alone and tells it which upstreams to join; libax25
+skipped and libax25 speaks AGWPE with that program directly.
+ax25netd_agwpe.conf(5) is read by ax25netd alone and tells it which
+upstreams to join; libax25
 never reads it.  wampes.conf(5) names the WAMPES nodes, and a port named
 there is handed to its node at bind(2).
 

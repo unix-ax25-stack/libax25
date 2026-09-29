@@ -315,11 +315,11 @@ static int axsock_is_ax25(const struct sockaddr *addr, socklen_t len)
  * Each entry is one flat AGWPE port with the name of the upstream that
  * owns it.  The table is cached for the life of the process: the flat
  * numbering (upstream index * 16 + channel) is designed to survive netd
- * and upstream restarts, and agwpe.conf is read once at startup anyway.
+ * and upstream restarts, and ax25netd_agwpe.conf is read once at startup anyway.
  */
 struct axsock_gport {
 	unsigned char	port;		/* flat AGWPE port byte */
-	char		up[24];		/* upstream name (agwpe.conf) */
+	char		up[24];		/* upstream name (ax25netd_agwpe.conf) */
 };
 
 #define	AXSOCK_GPORTS	(AGWPE_PORT_LOOP + 1)	/* flat ports 0..255 */
@@ -626,7 +626,7 @@ static int axsock_gport_channel(const char *base, int chan)
 
 /* Strip the conventional "agwpe-" namespace marker from an axports
  * interface name, so the remaining name can be matched against the
- * upstream name in the 'G' reply (the name in agwpe.conf).  The prefix
+ * upstream name in the 'G' reply (the name in ax25netd_agwpe.conf).  The prefix
  * keeps the virtual AGWPE interface names distinct from kernel AX.25
  * interfaces on systems with both.  */
 static const char *axsock_strip_prefix(const char *name)
@@ -671,9 +671,9 @@ static int axsock_port_of_entry(const char *entry);
  * Is the AGWPE server this shim talks to on this machine?
  *
  * That decides where an upstream's index may be read from.  On this host
- * the agwpe.conf in front of us is the server's own file, and the position
+ * the ax25netd_agwpe.conf in front of us is the server's own file, and the position
  * of an upstream in it is the index AGWPE numbers its ports from.  A server
- * elsewhere has an agwpe.conf of its own, which this one need not be, so
+ * elsewhere has an ax25netd_agwpe.conf of its own, which this one need not be, so
  * nothing here says anything about it.
  */
 static int axsock_server_local(void)
@@ -725,7 +725,7 @@ static int axsock_server_local(void)
  * because the number and the name have to be able to disagree.  Both walk
  * the same list and find the same entry, but axsock_port_for() then asks a
  * second question - which upstream serves this entry - and that one is
- * allowed to fail.  An entry no agwpe.conf upstream serves is exactly the
+ * allowed to fail.  An entry no ax25netd_agwpe.conf upstream serves is exactly the
  * case worth being able to see: axsock_port_for() answers -1 for it and the
  * bind is refused, while a monitor on the raw stream still sees frames,
  * because those frames got to ax25netd and ax25netd is what puts them on
@@ -733,7 +733,7 @@ static int axsock_server_local(void)
  *
  * Printing the port number there would say less and mislead.  The number is
  * this machine's answer to "which upstream index", neither axports nor
- * agwpe.conf ever wrote it down, and it does not read back as a name: one
+ * ax25netd_agwpe.conf ever wrote it down, and it does not read back as a name: one
  * upstream's channels share its stride, so a number cannot tell channel 0
  * from channel 5.  The name is what the operator wrote and can go and fix.
  *
@@ -750,7 +750,7 @@ static int axsock_server_local(void)
  *
  * Truncating quietly would be worse than not copying it at all: the cut
  * string is not the name in any file, so a monitor would print it as if it
- * were one, and an operator who copied it into agwpe.conf would get a
+ * were one, and an operator who copied it into ax25netd_agwpe.conf would get a
  * port that does not exist.  A tilde says the label is cut, which is the
  * one thing about it the reader can act on.  Returns the length written,
  * terminator not counted.
@@ -862,7 +862,7 @@ static int axsock_port_for(const char *call)
  * It is not there when the server does not answer it - a stub in front of
  * the socket, a server that has not finished coming up, or a test rig with
  * nothing behind it at all.  When the server is on this machine then
- * agwpe.conf is the server's own file and the position of an upstream in it
+ * ax25netd_agwpe.conf is the server's own file and the position of an upstream in it
  * is that index, so i*16+c is exact and no server is needed for it.  A
  * server elsewhere cannot be answered for that way, and then there is
  * nothing left but to refuse.
@@ -1029,13 +1029,13 @@ static int axsock_bind_port(const struct sockaddr *addr,
  * that is actually on the port number, so a monitor on one port of a
  * two-channel upstream is told which channel it is looking at.  It answers
  * nothing for a port number that no axports entry is on, and that is not a
- * corner but the ordinary result of an upstream that agwpe.conf does not
+ * corner but the ordinary result of an upstream that ax25netd_agwpe.conf does not
  * list - and the raw stream still carries its frames, because they got to
  * ax25netd, which is what put them on the wire.
  *
  * s->portname is the answer for that case: the name the bind asked for, kept
  * since the bind.  It is the one half of the answer that means something to
- * the operator, who can go and put the upstream in agwpe.conf, and it is
+ * the operator, who can go and put the upstream in ax25netd_agwpe.conf, and it is
  * not recoverable later - the number does not say which entry wanted it, and
  * for a port no upstream serves there is no index to compute one from.
  *
@@ -2441,7 +2441,7 @@ int agwpe_socktype(int fd)
 /*
  * Do the upstream names of the local ax25netd include this one?
  *
- * agwpe.conf is where the upstreams of an ax25netd on this machine are named,
+ * ax25netd_agwpe.conf is where the upstreams of an ax25netd on this machine are named,
  * and it is the file the axports entry corresponds to.  Reading it answers the
  * question for the ordinary single-machine setup without anything on the wire,
  * which matters: a bind that had to ask the server would put a TCP connection
@@ -2460,7 +2460,7 @@ int agwpe_socktype(int fd)
  * found, and the port table answers for it, so a shim configured for a remote
  * server keeps working.
  */
-/* The position of this upstream in the local agwpe.conf, or -1 when the
+/* The position of this upstream in the local ax25netd_agwpe.conf, or -1 when the
  * file has no such upstream.  That position is the index AGWPE numbers the
  * upstream's ports from, so it is worth having: it is the only way to learn
  * a port number without asking the server, and it is exact whenever the
@@ -2507,7 +2507,7 @@ static int agwpe_local_upstream(const char *base)
  * virtual loopback upstream is ours by construction wherever it is named,
  * because axsock_port_for() sends it there and the two answers have to agree.
  *
- * The local agwpe.conf decides the ordinary case; the server's own port table
+ * The local ax25netd_agwpe.conf decides the ordinary case; the server's own port table
  * is asked only for a name the file does not have, which is the machine whose
  * server is elsewhere.  A name neither knows is not ours, and the descriptor
  * goes back to bind() to be refused in the kernel's words - the port is

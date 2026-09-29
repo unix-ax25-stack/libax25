@@ -31,6 +31,8 @@
 #ifndef	_NETAX25_AGWPE_CONFIG_H
 #define	_NETAX25_AGWPE_CONFIG_H
 
+#include <sys/types.h>		/* mode_t */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -137,6 +139,14 @@ struct agwpe_config {
 	 * overridable on the command line.  */
 	int			group_mode;
 	char			group_name[64];
+
+	/* Mode of the directory holding the unix socket, as octal.  This
+	 * is what lets a local account other than the daemon run user
+	 * reach a socket it does not own, so it is a separate decision
+	 * from the socket mode that group_mode picks.  From
+	 * ax25common.conf ("loop mode"), not settable on the command
+	 * line.  */
+	mode_t			loop_mode;
 };
 
 /*

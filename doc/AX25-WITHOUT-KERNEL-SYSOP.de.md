@@ -274,6 +274,46 @@ innerhalb davon genießt Vertrauen.**  Behandelt die Mitgliedschaft in dieser
 Gruppe so, wie Ihr das Recht behandelt, den Sender zu benutzen, denn genau das
 ist es.
 
+
+### Der ax25netd-Loop-Socket ist dieselbe Frage eine Ebene hoeher
+
+`/tcp/sockets/ax25` ist der WAMPES-Knoten.  Der Loop-Port von `ax25netd` ist
+ein zweiter Socket derselben Art, und ueber ihn laufen alle lokalen
+AX.25-Programme der Maschine.  Seine Adresse steht in der
+`ax25common.conf(5)`, die `ax25netd` und saemtliche Clients lesen, und ist
+voreingestellt auf
+
+```
+/var/run/ax25/sockets/ax25netd.sock
+```
+
+Die Regel ist dieselbe — Dateisystem, keine Anmeldung — und der Regler auch:
+
+```
+loop group all             →  srw-rw-rw-   jedes lokale Konto
+loop group hams            →  srw-rw----   diese Gruppe und der Daemon
+loop mode 1775                                das Verzeichnis darunter
+```
+
+`loop mode` ist dieselbe Trennung wie oben: der Socket sagt, wer sich
+verbinden darf, das Verzeichnis, wer ihn finden darf.  `1775` — welt
+begehbar, mit Sticky-Bit — ist die Voreinstellung, und das Sticky-Bit ist der
+lohnende Teil: ohne es kann ein lokales Konto die Socket-Datei eines anderen
+umbenennen oder loeschen und den Loop-Port auf diesem Weg uebernehmen, wogegen
+kein Socket-Modus etwas vermag.  `0750` ist die engere Wahl fuer eine
+Maschine, auf der nur eine Gruppe von Konten ueberhaupt AX.25 spricht.
+
+`loop group all` ist hier die Voreinstellung, und der Grund verdient einen
+Satz, weil der WAMPES-Knoten oben anders herum eingestellt ist.  Ein
+Loop-Port, der nicht jedem lokalen Konto offen ist, heisst, dass die Werkzeuge
+auf dem eigenen Schreibtisch das Geraet nicht erreichen — und die Abhilfe ist
+eine Gruppenzugehoerigkeit, an die man sich nach jeder Neuinstallation erinnern
+muss.  Er reicht nicht ueber die Maschine hinaus: dafuer ist der
+Verzeichnismodus da, und das gibt man mit `loop tcp` auf.  Wo Konten
+existieren, die nicht senden duerfen, benennt man sie mit `loop group` aus;
+dass man sie hat, merkt man daran, dass ein lokales Werkzeug aufhoert zu
+arbeiten.
+
 Lest diese Liste als das, was *möglich* ist, nicht als das, was wahrscheinlich
 ist.  Ein Dienst bindet beim Hochfahren der Maschine und hält sein Rufzeichen,
 solange er läuft, und was gehalten wird, kann nicht genommen werden.  Es ist

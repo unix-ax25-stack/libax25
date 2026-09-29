@@ -56,8 +56,12 @@
 #define WAMPES_MAX_SOCK 64
 
 /* Where a node listens when nothing says otherwise: one machine, one node,
- * no configuration file worth the name. */
-#define WAMPES_DEFAULT_SOCKET "/usr/local/wampes/sockets/ax25"
+ * no configuration file worth the name.  WAMPES_SOCKET_DIR is what
+ * --with-wampes-tcpdir was given, so this follows the platform the build was
+ * configured for rather than a path guessed at compile time - which is how
+ * a Linux build ended up looking under /usr/local/wampes.  wampes.conf says
+ * the same and wins over it whenever it names the local node. */
+#define WAMPES_DEFAULT_SOCKET WAMPES_SOCKET_DIR "/sockets/ax25"
 #define WAMPES_CALLLEN  10              /* "DL9SAU-15" and the NUL */
 #define AX25_REPEATED	0x80		/* in the SSID byte, as on the air */
 

@@ -143,9 +143,20 @@ esac
 dnl Spelled differently from the @@@WAMPES_TCPDIR@@@ token it fills on
 dnl purpose: config.status replaces @name@ wherever it finds it, and a
 dnl token of that shape contains "@WAMPES_TCPDIR@" - one @ on either side of
-dn: the name - as a substring, so a substitution of that name would rewrite
-dn: the token before make ever sees it.
+dnl the name - as a substring, so a substitution of that name would rewrite
+dnl the token before make ever sees it.
 AC_SUBST(wampes_sockdir, [$wampes_tcpdir])
+
+dnl The same directory in the C code, for the place a WAMPES node is when
+dnl nothing says otherwise.  Before this, wampes.c had the macOS default
+dnl compiled in, so a Linux build without a wampes.conf looked for a node
+dnl under /usr/local/wampes - a path that exists by accident on some hosts
+dnl and never on the one it was built for.  Derived from the same
+dnl --with-wampes-tcpdir, so the compiled-in default and the commented
+dnl example line in wampes.conf cannot name two different places.
+AC_DEFINE_UNQUOTED([WAMPES_SOCKET_DIR], ["$wampes_tcpdir"],
+	[Directory holding the WAMPES node sockets, from --with-wampes-tcpdir.])
+
 
 dnl Where the ax25netd loop port keeps its unix socket, used as the default
 dnl for "loop socket" in ax25common.conf.  This is a compiled-in default only:

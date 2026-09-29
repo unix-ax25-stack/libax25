@@ -261,6 +261,44 @@ In short: **the boundary is a file system one, and it is real — but everything
 inside it is trusted.**  Treat membership in that group as you would treat the
 right to use the transmitter, because that is what it is.
 
+
+### The ax25netd loop socket is the same question, one layer up
+
+`/tcp/sockets/ax25` is the WAMPES node.  `ax25netd`'s loop port is a second
+socket of the same kind, and it is the one every local AX.25 program on the
+machine comes through.  Its address comes from `ax25common.conf(5)`, which
+`ax25netd` and all of its clients read, and its default is
+
+```
+/var/run/ax25/sockets/ax25netd.sock
+```
+
+The rule is the same — file system, no login — and so is the knob:
+
+```
+loop group all             →  srw-rw-rw-   every local account
+loop group hams            →  srw-rw----   that group and the daemon
+loop mode 1775                                the directory it sits in
+```
+
+`loop mode` is the same split as above: the socket says who may connect, the
+directory says who may find it.  `1775` — world traversable, with the sticky
+bit — is the default, and the sticky bit is the part worth keeping: without
+it, one local account can rename or remove a socket file that belongs to
+another and take the loop port over that way, which no socket mode can
+prevent.  `0750` is the tighter choice for a machine where one group of
+accounts is the only one that ever speaks AX.25.
+
+`loop group all` is the default here, and the reason is worth saying plainly,
+because the WAMPES node above defaults the other way.  A loop port that is not
+open to every local account means the tools on your own desktop cannot reach
+the radio, and the fix is a group membership you have to remember to grant
+after every reinstall.  It does not reach off the machine: that is what the
+directory mode is for, and what `loop tcp` would give up if you switch it on.
+Where accounts exist that should not transmit, name them out with `loop
+group`; you will know you have, because that is when a local tool stops
+working.
+
 Read that list as what is *possible*, not as what is likely.  A service binds
 when the machine starts and holds its callsign for as long as it runs, and
 what is held cannot be taken.  It is the same class of thing as a unix user

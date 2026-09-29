@@ -17,7 +17,7 @@
  * <https://www.gnu.org/licenses/>.
  */
 /*
- * Configuration for AGWPE upstreams (agwpe.conf).  Each upstream is an
+ * Configuration for AGWPE upstreams (ax25netd_agwpe.conf).  Each upstream is an
  * AGWPE server (Direwolf, AGWPE on Windows, extmodem, ...) reachable
  * over TCP.  It is used by the ax25netd daemon to expose the upstreams
  * as a single AGWPE port to local clients.
@@ -57,7 +57,7 @@ extern "C" {
 #define	AGWPE_AUTH_TARGET	"ax25netd"
 
 /* Loop port client authentication modes, selected by the "auth"
- * directive in agwpe.conf.  The directive asks how much authentication
+ * directive in ax25netd_agwpe.conf.  The directive asks how much authentication
  * to require, so "yes" means every client must log in.  The default
  * when the directive is absent is AGWPE_AUTH_EXTERN.  */
 #define	AGWPE_AUTH_OFF		0	/* trust every client, no login */
@@ -87,7 +87,7 @@ struct agwpe_upstream {
 	int			virtual;	/* virtual loop upstream */
 
 	/* Optional AGWPE login credentials for this upstream, normally
-	 * filled in from agwpe_shadow.conf.  */
+	 * filled in from ax25netd_agwpe_shadow.conf.  */
 	char			user[AGWPE_AUTH_NAME_MAX];
 	char			pass[AGWPE_AUTH_PASS_MAX];
 };
@@ -106,24 +106,24 @@ struct agwpe_config {
 	/* Loop port client authentication mode: one of the AGWPE_AUTH_*
 	 * constants.  In AGWPE_AUTH_EXTERN (the default) and
 	 * AGWPE_AUTH_ALWAYS mode clients connecting from a non-loopback
-	 * address must log in with credentials from agwpe_shadow.conf
+	 * address must log in with credentials from ax25netd_agwpe_shadow.conf
 	 * before they may issue any other frame.  */
 	int			auth;
 
 	/* Automatic digipeater resolution ("autoroute yes|no" in
-	 * agwpe.conf): when set (the default) the daemon asks the ax25rtd
+	 * ax25netd_agwpe.conf): when set (the default) the daemon asks the ax25rtd
 	 * route cache for a learned path on the target port before it
 	 * sends a connect that names no digipeaters.  A connect with an
 	 * explicit digipeater path ('v') is never touched.  */
 	int			autoroute;
 
-	/* Loop port client credentials, from agwpe_shadow.conf.  */
+	/* Loop port client credentials, from ax25netd_agwpe_shadow.conf.  */
 	struct agwpe_auth	*clients;
 	int			nclients;
 
 	/* Loop port unix domain socket.  An empty path disables it; the
 	 * AGWPE protocol itself is unchanged, only the transport differs.
-	 * This is not configured in agwpe.conf: the daemon fills it from
+	 * This is not configured in ax25netd_agwpe.conf: the daemon fills it from
 	 * the shared ax25common.conf ("loop socket"), overridable on the
 	 * command line.  */
 	char			socket_path[108];
@@ -150,16 +150,16 @@ struct agwpe_config {
 };
 
 /*
- * Read the upstream list from path (typically "agwpe.conf" below
+ * Read the upstream list from path (typically "ax25netd_agwpe.conf" below
  * AX25_SYSCONFDIR).  Returns 0 on success, -1 on error.  The caller
  * must call agwpe_config_free().
  */
 extern int agwpe_config_load(const char *path, struct agwpe_config *cfg);
 
 /*
- * Read credentials from path (typically "agwpe_shadow.conf").  Lines
+ * Read credentials from path (typically "ax25netd_agwpe_shadow.conf").  Lines
  * are "<target> <user> <password>" where target is an upstream name
- * from agwpe.conf or AGWPE_LOOP_NAME for loop port clients.  Returns 0
+ * from ax25netd_agwpe.conf or AGWPE_LOOP_NAME for loop port clients.  Returns 0
  * on success (including a missing file, which simply leaves the
  * credentials empty) and -1 on parse errors.  The file is expected to
  * be mode 0600 and owned by root.

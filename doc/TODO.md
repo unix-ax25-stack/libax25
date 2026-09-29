@@ -86,7 +86,7 @@ it disappears.
 
 Decided while planning this, so that the next reading does not reopen it:
 
-* **`agwpe.conf` becomes the register, the way `wampes.conf` already is.**  A
+* **`ax25netd_agwpe.conf` becomes the register, the way `wampes.conf` already is.**  A
   port belongs to AGWPE when its name is in that file.  The `agwpe-` prefix
   stays a naming convention — it is decoration today too, stripped at one
   place before the name is matched against the upstream, and it never decided

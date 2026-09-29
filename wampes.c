@@ -183,7 +183,7 @@ static void sock_drop_locked(struct wampes_sock *s)
 /*---------------------------------------------------------------------------*/
 
 /* Which node, and where it listens.  One node per line in wampes.conf, in the
- * shape agwpe.conf has:
+ * shape ax25netd_agwpe.conf has:
  *
  *      <name>  <address>  [description]
  *

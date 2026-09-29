@@ -7,9 +7,9 @@
 # The name is what a program passes to say which port it wants, and which
 # backend serves it follows from the name:
 #
-#   - a name in agwpe.conf is served by ax25netd.  "radio0" is the first
+#   - a name in ax25netd_agwpe.conf is served by ax25netd.  "radio0" is the first
 #     channel of upstream radio0, "radio0:1" its second, and so on.  The
-#     name is the upstream's name from agwpe.conf, not the name of the
+#     name is the upstream's name from ax25netd_agwpe.conf, not the name of the
 #     program behind it - an upstream called radio0 that is a Direwolf is
 #     still "radio0" here, and calling the entry "direwolf" or "vhfdrop"
 #     is what makes a bind land on a port nobody serves.  An "agwpe-"
@@ -33,9 +33,9 @@
 # "wampes:<port>" name its own line and callsign - the explicit entry wins
 # over the fallback.
 
-#radio0		DL1AAA	9600	256	7	agwpe.conf upstream radio0, channel 0
-#radio0:1	DL1AAA-1	9600	256	7	agwpe.conf upstream radio0, channel 1
-#radio0:2	DL1AAA-2	9600	256	7	agwpe.conf upstream radio0, channel 2
+#radio0		DL1AAA	9600	256	7	ax25netd_agwpe.conf upstream radio0, channel 0
+#radio0:1	DL1AAA-1	9600	256	7	ax25netd_agwpe.conf upstream radio0, channel 1
+#radio0:2	DL1AAA-2	9600	256	7	ax25netd_agwpe.conf upstream radio0, channel 2
 #wampes		DL9SAU-0	9600	256	7	WAMPES node
 #wampes:hfb	DL9SAU-1	9600	256	7	WAMPES node, port hfb (pinned by its own call)
 #bpq0		DL9SAU-2	9600	256	7	kernel AX.25 interface bpq0

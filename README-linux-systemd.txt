@@ -17,15 +17,37 @@ that for "started by init".  Under systemd the parent of a service IS process
 1, so the fork never happens, the first process never exits, and a unit that
 waits for it waits for ever.
 
-So say Type=simple, and where the program offers it, tell it not to fork:
+So say Type=simple, and say -f where the program has it:
 
     ax25d -f                    since ax25-tools 0.0.10
+    ax25netd -f
+    ax25tcpd -f
     conversd -f                 (a separate project, see below)
 
 A program with no such switch is fine under Type=simple as long as it does
 not fork on its own - which, under systemd, is what daemon_start() already
 arranges by accident.  It is worth saying -f where it exists, so that the
 unit does not depend on that accident.
+
+But the accident is not available to everything here, and for the two
+ax25-apps daemons -f is not tidiness, it is the difference between a unit
+that supervises the daemon and one that loses it.  ax25d reaches for
+daemon_start(), which skips its fork under systemd, as described above.
+ax25netd and ax25tcpd do not use the library's helper: each carries its own
+daemonize() that forks unconditionally and only then looks at the -f flag.
+Under systemd that fork is not skipped, so without -f the daemon detaches,
+the parent exits 0, and systemd is left supervising a process that is no
+longer there.  A unit that does that still reports the service as started,
+which is what makes it hard to notice.
+
+Worse, the same daemonize() points its own standard input, output and error
+at /dev/null after forking.  What the daemon prints while it sets up reaches
+the journal; everything it has to say afterwards - a client that was refused,
+an upstream that went away - is written to /dev/null and gone.  Measured on
+ax25netd, forking and then connecting a client to the loop port: the four
+startup lines are in the log and the connection that follows adds nothing,
+while with -f the same four lines arrive and the later ones with them.  That
+silence is not the absence of events.
 
 
 ax25d
@@ -62,16 +84,74 @@ ax25netd
 
     [Service]
     Type=simple
-    ExecStart=/usr/sbin/ax25netd
+    RuntimeDirectory=ax25
+    RuntimeDirectoryMode=1775
+    ExecStart=/usr/sbin/ax25netd -f
     Restart=on-failure
     RestartSec=5
 
     [Install]
     WantedBy=multi-user.target
 
+-f is not optional here, and the reason is not the usual one.  This daemon
+forks through its own daemonize() rather than through the library's
+daemon_start(), so it does not get the getppid() == 1 test that saves ax25d,
+and it sends its own stdin, stdout and error to /dev/null as part of the same
+call.  Without -f, the parent exits at once, systemd is left holding a process
+that no longer exists, and every message from then on goes to /dev/null
+instead of the journal.  See the section on Type=simple above.
+
 It reaches its upstreams over TCP, so After=network.target is not decoration.
 If direwolf runs on the same machine, order it after that unit as well, or
 accept that ax25netd retries until the server answers.
+
+
+The loop socket and /run/ax25
+-----------------------------
+
+The loop port is a unix domain socket under /run, and /run is a tmpfs, so
+the directory has to exist on every start.  ax25netd creates it, so the
+unit works either way; the settings below only decide who puts it there
+and with which mode.  What the socket path, 'loop group' and 'loop mode'
+mean is in ax25common.conf(5).
+
+If ax25tcpd runs as a unit of its own, give it -f for the reason given under
+ax25netd above: it carries its own daemonize(), and it also sends its own
+standard streams to /dev/null, so one that was not asked to stay in the
+foreground takes its log with it.
+
+RuntimeDirectory=ax25 is the tidier way to have it: systemd creates
+/run/ax25 before ExecStart and removes it again on stop, so nothing is left
+behind on shutdown.  It is not required, only preferable - and the two are
+not in conflict, because a program that finds the directory already there
+leaves it alone, mode and owner included.
+
+RuntimeDirectoryMode=1775 is the mode ax25netd applies by default, and it
+has to match - it is 'loop mode' that ends up on the directory.  1775 keeps
+the directory world readable and traversable, so a client running as an
+unprivileged user can find the socket inside it, and the sticky bit keeps
+one local account from renaming or removing a socket file that belongs to
+another.  It is set here rather than left to the daemons because with two
+of them creating the same directory, the one that loses the race would
+otherwise inherit the umask of whichever unit happened to win.
+
+If you narrow the loop port to one group with
+
+    loop group hams
+
+in ax25common.conf(5), then 0750 is the mode to use here, and the unit needs
+the group as well, or the socket ends up in a group nothing can reach:
+
+    RuntimeDirectory=ax25
+    RuntimeDirectoryMode=0750
+    Group=hams
+
+Where a unit runs the daemon as a user rather than as root, say so under
+[Service] with User= and Group=; the socket then belongs to that user and
+'loop group default' means the same account.  The socket mode itself
+(0660 for a named group, 0666 for 'all') is not a RuntimeDirectory setting -
+it comes from 'loop group' in ax25common.conf(5) and is applied to the socket
+file, not to the directory.
 
 
 A program that knows nothing of libax25

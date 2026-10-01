@@ -50,7 +50,7 @@ A program that was never linked against libax25 - a script, or a daemon that
 opens AF_AX25 by itself - can be served all the same, by loading the library
 before the C library:
 
-  LD_PRELOAD=/usr/local/lib/libax25.so.0 program
+  LD_PRELOAD=/usr/lib/libax25.so.0 program
 
 On Linux the library defines socket(), bind(), connect() and the rest as
 ordinary strong symbols, so getting it loaded first is the whole trick: ELF

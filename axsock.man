@@ -129,14 +129,21 @@ ever calling a
 .B libax25
 function \-\- a script, or a daemon written when the kernel still answered \--
 can be made to use this without being recompiled, provided the library is
-loaded before the C library.  On Linux:
+loaded before the C library.  On Linux, with the directory this build was
+configured to install the library into:
 .PP
 .RS
 .nf
-LD_PRELOAD=/usr/local/lib/libax25.so.0 program
+LD_PRELOAD=@@@AX25_LIBDIR@@@/libax25.so.0 program
 .fi
 .RE
 .LP
+The path is the one the library actually has, not a name for the dynamic
+loader to resolve, so it has to be the one
+.BR "ldconfig \-p" (8)
+reports; a prefix other than the default, or a separate
+.B \-\-libdir
+at build time, moves it.
 ELF has a flat namespace: the first definition of
 .BR socket (2)
 in the search order is the one every reference binds to, wherever that
@@ -426,9 +433,9 @@ of it can show whether preloading reaches anything.
 .PP
 .RS
 .nf
-LD_PRELOAD=/usr/local/lib/libax25.so.0 \\
+LD_PRELOAD=@@@AX25_LIBDIR@@@/libax25.so.0 \\
     ./axprobe connect wampes:hfb DL1TST-1 DL1AAA DB0BBB
-LD_PRELOAD=/usr/local/lib/libax25.so.0 ./axprobe listen agwpe DL9SAU-13
+LD_PRELOAD=@@@AX25_LIBDIR@@@/libax25.so.0 ./axprobe listen agwpe DL9SAU-13
 .fi
 .RE
 .LP

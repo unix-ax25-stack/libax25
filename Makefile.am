@@ -89,11 +89,19 @@ dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5 \
 
 man_sed = sed -e 's|@@@AX25_SYSCONFDIR@@@|$(MAN_SC)|g' \
 	      -e 's|@@@AX25_LOCALSTATEDIR@@@|$(MAN_SD)|g' \
-	      -e 's|@@@WAMPES_TCPDIR@@@|$(MAN_WTD)|g'
+	      -e 's|@@@WAMPES_TCPDIR@@@|$(MAN_WTD)|g' \
+	      -e 's|@@@AX25_LIBDIR@@@|$(MAN_LD)|g'
 
 MAN_SC = $(sysconfdir)/ax25
 MAN_SD = $(localstatedir)/ax25
 MAN_WTD = @wampes_sockdir@
+#  LD_PRELOAD takes the library as it was installed, not a name to be
+#  resolved, so an example has to name the directory this tree is
+#  configured to install into.  $(libdir) is that answer; a hardcoded
+#  /usr/local/lib is wrong for every distribution that configures
+#  --prefix=/usr or --libdir=/usr/lib64, and those are the ones that
+#  matter here.
+MAN_LD = $(libdir)
 
 axports.5: $(srcdir)/axports.man
 	$(man_sed) < $(srcdir)/axports.man > $@

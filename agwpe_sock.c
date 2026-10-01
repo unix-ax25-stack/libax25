@@ -2189,6 +2189,18 @@ static int axsock_ensure_locked(void)
 
 	axsock_up = 1;
 	axsock_register_all_locked();
+	/*
+	 * Raw monitoring is a toggle on the connection, and a new
+	 * connection starts with it off.  axsock_nraw still counts the
+	 * monitor sockets that never closed, so the guards at the
+	 * socket() and bind() sites do not send the toggle again, and
+	 * register_all_locked() only walks the registrations.  Without
+	 * this, one lost link to the server left every monitor silent
+	 * for the rest of the process's life: the link came back, the
+	 * 'k' never did, and no 'K' frame arrived to hand out.
+	 */
+	if (axsock_nraw > 0)
+		agwpe_client_raw_toggle(axsock_agwpe);
 	return 0;
 }
 

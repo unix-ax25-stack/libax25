@@ -68,7 +68,7 @@
 #include "agwpe_sock.h"
 
 #define	AXSOCK_DEFAULT_HOST	"127.0.0.1"
-#define	AXSOCK_DEFAULT_PORT	8100
+#define	AXSOCK_DEFAULT_PORT	8200
 #define	AXSOCK_MAX_SOCK		128
 #define	AXSOCK_CONNECT_TIMEOUT	60
 

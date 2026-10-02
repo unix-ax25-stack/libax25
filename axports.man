@@ -166,7 +166,7 @@ not list is refused when the socket is bound
 rather than guessed at \-
 a frame sent to the wrong channel cannot be taken back.  When the server is
 running on the machine itself, which is the case for the default
-.B 127.0.0.1:8100
+.B 127.0.0.1:8200
 and for a
 .B /var/run
 socket, the order of

@@ -378,7 +378,7 @@ multiplexing the radios its
 lists: a unix socket,
 .IR /var/run/ax25/sockets/ax25netd.sock .
 .BR AXSOCK_PORT
-then gives the TCP port, 8100 where the file does not say.  To skip the
+then gives the TCP port, 8200 where the file does not say.  To skip the
 daemon and speak to a radio program directly, name it:
 .B AXSOCK_HOST=127.0.0.1 AXSOCK_PORT=8000
 for direwolf.  A value of

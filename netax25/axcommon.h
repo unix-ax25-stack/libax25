@@ -46,7 +46,7 @@ extern "C" {
 
 #define	AX25COMMON_SOCKET_MAX	108
 #define	AX25COMMON_GROUP_MAX	64
-#define	AX25COMMON_TCP_DEFAULT	8100
+#define	AX25COMMON_TCP_DEFAULT	8200
 
 /*
  * 1775: the group the directory belongs to may create and remove entries,

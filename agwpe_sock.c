@@ -2741,6 +2741,7 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 static struct axsock_sock *axsock_adopt_sock_locked(int fd, int type)
 {
 	struct axsock_sock *s, **pp;
+	int old;
 
 	if ((s = axsock_alloc_sock_locked(type)) == NULL)
 		return NULL;
@@ -2752,8 +2753,21 @@ static struct axsock_sock *axsock_adopt_sock_locked(int fd, int type)
 	 * while poll(2) reports it readable all the same.  A client on a
 	 * machine with a kernel stack therefore connected over AGWPE and then
 	 * failed its very first read, and closed a session that was up - which
-	 * is what call(1) reported, after a successful connect. */
-	if (axsock_replace(fd, s->fd) != 0) {
+	 * is what call(1) reported, after a successful connect.
+	 *
+	 * The entry is renamed before the pair's end is closed, not after.
+	 * axsock_replace() closes a descriptor, and close() is one of the
+	 * calls this shim interposes: while s->fd still names that end, the
+	 * interposed close() finds this very entry and tears it down.  The
+	 * socket then leaves axsock_list while the caller carries on with it,
+	 * and the application's next setsockopt() falls through to the kernel,
+	 * which answers EOPNOTSUPP for a level it does not know.  On a machine
+	 * that interposes through its linker (ELF) the entry must be renamed
+	 * first, so that the close() has nothing to find and only the raw
+	 * descriptor goes. */
+	old = s->fd;
+	s->fd = fd;
+	if (axsock_replace(fd, old) != 0) {
 		int e = errno;
 
 		for (pp = &axsock_list; *pp != NULL; pp = &(*pp)->next)
@@ -2762,13 +2776,12 @@ static struct axsock_sock *axsock_adopt_sock_locked(int fd, int type)
 		if (*pp != NULL)
 			*pp = s->next;
 		__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
-		real_close(s->peer);	/* s->fd went with the failed replace */
+		real_close(s->peer);	/* the read end went with the failed replace */
 		axsock_peer_discard_locked(s);
 		free(s);
 		errno = e;
 		return NULL;
 	}
-	s->fd = fd;
 	return s;
 }
 

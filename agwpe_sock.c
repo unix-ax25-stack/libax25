@@ -2740,14 +2740,35 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
  */
 static struct axsock_sock *axsock_adopt_sock_locked(int fd, int type)
 {
-	struct axsock_sock *s;
-	int old;
+	struct axsock_sock *s, **pp;
 
 	if ((s = axsock_alloc_sock_locked(type)) == NULL)
 		return NULL;
-	old = s->fd;
+
+	/* The pair's read end has to be put behind the number the application
+	 * holds, not merely renumbered in this table.  agwpe_bind_take() has
+	 * left an unbound placeholder there, and a descriptor that stands for
+	 * an unbound unix socket cannot be read: read(2) answers EINVAL on it
+	 * while poll(2) reports it readable all the same.  A client on a
+	 * machine with a kernel stack therefore connected over AGWPE and then
+	 * failed its very first read, and closed a session that was up - which
+	 * is what call(1) reported, after a successful connect. */
+	if (axsock_replace(fd, s->fd) != 0) {
+		int e = errno;
+
+		for (pp = &axsock_list; *pp != NULL; pp = &(*pp)->next)
+			if (*pp == s)
+				break;
+		if (*pp != NULL)
+			*pp = s->next;
+		__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
+		real_close(s->peer);	/* s->fd went with the failed replace */
+		axsock_peer_discard_locked(s);
+		free(s);
+		errno = e;
+		return NULL;
+	}
 	s->fd = fd;
-	close(old);
 	return s;
 }
 

@@ -35,7 +35,7 @@
  * the wampes.c monitor mirror pushing frames into it - share the defaults, so
  * they live here once. */
 #define	AXSOCK_DEFAULT_HOST	"127.0.0.1"
-#define	AXSOCK_DEFAULT_PORT	8100
+#define	AXSOCK_DEFAULT_PORT	8200
 
 int agwpe_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret);
 int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret);
@@ -67,7 +67,7 @@ int agwpe_forget(int fd);
 
 /* The one resolution of the endpoint both backends use, so the monitor
  * mirror in wampes.c reaches the same ax25netd the client here does.  Without
- * it the mirror keeps the built-in 127.0.0.1:8100 and never finds a node that
+ * it the mirror keeps the built-in 127.0.0.1:8200 and never finds a node that
  * serves a loop socket.  *port is ignored when the returned host is a path. */
 const char *axsock_server_endpoint(int *port);
 

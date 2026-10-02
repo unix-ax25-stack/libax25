@@ -416,7 +416,7 @@ static void axsock_ports_parse(const unsigned char *data, size_t len)
  * Without it we read ax25common.conf - the same file ax25netd reads - and
  * use whatever loop port it serves there.  That is the point of the file:
  * server and client cannot drift apart.  It also has to be so, because
- * the loop port is a unix socket by default and 127.0.0.1:8100 is not
+ * the loop port is a unix socket by default and 127.0.0.1:8200 is not
  * what answers then.
  *
  * AXSOCK_PORT is a TCP port and is only looked at when the host turned

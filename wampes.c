@@ -424,7 +424,7 @@ static int wampes_dial(const char *addr)
 		return -1;
 	}
 	strcpy(host, addr);
-	/* "[fd00::5]:8010" as well as "host:8010".  An IPv6 literal is full of
+	/* "[fd00::5]:8213" as well as "host:8213".  An IPv6 literal is full of
 	 * colons, so the brackets are what says where the address ends -
 	 * getaddrinfo() wants them gone again.
 	 */
@@ -1451,7 +1451,7 @@ static int wampes_mirror_open(void)
 
 	/* One resolution, the one the AGWPE client itself uses: ax25common.conf
 	 * first, so a node whose loop port is a unix socket is found there and
-	 * not on the old 127.0.0.1:8100 this used to assume on its own. */
+	 * not on the built-in 127.0.0.1:8200 this used to assume on its own. */
 	host = axsock_server_endpoint(&port);
 
 	wampes_mirror_client = agwpe_client_new(&cb, NULL);

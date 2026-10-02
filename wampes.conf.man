@@ -49,7 +49,7 @@ for its unix socket \-\-
 in a default installation \-\- or
 .I host:port
 for its TCP service.  An IPv6 address literal goes in brackets, as in
-.IR [fd00::5]:8010 ,
+.IR [fd00::5]:8213 ,
 because an address full of colons cannot otherwise be told from the port
 that follows it.  A host name is resolved with
 .BR getaddrinfo (3)
@@ -142,8 +142,8 @@ than for running a station.
 .nf
 # name          address                         description
 wampes          /usr/local/wampes/sockets/ax25  the node on this machine
-db0aaa          192.168.1.5:8010                the club node, over TCP
-db0aaa-1        [fd00::5]:8010                  the same, over IPv6
+db0aaa          192.168.1.5:8213                the club node, over TCP
+db0aaa-1        [fd00::5]:8213                  the same, over IPv6
 .fi
 .RE
 .LP

@@ -1381,15 +1381,30 @@ static void axsock_peer_discard_locked(struct axsock_sock *s)
 	s->pcap = 0;
 }
 
+/* Detach the application's end from the router end.
+ *
+ * close() alone is not enough when a peer reader thread is blocked in
+ * select()/read() on this same descriptor: another thread's close() does
+ * not wake it, and while that reference stands the write side stays up,
+ * so the application never sees end of file and the session outlives the
+ * disconnect.  shutdown() wakes the thread and delivers EOF to the
+ * application at once; close() then releases the descriptor.
+ */
+static void axsock_peer_shutdown_locked(struct axsock_sock *s)
+{
+	if (s->peer < 0)
+		return;
+	(void)real_shutdown(s->peer, SHUT_RDWR);
+	real_close(s->peer);
+	s->peer = -1;
+}
+
 static void axsock_peer_drop_locked(struct axsock_sock *s, const char *why)
 {
 	fprintf(stderr, "axsock: %s for %.*s - closing the session\n", why,
 		AGWPE_MAX_CALL, s->remote);
 	axsock_peer_discard_locked(s);
-	if (s->peer >= 0) {
-		real_close(s->peer);
-		s->peer = -1;
-	}
+	axsock_peer_shutdown_locked(s);
 	s->state = AXSOCK_NEW;
 }
 
@@ -1429,8 +1444,7 @@ static void axsock_peer_flush_locked(struct axsock_sock *s)
 		s->plen = 0;
 		__atomic_sub_fetch(&axsock_npending, 1, __ATOMIC_RELAXED);
 		if (s->peer_eof) {
-			real_close(s->peer);
-			s->peer = -1;
+			axsock_peer_shutdown_locked(s);
 			s->peer_eof = 0;
 		}
 	} else if (off > 0) {
@@ -1455,10 +1469,7 @@ static void axsock_peer_close_locked(struct axsock_sock *s)
 		s->peer_eof = 1;	/* the flush loop finishes the job */
 		return;
 	}
-	if (s->peer >= 0) {
-		real_close(s->peer);
-		s->peer = -1;
-	}
+	axsock_peer_shutdown_locked(s);
 	s->peer_eof = 0;
 }
 
@@ -2101,10 +2112,7 @@ static void *axsock_reader(void *arg)
 							AGWPE_MAX_CALL,
 							s->remote);
 					axsock_peer_discard_locked(s);
-					if (s->peer >= 0) {
-						real_close(s->peer);
-						s->peer = -1;
-					}
+					axsock_peer_shutdown_locked(s);
 					s->state = AXSOCK_NEW;
 				}
 			}
@@ -2339,9 +2347,7 @@ static void axsock_peer_reader_teardown(struct axsock_sock *s)
 	}
 	__atomic_sub_fetch(&axsock_nsock, 1, __ATOMIC_RELAXED);
 
-	if (s->peer >= 0)
-		real_close(s->peer);
-	s->peer = -1;
+	axsock_peer_shutdown_locked(s);
 
 	/*
 	 * The application's end is not ours to close, and this closed it -

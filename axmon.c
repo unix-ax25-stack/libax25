@@ -208,6 +208,12 @@ static int axmon_port_is_known(const char *name)
  */
 int axmon_open(int protocol, const char *port, struct axmon *mon)
 {
+	return axmon_open_mask(protocol, port, AXMON_MASK_ALL, mon);
+}
+
+int axmon_open_mask(int protocol, const char *port, unsigned char mask,
+		    struct axmon *mon)
+{
 	mon->nfd = 0;
 	mon->mask = 0;
 
@@ -247,6 +253,10 @@ int axmon_open(int protocol, const char *port, struct axmon *mon)
 	 * with two halves, one of which is silent for a reason that never
 	 * shows up in the output.
 	 */
+	if (axsock_debug && mask != AXMON_MASK_ALL)
+		fprintf(stderr, "axmon: the payload mask does not reach the "
+			"kernel packet socket - the frames it delivers keep "
+			"the payloads the kernel put in them\n");
 	if (ax25_config_kernel_ports() > 0) {
 		int fd = real_socket(PF_PACKET, SOCK_PACKET, protocol);
 
@@ -300,7 +310,7 @@ int axmon_open(int protocol, const char *port, struct axmon *mon)
 	{
 		int fd;
 
-		if (agwpe_mon_open(protocol, &fd) == 1 && fd >= 0) {
+		if (agwpe_mon_open(protocol, mask, &fd) == 1 && fd >= 0) {
 			if (port != NULL && port[0] != '\0') {
 				struct sockaddr spp;
 

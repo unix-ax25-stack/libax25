@@ -473,6 +473,25 @@ int agwpe_client_raw_toggle(agwpe_client_t *c)
 	return agwpe_send_cmd(c, 0, AGWPE_CMD_RAW_MONITOR, 0, NULL, NULL, NULL, 0);
 }
 
+/*
+ * What the monitor may leave out, over the 'Q' frame.  A mask of
+ * AGWPE_MONMASK_ALL is what both sides assume anyway, so nothing goes out for
+ * it: a connection that asks for everything gets the same frames as one that
+ * never asked.
+ */
+int agwpe_client_mon_mask(agwpe_client_t *c, unsigned char mask)
+{
+	unsigned char data[2];
+
+	if ((mask & AGWPE_MONMASK_ALL) == AGWPE_MONMASK_ALL)
+		return 0;
+
+	data[0] = AGWPE_CTL_MONMASK;
+	data[1] = (unsigned char)(mask & AGWPE_MONMASK_ALL);
+	return agwpe_send_cmd(c, 0, AGWPE_CMD_CTL, 0, NULL, NULL, data,
+			      sizeof(data));
+}
+
 int agwpe_client_send_unproto(agwpe_client_t *c, unsigned char port,
 			      unsigned char pid, const char *from,
 			      const char *to, const unsigned char *data, int len)

@@ -196,6 +196,7 @@ static pthread_cond_t	axsock_cond = PTHREAD_COND_INITIALIZER;
 static struct axsock_sock	*axsock_list;
 static int			axsock_nsock;
 static int			axsock_nraw;	/* open SOCK_PACKET monitors */
+static unsigned char		axsock_mon_mask = AGWPE_MONMASK_ALL;
 static int			axsock_npending; /* sockets with a queue, so the
 					  * reader knows to come back */
 
@@ -222,6 +223,29 @@ static int			axsock_err;
  * waited out rather than refused; short enough that a server which is not
  * coming back is not waited on forever. */
 #define AXSOCK_ENSURE_TIMEOUT	10
+
+/*
+ * Say to a server that has just come up what the raw monitor stream is for
+ * and what it may leave out.  One place, because there are three moments that
+ * need it - the first monitor socket opening, a raw feed starting on a
+ * registered socket, and the link coming back - and a fourth one that is only
+ * remembered because somebody wrote it down once: raw monitoring is a toggle
+ * on the connection, so a new connection starts with it off, and a monitor
+ * whose toggle was lost with the old link stayed silent for the rest of the
+ * process's life.  A mask sent from one place and not the others would fail
+ * the same way and more quietly, because a lost mask only shows up as frames
+ * that are longer than the program asked for.
+ *
+ * Nothing goes out when there is no monitor: both live on the connection, and
+ * a connection with neither is one that was asked for nothing.
+ */
+static void axsock_mon_state_locked(void)
+{
+	if (axsock_agwpe == NULL || axsock_nraw == 0)
+		return;
+	agwpe_client_raw_toggle(axsock_agwpe);
+	agwpe_client_mon_mask(axsock_agwpe, axsock_mon_mask);
+}
 
 /* Client lifetime across sends that run without axsock_lock (see
  * axsock_client_acquire): a sender snapshots axsock_agwpe and bumps the
@@ -2406,10 +2430,11 @@ static void axsock_link_publish(agwpe_client_t *c)
 	 * register_all_locked() only walks the registrations.  Without
 	 * this, one lost link to the server left every monitor silent
 	 * for the rest of the process's life: the link came back, the
-	 * 'k' never did, and no 'K' frame arrived to hand out.
+	 * 'k' never did, and no 'K' frame arrived to hand out.  The
+	 * payload mask goes with it, for the same reason and with the
+	 * same mistake waiting - see axsock_mon_state_locked().
 	 */
-	if (axsock_nraw > 0)
-		agwpe_client_raw_toggle(axsock_agwpe);
+	axsock_mon_state_locked();
 }
 
 /*
@@ -2926,10 +2951,24 @@ int agwpe_socket(int type, int protocol)
  * Returns 0 for anything that is not a monitor socket, including on a kernel
  * backend, where the packet socket is real and the call belongs to the OS.
  */
-int agwpe_mon_open(int protocol, int *ret)
+int agwpe_mon_open(int protocol, unsigned char mask, int *ret)
 {
 	struct axsock_sock *s;
 	int fd;
+
+	/*
+	 * What this program wants to see, over AGWPE_MONMASK_*, before
+	 * anything opens: the state is sent the moment the first monitor
+	 * socket exists, and again whenever the link comes back, so a mask
+	 * that arrives after the toggle would be a mask that was not there
+	 * for the frames that came first.
+	 *
+	 * One value per connection, not per socket, and the connection is
+	 * the program's.  Two monitors in one process with two different
+	 * wishes have no answer on this wire - the 'k' toggle is one bit
+	 * for the same reason - so the later one is taken and both get it.
+	 */
+	axsock_mon_mask = (unsigned char)(mask & AGWPE_MONMASK_ALL);
 
 	/* An AGWPE server feeds this socket.  Ask for one first, because a
 	 * machine can have both an AGWPE server and a node, and there a
@@ -3022,15 +3061,15 @@ int agwpe_mon_open(int protocol, int *ret)
 	}
 	s->raw = 1;
 	/* 'k' is a toggle: enable it when the first monitor socket opens,
-	 * disable it again when the last one closes.  */
-	if (axsock_nraw == 0 && axsock_agwpe != NULL)
-		agwpe_client_raw_toggle(axsock_agwpe);
-	axsock_nraw++;
+	 * disable it again when the last one closes.  The payload mask
+	 * travels with it.  */
+	if (axsock_nraw++ == 0)
+		axsock_mon_state_locked();
 	fd = s->fd;
 	pthread_mutex_unlock(&axsock_lock);
 	if (axsock_debug)
-		fprintf(stderr, "axsock: SOCK_PACKET monitor fd=%d proto=0x%x\n",
-			fd, protocol);
+		fprintf(stderr, "axsock: SOCK_PACKET monitor fd=%d proto=0x%x "
+			"mask=0x%02x\n", fd, protocol, axsock_mon_mask);
 	*ret = fd;
 	return 1;
 }
@@ -3042,7 +3081,7 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 		return 0;
 	if (axsock_backend_now() == 1)
 		return 0;
-	return agwpe_mon_open(protocol, ret);
+	return agwpe_mon_open(protocol, axsock_mon_mask, ret);
 }
 
 /*
@@ -3336,9 +3375,8 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 			 */
 			if (s->port != AGWPE_PORT_LOOP) {
 				s->rawfeed = 1;
-				if (axsock_nraw == 0 && axsock_agwpe != NULL)
-					agwpe_client_raw_toggle(axsock_agwpe);
-				axsock_nraw++;
+				if (axsock_nraw++ == 0)
+					axsock_mon_state_locked();
 			}
 		}
 		pthread_mutex_unlock(&axsock_lock);

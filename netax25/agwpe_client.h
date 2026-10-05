@@ -190,6 +190,14 @@ extern int agwpe_client_monitor(agwpe_client_t *c);
 /* Same toggle for raw AX.25 frames.  */
 extern int agwpe_client_raw_toggle(agwpe_client_t *c);
 
+/*
+ * Say which payloads the monitor wants to be sent, over AGWPE_MONMASK_*.
+ * Sent once per connection next to the 'k' toggle it belongs with, and again
+ * whenever the link comes back, since a new connection starts with nothing
+ * set.
+ */
+extern int agwpe_client_mon_mask(agwpe_client_t *c, unsigned char mask);
+
 /* Send an UNPROTO (UI) frame.  */
 extern int agwpe_client_send_unproto(agwpe_client_t *c, unsigned char port,
 				     unsigned char pid, const char *from,

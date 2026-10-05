@@ -66,6 +66,13 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
+/* The two bits below are the two bits on the wire, and they are named here
+ * for the program rather than taken from the protocol header: a caller of
+ * axmon_open_mask() has nothing to do with AGWPE, and axmon.h would grow a
+ * dependency it does not otherwise have.  AXMON_MASK_* and AGWPE_MONMASK_*
+ * have to agree; axmon.c says so where it passes them on. */
+#include <netax25/agwpe.h>
+
 /* Both ends of this are inside this library, so it is not a protocol
  * anything outside has to agree on.  */
 #define	AXMON_HDR_LEN		5
@@ -103,6 +110,9 @@ extern int axmon_framed(int fd);
  *
  * Returns 0 with nfd set, or -1 with errno set (EINVAL for a name in no
  * axports entry, ENXIO when the machine has no source of raw frames at all).
+ *
+ * The frame contents are all there: addresses, control field, PID and
+ * payload.  axmon_open_mask() is the same call with less of it.
  */
 #define	AXMON_MAX_FD		2
 #define	AXMON_KERNEL		0	/* a kernel packet socket */
@@ -117,6 +127,36 @@ struct axmon {
 };
 
 extern int axmon_open(int protocol, const char *port, struct axmon *mon);
+
+/*
+ * The same, saying which payloads the caller can live without.  One bit per
+ * frame kind, and a bit that is off means the information field is left off:
+ *
+ *   AXMON_MASK_I	keep the payload of I frames
+ *   AXMON_MASK_UI	keep the payload of UI frames
+ *
+ * Who this is for: a program that reads the frames to learn who is on the air
+ * does not read their contents, and the contents are most of the bytes on the
+ * wire.  AXMON_MASK_NONE asks for addresses, control field and PID only, which
+ * is all such a program ever looked at.
+ *
+ * The mask is a request to ax25netd and it is honoured exactly there, on the
+ * ax25netd source.  A kernel packet socket is asked by the kernel, and there
+ * is no bit to set that leaves the payload out of a frame the kernel has
+ * already assembled: truncating it here instead would cut an AX.25 frame
+ * rather than filter one, and a frame that is missing its information field
+ * is not a frame - it decodes as a different one.  So on a host with a kernel
+ * AX.25 stack beside the ax25netd, a program that asked for no payloads still
+ * gets them over the packet socket.  What the mask buys is what the server
+ * sends, and on a host where ax25netd carries the ports that is all of it.
+ */
+#define	AXMON_MASK_I		AGWPE_MONMASK_I	/* I frame payloads */
+#define	AXMON_MASK_UI		AGWPE_MONMASK_UI	/* UI frame payloads */
+#define	AXMON_MASK_NONE		0x00	/* addresses, control field and PID */
+#define	AXMON_MASK_ALL		AGWPE_MONMASK_ALL
+
+extern int axmon_open_mask(int protocol, const char *port, unsigned char mask,
+			   struct axmon *mon);
 
 /*
  * Wait for frames.  Returns how many sources have something, with *ready

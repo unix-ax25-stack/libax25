@@ -84,6 +84,62 @@ extern "C" {
 extern int axmon_framed(int fd);
 
 /*
+ * Open every source of raw AX.25 frames this machine has, which is two on a
+ * host that has both a kernel AX.25 stack and an ax25netd.
+ *
+ * protocol is in network byte order, as socket() wants it.
+ *
+ * AXMON_MAX_FD is the upper bound, not a promise: a host has one kernel and
+ * one ax25netd, so nfd is 1 or 2.  kind[] says which is which, because the
+ * two differ in a way a caller has to act on - a kernel descriptor is a
+ * packet socket that the kernel filters, and ETH_P_ALL on it still has to be
+ * told apart from plain IP by asking the interface, while every frame on a
+ * monitor descriptor is AX.25 already.
+ *
+ * port restricts the monitor to one axports entry, by name.  It need not be a
+ * kernel port: every port that belongs to ax25netd has no interface behind
+ * it, and "listen -p loop" is the obvious case that used to be refused as an
+ * invalid port name for that reason.  NULL or "" is no restriction.
+ *
+ * Returns 0 with nfd set, or -1 with errno set (EINVAL for a name in no
+ * axports entry, ENXIO when the machine has no source of raw frames at all).
+ */
+#define	AXMON_MAX_FD		2
+#define	AXMON_KERNEL		0	/* a kernel packet socket */
+#define	AXMON_MONITOR		1	/* the ax25netd monitor stream */
+
+struct axmon {
+	int		fd[AXMON_MAX_FD];
+	int		framed[AXMON_MAX_FD];
+	int		kind[AXMON_MAX_FD];
+	unsigned char	mask;		/* one bit per open descriptor */
+	int		nfd;
+};
+
+extern int axmon_open(int protocol, const char *port, struct axmon *mon);
+
+/*
+ * Wait for frames.  Returns how many sources have something, with *ready
+ * naming them as one bit per fd[] index, or -1 with errno set; 0 means the
+ * timeout ran out.
+ *
+ * A source that has ended is reported as ready rather than as an error, because
+ * a packet socket at end of file stays readable and axmon_read() is what says
+ * so.  Reporting it here instead would name the wrong failure and leave the
+ * other source unread for as long as the caller believed it.
+ */
+extern int axmon_poll(struct axmon *mon, int timeout, unsigned *ready);
+
+/*
+ * How many of the descriptors are still open.  A caller that retires one puts
+ * -1 in its place - see axmon_poll() for why the array is not renumbered - and
+ * asks this to know whether anything is left to read.
+ */
+extern int axmon_alive(const struct axmon *mon);
+
+extern void axmon_close(struct axmon *mon);
+
+/*
  * Read one frame, either way.  Returns the payload length, 0 at end of
  * file, or -1 with errno set - E2BIG if the frame does not fit in buflen,
  * ECONNRESET if the monitor closed mid frame.  sa/asize are filled in as

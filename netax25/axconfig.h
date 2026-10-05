@@ -128,6 +128,13 @@ extern char *ax25_config_get_port(ax25_address *);
 extern int ax25_config_port_is_kernel(const char *);
 
 /*
+ * How many ports are the kernel's, that is: axports entries whose callsign is
+ * an AX.25 interface that is up.  Whether a raw monitor has a kernel side at
+ * all, and there is no cheaper way to ask.
+ */
+extern int ax25_config_kernel_ports(void);
+
+/*
  * The name in axports of the port a bind address names, 0 on success and 1
  * with an empty name.  The callsign in the first digipeater slot names the
  * port, or the source callsign when no slot is given; a "base:suffix" name

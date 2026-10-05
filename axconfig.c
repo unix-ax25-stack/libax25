@@ -402,6 +402,33 @@ int ax25_config_port_is_kernel(const char *name)
 }
 
 /*
+ * How many ports are the kernel's, that is: how many axports entries name a
+ * callsign that is an AX.25 interface and that interface is up.
+ *
+ * Whether a raw monitor has a kernel side at all, and nothing narrower than
+ * that.  A packet socket can be opened whether or not there is anything to
+ * hear on it, so on a host whose AX.25 ports all belong to ax25netd - the
+ * usual shape of a userspace machine - the answer is zero and there is no
+ * second source of frames to read from.  A host with no axports entry for its
+ * kernel port would answer zero too, which costs the monitor that port: the
+ * kernel still has the frames, but nothing here says so.
+ */
+int ax25_config_kernel_ports(void)
+{
+	AX_Port *p;
+	int n = 0;
+
+	if (ax25_ports == NULL)
+		return 0;
+
+	for (p = ax25_ports; p != NULL; p = p->Next)
+		if (p->Kernel)
+			n++;
+
+	return n;
+}
+
+/*
  * Which port a bind address names, as the name in axports.
  *
  * This used to be wampes.c's port_of_bind(), and having a second copy of it

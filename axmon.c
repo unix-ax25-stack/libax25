@@ -364,20 +364,18 @@ int axmon_poll(struct axmon *mon, int timeout, unsigned *ready)
 		return -1;
 	}
 
-	for (;;) {
-		int rc = poll(pfd, nf, timeout);
-
-		if (rc >= 0)
-			break;
-		if (errno != EINTR)
-			return -1;
-		/* A signal is not an answer, and a program that asks for a
-		 * timeout has said it is willing to wait for one.  Retrying
-		 * starts the wait over, which is what poll() itself would
-		 * do if it were not for the signal - and returning 0 here
-		 * would tell a caller that asked for a second that the first
-		 * second is up, which it never was. */
-	}
+	/*
+	 * One call, no retry.  A signal has to reach the caller even when it
+	 * asked to wait for ever: retrying here swallows it, because the wait
+	 * simply starts again and the caller never gets to look at the flag
+	 * its handler set.  That is no theory - listen(1) waits with no
+	 * timeout and had to be killed with SIGKILL because of it.
+	 *
+	 * -1 with errno EINTR says what happened, and every caller of this
+	 * function already handles it.
+	 */
+	if (poll(pfd, nf, timeout) < 0)
+		return -1;
 
 	for (i = 0; i < nf; i++)
 		if (pfd[i].revents & (POLLIN | POLLHUP | POLLERR)) {

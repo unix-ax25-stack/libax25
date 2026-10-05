@@ -127,6 +127,10 @@ extern int axmon_open(int protocol, const char *port, struct axmon *mon);
  * a packet socket at end of file stays readable and axmon_read() is what says
  * so.  Reporting it here instead would name the wrong failure and leave the
  * other source unread for as long as the caller believed it.
+ *
+ * A signal comes back as -1/EINTR rather than being waited out.  With no
+ * timeout a caller that blocks here would otherwise never see the flag its
+ * handler set, and would have to be killed with SIGKILL.
  */
 extern int axmon_poll(struct axmon *mon, int timeout, unsigned *ready);
 

@@ -107,6 +107,8 @@ int axmon_framed(int fd)
 static ssize_t mon_read(int fd, void *buf, size_t len,
 			struct sockaddr *sa, socklen_t *asize)
 {
+	AXSOCK_NEED_REAL();
+
 	for (;;) {
 		ssize_t n = AXSOCK_ENTRY(recvfrom)(fd, buf, len, 0, sa, asize);
 
@@ -212,6 +214,12 @@ int axmon_open(int protocol, const char *port, struct axmon *mon)
 	/* A caller that only reads has no reason to have loaded the port
 	 * table, and the question below is asked of it.  */
 	ax25_config_ports_ensure();
+
+	/* Before anything below, and it is the first thing in the process on a
+	 * host with a kernel AX.25 stack: the kernel side opens a packet
+	 * socket with real_socket(), because socket() would ask the shim for
+	 * it, so nothing interposed has been through yet to resolve it.  */
+	AXSOCK_NEED_REAL();
 
 	if (port != NULL && port[0] != '\0' &&
 	    ax25_config_get_dev((char *)port) == NULL &&
@@ -360,7 +368,16 @@ int axmon_poll(struct axmon *mon, int timeout, unsigned *ready)
 	}
 
 	if (nf == 0) {
-		errno = EBADF;
+		/*
+		 * Nothing left to wait for.  ENOTCONN, not EBADF: the caller
+		 * retired these descriptors itself and knows why, and a bad
+		 * descriptor here would send it looking for a descriptor that
+		 * was never wrong - over the reason the program is actually
+		 * stopping.  A caller that asks this question after retiring
+		 * the last source gets the answer ENOTCONN and keeps the
+		 * reason to itself.
+		 */
+		errno = ENOTCONN;
 		return -1;
 	}
 
@@ -447,6 +464,7 @@ int axmon_retire(struct axmon *mon, int idx)
 
 	if (idx < 0 || idx >= mon->nfd || mon->fd[idx] < 0)
 		return axmon_alive(mon);
+	AXSOCK_NEED_REAL();
 	if (mon->kind[idx] == AXMON_MONITOR)
 		(void) agwpe_close(mon->fd[idx], &ret);
 	else
@@ -460,6 +478,7 @@ void axmon_close(struct axmon *mon)
 {
 	int i;
 
+	AXSOCK_NEED_REAL();
 	for (i = 0; i < mon->nfd; i++)
 		if (mon->fd[i] >= 0)
 			real_close(mon->fd[i]);

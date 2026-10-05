@@ -288,11 +288,12 @@ static void axsock_real_init(void)
 #endif
 }
 
-#define AXSOCK_NEED_REAL()				\
-	do {						\
-		pthread_once(&axsock_real_once,		\
-			     axsock_real_init);		\
-	} while (0)
+/* The body of AXSOCK_NEED_REAL(), which axsock_real.h declares for the callers
+ * outside this file that need the same thing - axmon.c above all.  */
+void axsock_real_ready(void)
+{
+	pthread_once(&axsock_real_once, axsock_real_init);
+}
 
 /*
  * The type of what stands behind fd, asked of the descriptor itself.

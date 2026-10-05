@@ -2216,6 +2216,14 @@ static void *axsock_reader(void *arg)
 		if (__atomic_load_n(&axsock_npending, __ATOMIC_RELAXED))
 			axsock_flush_pending();
 	}
+
+	/*
+	 * Only reached if the loop above ever leaves, which it cannot: every
+	 * failure either sleeps and continues or comes back up.  Here because
+	 * the compiler is right that the function promises a return value and
+	 * would otherwise have to take the promise on trust.
+	 */
+	return NULL;
 }
 
 /*

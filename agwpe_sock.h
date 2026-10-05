@@ -57,6 +57,22 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret);
 int agwpe_write(int fd, const void *buf, size_t len, ssize_t *ret);
 
 /*
+ * A monitor descriptor without asking which backend this process was given.
+ *
+ * agwpe_socket_packet() is socket()'s answer to a program that asked for a
+ * packet socket, and one descriptor is what such a program has room for.  This
+ * is the same socket for a caller that means to read from both sources: a
+ * kernel AX.25 stack and an ax25netd can be heard at the same time, and on a
+ * host that has both, the monitor that takes only one of them is missing the
+ * other's ports without saying so.  axmon_open() is the caller; it opens the
+ * kernel socket next to this one.
+ *
+ * Always returns 1 with the descriptor in *ret, or 1 with -1 when there is
+ * neither a server nor a node to refuse quietly.
+ */
+int agwpe_mon_open(int protocol, int *ret);
+
+/*
  * And the way out.  A descriptor made here changes hands when bind() finds
  * the port belongs to a node: the other backend asks what kind of socket it
  * is and then takes it away.  Two calls, one direction, and the only edge

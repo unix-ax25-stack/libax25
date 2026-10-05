@@ -141,6 +141,18 @@ extern int axmon_poll(struct axmon *mon, int timeout, unsigned *ready);
  */
 extern int axmon_alive(const struct axmon *mon);
 
+/* Name the source at idx, for a message: "AX.25 packet socket" or
+ * "AX.25 monitor". */
+extern const char *axmon_source_name(const struct axmon *mon, int idx);
+
+/*
+ * Give up one source - it ended, or a read on it failed - and report how many
+ * are left.  No source stopping is by itself a reason for the program to stop;
+ * the caller decides what to do when the answer is 0.  The caller also drops
+ * the bit for idx from its ready mask.
+ */
+extern int axmon_retire(struct axmon *mon, int idx);
+
 extern void axmon_close(struct axmon *mon);
 
 /*

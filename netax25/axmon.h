@@ -131,6 +131,11 @@ extern int axmon_open(int protocol, const char *port, struct axmon *mon);
  * A signal comes back as -1/EINTR rather than being waited out.  With no
  * timeout a caller that blocks here would otherwise never see the flag its
  * handler set, and would have to be killed with SIGKILL.
+ *
+ * Polling after the caller has retired the last source is -1/ENOTCONN, not
+ * -1/EBADF: the descriptors are gone because the caller closed them, and it
+ * already knows why.  A caller that is looking for a reason to stop should read
+ * axmon_alive() instead of asking here.
  */
 extern int axmon_poll(struct axmon *mon, int timeout, unsigned *ready);
 

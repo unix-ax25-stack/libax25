@@ -369,7 +369,7 @@ Environment variables: where the AGWPE backend looks for its server.
 decides the transport - a leading
 .B /
 is a path, anything else is a TCP host - and with it unset the backend
-falls back on
+reads
 .BR ax25common.conf (5),
 so by default it finds the loop port of an
 .BR ax25netd (8)
@@ -377,9 +377,19 @@ multiplexing the radios its
 .BR ax25netd_agwpe.conf (5)
 lists: a unix socket,
 .IR /var/run/ax25/sockets/ax25netd.sock .
+Where nothing names a server there is none to reach: the library does not
+answer the question itself, and
+.B loop socket no
+with no
+.B loop tcp
+behind it leaves the backend without an endpoint rather than with one
+invented for it.
 .BR AXSOCK_PORT
-then gives the TCP port, 8200 where the file does not say.  To skip the
-daemon and speak to a radio program directly, name it:
+gives the TCP port of a host named by
+.BR AXSOCK_HOST ;
+a loop TCP listener takes the port
+.BR "loop tcp" ,
+not this.  To skip the daemon and speak to a radio program directly, name it:
 .B AXSOCK_HOST=127.0.0.1 AXSOCK_PORT=8000
 for direwolf.  A value of
 .B AXSOCK_HOST

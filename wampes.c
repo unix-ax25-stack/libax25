@@ -1451,8 +1451,17 @@ static int wampes_mirror_open(void)
 
 	/* One resolution, the one the AGWPE client itself uses: ax25common.conf
 	 * first, so a node whose loop port is a unix socket is found there and
-	 * not on the built-in 127.0.0.1:8200 this used to assume on its own. */
+	 * not on an address of its own. */
 	host = axsock_server_endpoint(&port);
+	if (host == NULL) {
+		/* Nothing names a server, so there is nothing to mirror into.
+		 * The connector does not need one and must not be charged for
+		 * the monitor wanting it - return and let the frame go. */
+		if (axsock_debug)
+			fprintf(stderr, "wampes: %s - not mirroring frames\n",
+				axsock_server_name());
+		return -1;
+	}
 
 	wampes_mirror_client = agwpe_client_new(&cb, NULL);
 	if (wampes_mirror_client == NULL)

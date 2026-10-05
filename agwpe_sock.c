@@ -462,49 +462,96 @@ static void axsock_resolve_server(void)
 	static int done;
 	struct ax25common com;
 	const char *host, *portstr;
+	int tcp_port = 0;
 
 	if (done)
 		return;
 	done = 1;
 
-	axsock_port = AXSOCK_DEFAULT_PORT;
-	axsock_host = AXSOCK_DEFAULT_HOST;
+	/*
+	 * Nothing is resolved to a built-in address.  The loop socket of
+	 * ax25common.conf carries AX25COMMON_SOCKET_DEFAULT from axcommon.c
+	 * even when the file is not there at all, so a unix socket is what a
+	 * host that says nothing gets - which is what ax25netd listens on
+	 * unless it is told otherwise.  The host stays NULL where the file
+	 * turns that socket off and no TCP loop listener replaces it: a
+	 * library with no server to talk to says so once and keeps off the
+	 * wire, rather than offering a 127.0.0.1 that nobody asked for.
+	 */
+	axsock_host = NULL;
+	axsock_port = 0;
 
 	host = getenv("AXSOCK_HOST");
-	if (host == NULL || host[0] == '\0') {
-		if (ax25common_config_load(ax25common_default_config(),
-					   &com) == 0 &&
-		    com.loop_socket[0] != '\0') {
+	if (host != NULL && host[0] != '\0') {
+		axsock_host = host;
+	} else if (ax25common_config_load(ax25common_default_config(),
+					   &com) == 0) {
+		if (com.loop_socket[0] != '\0') {
 			strncpy(axsock_hostbuf, com.loop_socket,
 				sizeof(axsock_hostbuf) - 1);
 			axsock_hostbuf[sizeof(axsock_hostbuf) - 1] = '\0';
 			axsock_host = axsock_hostbuf;
+		} else if (com.loop_tcp_enabled) {
+			/* "loop socket no" together with a loop tcp listener:
+			 * the server is reachable over TCP and the file says
+			 * which port.  The host is the loopback because a
+			 * listener of this file has no address of its own to
+			 * be reached on - ax25netd binds it there. */
+			axsock_host = AXSOCK_LOOPBACK_HOST;
+			tcp_port = com.loop_tcp_port;
 		}
-	} else {
-		axsock_host = host;
 	}
 
-	if (axsock_host[0] == '/')
-		return;			/* a socket has no port */
+	if (axsock_host == NULL)
+		return;
+	if (axsock_host[0] == '/') {
+		/* A path carries no port.  Keeping one here would be ignored
+		 * everywhere it is read, and a port that a caller can set and
+		 * that changes nothing is worse than one it cannot. */
+		axsock_port = 0;
+		return;
+	}
 
+	/* The port belongs to the host: an AXSOCK_PORT names one explicitly,
+	 * and otherwise it is the one the file gave with the listener.  There
+	 * is no port to fall back on, because there is no host to fall back
+	 * on either - a TCP host without a port is a missing configuration,
+	 * not an invitation to guess one. */
 	portstr = getenv("AXSOCK_PORT");
 	if (portstr != NULL && portstr[0] != '\0')
-		axsock_port = atoi(portstr);
-	if (axsock_port <= 0 || axsock_port > 65535)
-		axsock_port = AXSOCK_DEFAULT_PORT;
+		tcp_port = atoi(portstr);
+	if (tcp_port <= 0 || tcp_port > 65535)
+		tcp_port = 0;
+	axsock_port = tcp_port;
 }
 
 /*
  * The endpoint both backends connect to, resolved exactly once by
  * axsock_resolve_server() so the AGWPE client here and the monitor mirror in
  * wampes.c can never disagree about it.  *port is meaningless when the host
- * is a socket path, because a path carries no port.
+ * is a socket path, because a path carries no port.  NULL when nothing names
+ * one - see AXSOCK_LOOPBACK_HOST in agwpe_sock.h for why there is no
+ * built-in answer - and a caller that cannot do without one says so instead
+ * of inventing it.
  */
 const char *axsock_server_endpoint(int *port)
 {
 	axsock_resolve_server();
 	if (port != NULL)
 		*port = axsock_port;
+	return axsock_host;
+}
+
+/*
+ * The endpoint as text, for a message.  Never an empty string: a report that
+ * says where the server should be and prints nothing has told the reader
+ * nothing at all, which is how a working monitor came to look broken.
+ */
+const char *axsock_server_name(void)
+{
+	axsock_resolve_server();
+	if (axsock_host == NULL)
+		return "(no AGWPE server is configured)";
 	return axsock_host;
 }
 
@@ -518,6 +565,8 @@ const char *axsock_server_endpoint(int *port)
 static int axsock_transport_connect(agwpe_client_t *c)
 {
 	axsock_resolve_server();
+	if (axsock_host == NULL)
+		return -1;
 	if (axsock_host[0] == '/')
 		return agwpe_client_connect_unix(c, axsock_host);
 	return agwpe_client_connect_host(c, axsock_host, axsock_port);
@@ -550,6 +599,8 @@ static int axsock_ports_fetch(void)
 	axsock_gports_asked = time(NULL);
 
 	axsock_resolve_server();
+	if (axsock_host == NULL)
+		return -1;
 
 	snprintf(service, sizeof(service), "%d", axsock_port);
 	memset(&hints, 0, sizeof(hints));
@@ -731,6 +782,14 @@ static int axsock_server_local(void)
 
 	axsock_resolve_server();
 	host = axsock_host;
+	if (host == NULL) {
+		/* No server named, so nothing can tell us whether it would
+		 * have been this machine.  Saying no is the safe answer:
+		 * an upstream index read from the wrong file is worse than
+		 * one that is not read at all. */
+		cached = 0;
+		return cached;
+	}
 	if (host[0] == '/') {
 		/* A unix socket is on this machine by definition.  */
 		cached = 1;
@@ -2154,7 +2213,7 @@ static void *axsock_reader(void *arg)
 
 			if (axsock_debug && backoff == 0)
 				fprintf(stderr, "axsock: no server at %s: %s\n",
-					axsock_host, strerror(e));
+					axsock_server_name(), strerror(e));
 
 			nap = 1u << (backoff < 5 ? backoff : 5);
 			if (backoff < 5)
@@ -2779,7 +2838,7 @@ static int agwpe_owns_port(const char *name)
 		if (axsock_debug)
 			fprintf(stderr, "axsock: no AGWPE port table at %s:%d "
 				"and no upstream '%s' in %s, so port '%s' is "
-				"not ours\n", axsock_host, axsock_port, base,
+				"not ours\n", axsock_server_name(), axsock_port, base,
 				CONF_AGWPE_FILE, name);
 		return 0;
 	}
@@ -2936,17 +2995,20 @@ int agwpe_mon_open(int protocol, int *ret)
 		fd = s->fd;
 		if (axsock_debug && !said) {
 			said = 1;
-			/* The name comes from a resolve here and not straight
-			 * out of axsock_host: that is still the default until the
-			 * reader has looked at ax25common once, so a monitor
-			 * opened before that reported the default under the name
-			 * of the answer - or, with the host pointer untouched, as
-			 * "(null)".  Resolve runs at most once and the reader is
-			 * going to call it anyway. */
+			/* Two different things, told apart because they need
+			 * different answers: nothing names a server, which is
+			 * a configuration fault and stays one, and a server
+			 * that is named and not there yet, which the reader
+			 * goes on retrying. */
 			axsock_resolve_server();
-			fprintf(stderr, "axsock: no ax25netd at %s yet - "
-				"the monitor starts receiving when it is "
-				"there\n", axsock_host);
+			if (axsock_host == NULL)
+				fprintf(stderr, "axsock: no AGWPE server is "
+					"configured, so the monitor has no source - "
+					"see ax25common.conf(5) or AXSOCK_HOST\n");
+			else
+				fprintf(stderr, "axsock: no AGWPE server at %s "
+					"yet - the monitor starts receiving "
+					"when there is one\n", axsock_host);
 		}
 		pthread_mutex_unlock(&axsock_lock);
 		*ret = fd;

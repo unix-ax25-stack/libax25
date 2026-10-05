@@ -30,12 +30,28 @@
 #include <sys/socket.h>
 
 /* The AGWPE server these backends feed or read.  AXSOCK_HOST and AXSOCK_PORT
- * override both; when the host starts with a slash it is a unix socket path
- * instead of a TCP address.  Both backends - agwpe_sock.c talking to it, and
- * the wampes.c monitor mirror pushing frames into it - share the defaults, so
- * they live here once. */
-#define	AXSOCK_DEFAULT_HOST	"127.0.0.1"
-#define	AXSOCK_DEFAULT_PORT	8200
+ * name it: a leading slash in the host is a unix socket path, anything else
+ * is a TCP host with that port.  Both backends - agwpe_sock.c talking to it,
+ * and the wampes.c monitor mirror pushing frames into it - resolve it the same
+ * way, so the answer lives here once.
+ *
+ * There is no built-in endpoint.  Where nothing names one, the question is
+ * answered by not answering it: a library that fell back on 127.0.0.1 said
+ * "no ax25netd at 127.0.0.1" on a machine whose ax25netd listens on a unix
+ * socket and is right there, and that was read as the diagnosis of a program
+ * that was working.  A missing name is a configuration fact and is reported
+ * as one; guessing it is what made it invisible.
+ *
+ * The port belongs to the host that is named: AXSOCK_PORT for a TCP host out
+ * of the environment, loop_tcp_port from ax25common.conf for a TCP loop
+ * listener that file enables.  A path carries no port, so none is asked for.
+ */
+
+/* The address a TCP loop listener out of ax25common.conf is reached on.  It
+ * has no address of its own to be reached on and ax25netd binds it there, so
+ * this is where the file's "loop tcp" sends a client - not a guess, and only
+ * reached when the file has asked for a listener. */
+#define	AXSOCK_LOOPBACK_HOST	"127.0.0.1"
 
 int agwpe_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret);
 int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret);
@@ -83,9 +99,13 @@ int agwpe_forget(int fd);
 
 /* The one resolution of the endpoint both backends use, so the monitor
  * mirror in wampes.c reaches the same ax25netd the client here does.  Without
- * it the mirror keeps the built-in 127.0.0.1:8200 and never finds a node that
- * serves a loop socket.  *port is ignored when the returned host is a path. */
+ * it the mirror keeps its own idea of the address and never finds a node that
+ * serves a loop socket.  *port is ignored when the returned host is a path.
+ * NULL where nothing names a server. */
 const char *axsock_server_endpoint(int *port);
+
+/* The same endpoint, for a message: never NULL and never an empty string. */
+const char *axsock_server_name(void);
 
 /* Named agwpe_* since the split, because that is what they are: this
  * backend letting go.  They used to be axsock_*, from when everything lived

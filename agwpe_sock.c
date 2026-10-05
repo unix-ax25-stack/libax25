@@ -176,9 +176,19 @@ struct axsock_sock {
  * is a data lock, never a blocking-I/O lock: every frame send takes a
  * client reference, snapshots its arguments and releases the lock before
  * touching the (blocking) AGWPE TCP socket, then re-acquires it to drop
- * the reference.  Recursion therefore only ever re-enters around short
- * critical sections, which also bounds what a signal handler calling
- * close() can be made to wait for.
+ * the reference, and the reader thread connects and resolves names with
+ * no lock at all (see axsock_link_up).  Recursion therefore only ever
+ * re-enters around short critical sections, which also bounds what a signal
+ * handler calling close() can be made to wait for.
+ *
+ * What that buys is the property a WAMPES node depends on: a host whose
+ * ax25netd is down and whose node is up keeps working.  Every interposed
+ * send() and close() of the node's own traffic passes through this lock on
+ * its way to being recognised as not ours, so a reader thread that held it
+ * across a connect - or across the backoff sleeps a missing server causes -
+ * would put the node's throughput behind the availability of a program it
+ * does not use.  A monitor that cannot be fed is a monitor that says so;
+ * a connector that is blocked is a radio that is down.
  */
 static pthread_mutex_t	axsock_lock;
 static pthread_cond_t	axsock_cond = PTHREAD_COND_INITIALIZER;
@@ -202,8 +212,9 @@ static int			axsock_up;
 static int			axsock_thread_alive;
 
 /* Why the last attempt to bring the link up failed, for the thread that is
- * waiting to be told.  errno belongs to whoever set it, and the thread that
- * tried is the one that is asleep when the answer is wanted. */
+ * waiting to be told.  Written and read under axsock_lock and nowhere else:
+ * errno belongs to whoever set it, and the thread that made the attempt is
+ * asleep in its backoff when the answer is wanted. */
 static int			axsock_err;
 
 /* Seconds axsock_ensure_locked() waits for the link before giving up.  Long
@@ -2063,7 +2074,8 @@ out:
 	pthread_mutex_unlock(&axsock_lock);
 }
 
-static int axsock_link_up_locked(void);
+static int axsock_link_up(agwpe_client_t **cp, int *errp);
+static void axsock_link_publish(agwpe_client_t *c);
 
 /*
  * Background thread: bring the AGWPE connection up, wait for frames from the
@@ -2098,31 +2110,57 @@ static void *axsock_reader(void *arg)
 		int wait;
 
 		if (!up) {
-			unsigned nap;
+			unsigned nap = 0;
+			agwpe_client_t *c = NULL;
+			int e = 0;
 
-			pthread_mutex_lock(&axsock_lock);
-			if (axsock_link_up_locked() == 0) {
+			/*
+			 * Connecting happens without axsock_lock.  It is
+			 * the one slow thing this library does - a name
+			 * that has to be resolved, a TCP connect that
+			 * waits out its timeout - and holding the global
+			 * lock across it would stop every other socket
+			 * call in the process, including the ones of a
+			 * WAMPES node that is working perfectly well and
+			 * has nothing to do with whether ax25netd is up.
+			 * The lock protects the table and the client, not
+			 * the way to the server; the connector must not pay
+			 * for a monitor's best effort.
+			 */
+			if (axsock_link_up(&c, &e) == 0) {
+				pthread_mutex_lock(&axsock_lock);
+				axsock_link_publish(c);
 				up = 1;
 				backoff = 0;
+				pthread_cond_broadcast(&axsock_cond);
+				pthread_mutex_unlock(&axsock_lock);
 				if (axsock_debug)
 					fprintf(stderr, "axsock: link to the "
 						"server is up again\n");
-			} else {
-				nap = 1u << (backoff < 5 ? backoff : 5);
-				if (backoff < 5)
-					backoff++;
-			}
-			/* Whoever is inside a socket call waiting for the
-			 * link has to be released on both answers, or it
-			 * waits out its full timeout for one that has
-			 * already come. */
-			pthread_cond_broadcast(&axsock_cond);
-			if (!up) {
-				pthread_mutex_unlock(&axsock_lock);
-				sleep(nap);
 				continue;
 			}
+
+			/*
+			 * Nobody waiting for the link gets its answer by
+			 * the backoff ending, so the waiters have to be
+			 * released here, on both answers - a caller that
+			 * waits out its full timeout for an answer that
+			 * has already come is ten seconds of nothing.
+			 */
+			pthread_mutex_lock(&axsock_lock);
+			axsock_err = e;
+			pthread_cond_broadcast(&axsock_cond);
 			pthread_mutex_unlock(&axsock_lock);
+
+			if (axsock_debug && backoff == 0)
+				fprintf(stderr, "axsock: no server at %s: %s\n",
+					axsock_host, strerror(e));
+
+			nap = 1u << (backoff < 5 ? backoff : 5);
+			if (backoff < 5)
+				backoff++;
+			sleep(nap);
+			continue;
 		}
 
 		/* Blocking wait as before while nothing is queued.  With a
@@ -2198,40 +2236,44 @@ static void axsock_client_retire(void)
 }
 
 /*
- * Bring the AGWPE connection up.  Called with the lock held.
+ * Build the AGWPE connection.  Called with no lock held.
  *
- * The work the reader used to be told to do by whoever started it: connect,
- * log in, and re-register everything this process had registered with the
- * server before.  A reconnect runs the same path, which is what makes the
- * 'k' toggle and the registrations come back by themselves - both are state
- * of the connection, and a new connection starts without either.
+ * Resolve the server, connect, log in.  All of it before the client is
+ * published, and none of it under axsock_lock, for the reason the caller
+ * gives: this is the slow part, the part that waits for a name and for a
+ * TCP handshake, and a connector on the other backend must not be made to
+ * wait for it.  On a host whose ax25netd is down and whose WAMPES node is
+ * up, that is the whole difference between a working AX.25 link and a
+ * process whose every socket call queues behind a connect that goes nowhere.
+ *
+ * On success *cp is the new client, still private to this thread: nothing
+ * else can reach it and axsock_up is still 0, so nothing is sent on it
+ * before axsock_link_publish().  On failure *errp says why and *cp stays
+ * NULL.
  */
-static int axsock_link_up_locked(void)
+static int axsock_link_up(agwpe_client_t **cp, int *errp)
 {
 	const struct agwpe_client_cb cb = {
 		.raw_frame = axsock_dispatch,
 	};
+	agwpe_client_t *c;
 
-	if (axsock_up)
-		return 0;
-
-	if (axsock_agwpe != NULL)
-		axsock_client_retire();
+	*cp = NULL;
+	*errp = ECONNREFUSED;
 
 	axsock_resolve_server();
 
-	axsock_agwpe = agwpe_client_new(&cb, NULL);
-
-	if (axsock_agwpe == NULL) {
-		axsock_err = ENOMEM;
+	c = agwpe_client_new(&cb, NULL);
+	if (c == NULL) {
+		*errp = ENOMEM;
 		return -1;
 	}
 
-	if (axsock_transport_connect(axsock_agwpe) != 0) {
-		int e = agwpe_client_err(axsock_agwpe);
+	if (axsock_transport_connect(c) != 0) {
+		int e = agwpe_client_err(c);
 
-		axsock_client_retire();
-		axsock_err = (e != 0) ? e : ECONNREFUSED;
+		agwpe_client_free(c);
+		*errp = (e != 0) ? e : ECONNREFUSED;
 		return -1;
 	}
 
@@ -2245,12 +2287,49 @@ static int axsock_link_up_locked(void)
 		const char *pass = getenv("AXSOCK_PASSWORD");
 
 		if (user != NULL && user[0] != '\0')
-			agwpe_client_login(axsock_agwpe, user,
+			agwpe_client_login(c, user,
 					   (pass != NULL) ? pass : "");
 	}
 
+	*cp = c;
+	return 0;
+}
+
+/*
+ * Take a connection built by axsock_link_up() into use.  Called with the lock
+ * held, which it does not release; the client is consumed either way.
+ *
+ * The work the reader used to be told to do by whoever started it: put the new
+ * client in place of the old one, then re-register everything this process had
+ * registered with the server before.  A reconnect runs the same path, which is
+ * what makes the 'k' toggle and the registrations come back by themselves -
+ * both are state of the connection, and a new connection starts without
+ * either.
+ *
+ * Registering does write to the connection, so this is the one place left that
+ * touches a blocking socket under the lock.  It is a frame of a few bytes into
+ * a connection that was just accepted, which is the one moment a write cannot
+ * block: the peer's receive window is there for exactly this.  The connect
+ * that could take seconds, and the backoff sleeps that follow it when there is
+ * no server at all, are outside - see axsock_link_up() and axsock_reader().
+ */
+static void axsock_link_publish(agwpe_client_t *c)
+{
+	if (axsock_up) {
+		/* Cannot happen: only this thread builds a connection and
+		 * it builds one at a time.  Better to drop the new one
+		 * than to leave two, though. */
+		agwpe_client_free(c);
+		return;
+	}
+
+	if (axsock_agwpe != NULL)
+		axsock_client_retire();
+
+	axsock_agwpe = c;
 	axsock_up = 1;
 	axsock_err = 0;
+
 	axsock_register_all_locked();
 	/*
 	 * Raw monitoring is a toggle on the connection, and a new
@@ -2264,6 +2343,24 @@ static int axsock_link_up_locked(void)
 	 */
 	if (axsock_nraw > 0)
 		agwpe_client_raw_toggle(axsock_agwpe);
+}
+
+/*
+ * Start axsock_reader() if it is not already running.  Called with the lock
+ * held.  Does not wait for anything: it only makes sure there is somebody who
+ * will bring the link up, now or after the next backoff.
+ */
+static int axsock_reader_start_locked(void)
+{
+	if (axsock_thread_alive)
+		return 0;
+
+	axsock_thread_alive = 1;
+	if (pthread_create(&axsock_thread, NULL, axsock_reader, NULL) != 0) {
+		axsock_thread_alive = 0;
+		errno = EAGAIN;
+		return -1;
+	}
 	return 0;
 }
 
@@ -2275,20 +2372,19 @@ static int axsock_link_up_locked(void)
  * without two threads racing to own one socket - and waiting is what lets a
  * program whose only business is receiving (listen(1), mheardd(8),
  * ax25mond(8)) have a link restored under it without asking.
+ *
+ * Used where the link is not optional: a connect(2) or a listen(2) that has
+ * nothing to carry without it.  A monitor asks for less and gets less - see
+ * agwpe_mon_open(), which starts the reader and hands out a quiet descriptor
+ * rather than making the program that wants to watch the air wait for it.
  */
 static int axsock_ensure_locked(void)
 {
 	if (axsock_up)
 		return 0;
 
-	if (!axsock_thread_alive) {
-		axsock_thread_alive = 1;
-		if (pthread_create(&axsock_thread, NULL, axsock_reader, NULL) != 0) {
-			axsock_thread_alive = 0;
-			errno = EAGAIN;
-			return -1;
-		}
-	}
+	if (axsock_reader_start_locked() != 0)
+		return -1;
 
 	while (!axsock_up) {
 		struct timespec ts;
@@ -2734,6 +2830,23 @@ int agwpe_socket(int type, int protocol)
  * an AX.25 socket: every raw frame heard on any upstream is delivered to it,
  * fed from the AGWPE 'K' records the server sends once raw monitoring is on.
  *
+ * Always available, whichever backend this process was given for AF_AX25.
+ *
+ * That is a change, and the reason is that the question this function used to
+ * answer - "is the process on the kernel or on a server" - is not the question
+ * a raw monitor asks.  It asks "what is being heard", and on a machine that
+ * has both a kernel AX.25 stack and an ax25netd the answer is two sources, of
+ * which the kernel one used to win by default and the server one was then not
+ * offered at all.  So listen(1) on such a host showed the kernel's ports and
+ * nothing else: no ax25netd radio, and no WAMPES traffic either, since that is
+ * mirrored into ax25netd's monitor channel.
+ *
+ * The monitor socket is now opened here on purpose, next to the kernel one,
+ * by axmon_open().  socket() still hands out one descriptor and still prefers
+ * the kernel, because a program that says socket(PF_PACKET, SOCK_PACKET) has
+ * asked for a packet socket and gets the one the kernel gives it; asking for
+ * both is a new request and gets a new answer.
+ *
  * SOCK_PACKET is the marker, not the address family: ax25-apps/listen asks for
  * AF_PACKET, ax25-tools/kiss/net2kiss for AF_INET, which is how one did this
  * before Linux 2.2 and how that program still does it.  Both mean the same
@@ -2746,16 +2859,10 @@ int agwpe_socket(int type, int protocol)
  * Returns 0 for anything that is not a monitor socket, including on a kernel
  * backend, where the packet socket is real and the call belongs to the OS.
  */
-int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
+int agwpe_mon_open(int protocol, int *ret)
 {
 	struct axsock_sock *s;
 	int fd;
-
-	if (type != SOCK_PACKET ||
-	    (domain != AF_PACKET && domain != AF_INET))
-		return 0;
-	if (axsock_backend_now() == 1)
-		return 0;
 
 	/* An AGWPE server feeds this socket.  Ask for one first, because a
 	 * machine can have both an AGWPE server and a node, and there a
@@ -2774,6 +2881,16 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 	 * either, the refusal is a configuration fault and worth reporting
 	 * as one.
 	 *
+	 * Neither case waits for the server.  A monitor is worth having and
+	 * not worth a program that stands still for it: it starts the
+	 * reader, hands out the descriptor, and starts receiving whenever
+	 * the link is there - which, with the reader's backoff, is also
+	 * whenever ax25netd comes back.  That is the other half of the rule
+	 * this whole path follows: what a monitor wants is optional, and
+	 * what a connector needs is not.  A WAMPES node on the same machine
+	 * shares this library, this lock and this reader, and must keep
+	 * working while the server it does not use is absent.
+	 *
 	 * This is the one place the AGWPE backend looks at the other one's
 	 * register, and it is not an oversight: whether a failure here should
 	 * be fatal or quiet depends on whether the other world exists at all.
@@ -2781,15 +2898,26 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 	 * the one place where the answer changes what happens.
 	 */
 	pthread_mutex_lock(&axsock_lock);
-	if (axsock_ensure_locked() != 0) {
+	if (axsock_reader_start_locked() != 0) {
+		pthread_mutex_unlock(&axsock_lock);
+		*ret = -1;
+		return 1;
+	}
+	if (!axsock_up && !wampes_configured()) {
+		/* Nobody to feed the monitor and nothing to feed it with:
+		 * not a server, not a node.  Saying so beats a program
+		 * that shows nothing for ever and says why not. */
+		pthread_mutex_unlock(&axsock_lock);
+		*ret = -1;
+		return 1;
+	}
+	if (!axsock_up) {
+		/* Not yet, and possibly not for a while.  The descriptor
+		 * is the same one a fed monitor gets and starts working by
+		 * itself when the reader gets the link up. */
 		static int said;
 
-		if (!wampes_configured()) {
-			pthread_mutex_unlock(&axsock_lock);
-			*ret = -1;
-			return 1;
-		}
-		s = axsock_alloc_sock_locked(type);
+		s = axsock_alloc_sock_locked(SOCK_PACKET);
 		if (s == NULL) {
 			pthread_mutex_unlock(&axsock_lock);
 			*ret = -1;
@@ -2798,16 +2926,17 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 		s->raw = 1;
 		axsock_nraw++;
 		fd = s->fd;
-		if (!said && axsock_debug) {
+		if (!said) {
 			said = 1;
-			fprintf(stderr, "axsock: ax25netd/AGWPE server not "
-				"reachable - monitor socket stays silent\n");
+			fprintf(stderr, "axsock: no ax25netd at %s yet - "
+				"the monitor starts receiving when it is "
+				"there\n", axsock_host);
 		}
 		pthread_mutex_unlock(&axsock_lock);
 		*ret = fd;
 		return 1;
 	}
-	s = axsock_alloc_sock_locked(type);
+	s = axsock_alloc_sock_locked(SOCK_PACKET);
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
 		*ret = -1;
@@ -2826,6 +2955,16 @@ int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
 			fd, protocol);
 	*ret = fd;
 	return 1;
+}
+
+int agwpe_socket_packet(int domain, int type, int protocol, int *ret)
+{
+	if (type != SOCK_PACKET ||
+	    (domain != AF_PACKET && domain != AF_INET))
+		return 0;
+	if (axsock_backend_now() == 1)
+		return 0;
+	return agwpe_mon_open(protocol, ret);
 }
 
 /*

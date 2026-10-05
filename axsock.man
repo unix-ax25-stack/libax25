@@ -342,6 +342,37 @@ to
 .B agwpe
 to monitor the AGWPE feed instead, and the kernel's own frames are then the
 ones that go unseen.
+.LP
+What is in a frame is a second question, and a program answers it with
+.BR axmon_open_mask (),
+declared in
+.IR <netax25/axmon.h> .
+A monitor that reads frames to learn who is on the air does not read what
+they carry, and the information field is most of the bytes on the wire.  The
+mask asks
+.BR ax25netd (8)
+to leave it out; the addresses, the control byte and the PID stay, so the
+frame is still a frame.  It is asked and answered per client, so
+.BR listen (1)
+and
+.BR mheardd (8)
+on one machine do not argue about it \-\-
+.BR mheardd (8)
+asks for no payloads at all.
+.PP
+That request is answered by
+.BR ax25netd (8)
+and reaches nothing else.  A kernel packet socket hands over what the kernel
+assembled, and there is no bit to set that says leave the payload out of a
+frame that already exists \-\-
+cutting one here would produce a frame that decodes as a different frame
+rather than as this one with less in it.  So on a host with a kernel AX.25
+stack beside the
+.BR ax25netd (8),
+a program that asked for no payloads still gets them over the packet socket.
+What the mask buys is what the server sends, and on a host where
+.BR ax25netd (8)
+carries the ports that is all of them.
 .SH ENVIRONMENT
 .TP
 .B AXSOCK_BACKEND

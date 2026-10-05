@@ -4,10 +4,12 @@
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
+#include <pthread.h>
 #include <config.h>
 
 #include <sys/types.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 
 #include <net/if.h>
 #include <net/if_arp.h>
@@ -33,8 +35,91 @@ typedef struct _axport
 	int  Kernel;		/* the callsign is an interface that is up */
 } AX_Port;
 
+/* A list that a reload replaced, kept until the cap below frees it.
+ *
+ * The getters hand out pointers into the list (a name, a callsign) and the
+ * shim walks it from its reader thread, so a reload that freed the old list
+ * left a walk reading freed memory - and left ax25_config_get_next() reading
+ * a list that no longer had the entries it started with.  Retiring instead of
+ * freeing costs one list per reload and makes both impossible: whoever holds
+ * the old head walks a list that is still whole, whoever reads the head after
+ * the swap gets the new one.  No lock is needed for that, and taking one in
+ * the getters would not have helped: a walk is a sequence of calls, not one.
+ */
+struct ax25_ports_gen {
+	struct ax25_ports_gen *Next;
+	AX_Port *head;
+};
+
+/* Enough that a program which reloads in a loop cannot grow without bound.
+ * Reaching it means 32 reloads inside one traversal, and a traversal is a
+ * handful of pointer hops - so the backstop costs nothing and does not
+ * narrow the guarantee in practice. */
+#define AX25_PORTS_GENERATIONS 32
+
 static AX_Port *ax25_ports;
 static AX_Port *ax25_port_tail;
+static struct ax25_ports_gen *ax25_ports_retired;
+static int ax25_ports_generations;
+static int ax25_ports_count;
+static time_t ax25_ports_mtime;
+static off_t ax25_ports_size;
+
+/* No lock for the readers, and taking one in the getters would not have
+ * helped: a walk is a sequence of calls, not one.  This one only keeps two
+ * reloads from interleaving their builds, which the retire list already
+ * survives anyway. */
+static pthread_mutex_t ax25_ports_lock = PTHREAD_MUTEX_INITIALIZER;
+#define AX25_PORTS_LOCK()	pthread_mutex_lock(&ax25_ports_lock)
+#define AX25_PORTS_UNLOCK()	pthread_mutex_unlock(&ax25_ports_lock)
+
+static void ax25_ports_free(AX_Port *p)
+{
+	AX_Port *n;
+
+	while (p != NULL) {
+		n = p->Next;
+		free(p->Name);
+		free(p->Call);
+		free(p->Device);
+		free(p->Description);
+		free(p);
+		p = n;
+	}
+}
+
+static void ax25_ports_retire(AX_Port *head)
+{
+	struct ax25_ports_gen *g, **last;
+
+	if (head == NULL)
+		return;
+
+	while (ax25_ports_generations >= AX25_PORTS_GENERATIONS) {
+		g = ax25_ports_retired;
+		if (g == NULL)
+			break;
+		ax25_ports_retired = g->Next;
+		ax25_ports_free(g->head);
+		free(g);
+		ax25_ports_generations--;
+	}
+
+	if ((g = calloc(1, sizeof(*g))) == NULL) {
+		/* Nowhere to park it.  A program that reloads often enough
+		 * to get here has a list of a few hundred bytes per
+		 * reload, and the alternative to leaking is the bug this
+		 * arrangement exists to remove. */
+		return;
+	}
+	g->head = head;
+
+	last = &ax25_ports_retired;
+	while (*last != NULL)
+		last = &(*last)->Next;
+	*last = g;
+	ax25_ports_generations++;
+}
 
 static int is_same_call(char *call1, char *call2)
 {
@@ -378,9 +463,12 @@ int ax25_config_bind_port(const struct sockaddr *addr, socklen_t len,
 		 * socket went to AGWPE without a word - and then righted itself
 		 * on the next bind, because the AGWPE path loads the table as a
 		 * side effect.  Load it here, once, rather leave the backend to
-		 * depend on the order of the binds.
+		 * depend on the order of the binds.  Ensure() rather than the
+		 * unconditional reload: this is the first half of the bind's
+		 * port lookup, and the second half asks the same question and
+		 * has to get the same answer.
 		 */
-		ax25_config_load_ports();
+		ax25_config_ports_ensure();
 		name = ax25_config_get_port(which);
 	}
 	if (name == NULL)
@@ -534,7 +622,8 @@ const char *ax25_config_ports_file(void)
 	return CONF_AXPORTS_FILE;
 }
 
-int ax25_config_load_ports(void)
+/* Read axports and build the table.  The caller holds ax25_ports_lock. */
+static int ax25_config_reload(void)
 {
 	FILE *fp = NULL;
 	char buffer[256], *s;
@@ -551,18 +640,20 @@ int ax25_config_load_ports(void)
 	 * ax25_config_load_ports() would report every port as a
 	 * duplicate.  Several programs (and the userspace AF_AX25
 	 * shim) legitimately call this more than once.
+	 *
+	 * Empty head, not freed list.  The getters hand out pointers into
+	 * the table and the shim walks it from its reader thread while the
+	 * application binds, so freeing it here left that walk on freed
+	 * memory - and, when the walk happened to land in the middle of a
+	 * reload, a bind that resolved a port a moment ago refusing it
+	 * with the message that no backend serves it.  See ax25_ports_retire().
 	 */
-	while (ax25_ports != NULL) {
-		AX_Port *p = ax25_ports->Next;
-
-		free(ax25_ports->Name);
-		free(ax25_ports->Call);
-		free(ax25_ports->Device);
-		free(ax25_ports->Description);
-		free(ax25_ports);
-		ax25_ports = p;
-	}
+	ax25_ports_retire(ax25_ports);
+	ax25_ports = NULL;
 	ax25_port_tail = NULL;
+	ax25_ports_count = 0;
+	ax25_ports_mtime = 0;
+	ax25_ports_size = 0;
 
 #ifdef __linux__
 	/* Reliable listing of all network ports on Linux
@@ -591,13 +682,22 @@ int ax25_config_load_ports(void)
 			memset(&ifr, 0, sizeof(ifr));
 			if (strlen(s) >= IFNAMSIZ) {
 				fprintf(stderr, "axconfig: interface name too long\n");
-				unreachable();
+				continue;
 			}
 			strcpy(ifr.ifr_name, s);
 
+			/* One interface that cannot be asked about is that
+			 * interface being gone or half up - an ax25 module
+			 * being loaded or unloaded is the normal way to get
+			 * here, and it is no reason to throw away axports:
+			 * every backend's answer about every port comes out
+			 * of this file.  Skipping the one keeps a
+			 * momentary ENODEV from emptying the table under a
+			 * bind that is asking right now. */
 			if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
-				fprintf(stderr, "axconfig: SIOCGIFHWADDR: %s\n", strerror(errno));
-				return FALSE;
+				fprintf(stderr, "axconfig: %s: SIOCGIFHWADDR: %s\n",
+					s, strerror(errno));
+				continue;
 			}
 
 			if (ifr.ifr_hwaddr.sa_family != ARPHRD_AX25)
@@ -608,8 +708,9 @@ int ax25_config_load_ports(void)
 			s = ax25_ntoa((void*)ifr.ifr_hwaddr.sa_data);
 
 			if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
-				fprintf(stderr, "axconfig: SIOCGIFFLAGS: %s\n", strerror(errno));
-				return FALSE;
+				fprintf(stderr, "axconfig: %s: SIOCGIFFLAGS: %s\n",
+					s, strerror(errno));
+				continue;
 			}
 
 			if (!(ifr.ifr_flags & IFF_UP))
@@ -666,8 +767,80 @@ int ax25_config_load_ports(void)
 	if (calllist) free(calllist);
 	if (devlist) free(devlist);
 
-	if (ax25_ports == NULL)
+	if (ax25_ports == NULL) {
+		ax25_ports_count = 0;
 		return 0;
+	}
+
+	/* What ax25_config_ports_ensure() compares against to decide that
+	 * the table is still the file.  Taken after the read, so an editor
+	 * that rewrites axports between the two does not make a half-written
+	 * file look current. */
+	{
+		struct stat st;
+
+		if (stat(CONF_AXPORTS_FILE, &st) == 0) {
+			ax25_ports_mtime = st.st_mtime;
+			ax25_ports_size = st.st_size;
+		}
+	}
+
+	ax25_ports_count = n;
+
+	return n;
+}
+
+/*
+ * Read axports now, whether or not it has changed.
+ *
+ * What every program in the suite calls at startup and what
+ * axparms(8) calls to re-read a file the operator has edited - so this is a
+ * forced reload, and it stays one.
+ */
+int ax25_config_load_ports(void)
+{
+	int n;
+
+	AX25_PORTS_LOCK();
+	n = ax25_config_reload();
+	AX25_PORTS_UNLOCK();
+
+	return n;
+}
+
+/*
+ * Read axports unless the file is unchanged since the last read.
+ *
+ * For the callers inside the library that go looking for a port while the
+ * application is doing something else.  They used to reload unconditionally,
+ * which cost a file read, an interface scan and a rebuilt list per lookup -
+ * and three lookups per bind - while the answer could only differ if the
+ * operator had edited axports in the meantime.  Comparing mtime and size
+ * makes the common case the cheap one and still notices an edit.
+ *
+ * A file that cannot be stat()ed now keeps the table that is already here:
+ * an unreadable axports is no reason to forget the ports that were read from
+ * it while it could be read.
+ */
+int ax25_config_ports_ensure(void)
+{
+	struct stat st;
+	int n;
+
+	AX25_PORTS_LOCK();
+
+	if (ax25_ports != NULL) {
+		if (stat(CONF_AXPORTS_FILE, &st) != 0)
+			n = ax25_ports_count;
+		else if (st.st_mtime == ax25_ports_mtime && st.st_size == ax25_ports_size)
+			n = ax25_ports_count;
+		else
+			n = ax25_config_reload();
+	} else {
+		n = ax25_config_reload();
+	}
+
+	AX25_PORTS_UNLOCK();
 
 	return n;
 }

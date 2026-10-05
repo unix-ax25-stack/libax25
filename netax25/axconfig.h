@@ -61,6 +61,19 @@ extern int ax25_config_lazy_take(const char *call, char *name, size_t namelen);
 extern int ax25_config_load_ports(void);
 
 /*
+ * The same, but only when the file has changed since the last read.
+ *
+ * ax25_config_load_ports() is a forced reload: every program in the suite
+ * calls it at startup and axparms(8) calls it to re-read a file the operator
+ * has just edited.  Callers inside the library that go looking for a port
+ * while the application is doing something else want the other thing - the
+ * answer, not the read - and they are on a path where the application is
+ * holding a bind.  Returns the number of entries in the table, like
+ * ax25_config_load_ports() does.
+ */
+extern int ax25_config_ports_ensure(void);
+
+/*
  * The axports file that ax25_config_load_ports() reads.
  *
  * A caller that wants to say something about the entries has to name the

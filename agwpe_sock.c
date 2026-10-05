@@ -732,18 +732,29 @@ static int axsock_server_local(void)
 	return cached;
 }
 
-/* The name of the axports entry that owns this callsign, into a buffer the
- * caller owns, or nothing at all when no entry has it.
+/* The axports entry that owns this callsign, and the port that entry is on.
  *
- * This is axsock_port_for()'s answer to the same question, kept separate
- * because the number and the name have to be able to disagree.  Both walk
- * the same list and find the same entry, but axsock_port_for() then asks a
- * second question - which upstream serves this entry - and that one is
- * allowed to fail.  An entry no ax25netd_agwpe.conf upstream serves is exactly the
- * case worth being able to see: axsock_port_for() answers -1 for it and the
- * bind is refused, while a monitor on the raw stream still sees frames,
- * because those frames got to ax25netd and ax25netd is what puts them on
- * the wire.
+ * One walk answers both, because a bind used to ask both and got two answers
+ * that did not have to agree.  axsock_bind_port() wanted the name for a
+ * diagnostic and the number for the wire, and looked each up on its own: two
+ * walks of the port table, and - since the reload behind each of them rebuilt
+ * that table - two chances to disagree.  They did.  A bind that had resolved
+ * "loop" through the first was refused by the second with "no backend serves
+ * the port 'loop'", and only where a kernel socket was in the way, because
+ * that is the one path where the shim's reader thread is live while the
+ * application binds.
+ *
+ * The two answers still answer different questions, so they can still
+ * disagree: the number is asked a second question - which upstream serves this
+ * entry - and that one is allowed to fail.  An entry no ax25netd_agwpe.conf upstream serves is
+ * exactly the case worth being able to see: the number is -1 and the bind is
+ * refused, while a monitor on the raw stream still sees frames, because those
+ * frames got to ax25netd and ax25netd is what puts them on the wire.
+ *
+ * The name is what goes out, when the caller has somewhere to put it, and it
+ * stays empty when there is no entry.  A source callsign that is nobody's port
+ * is not a misconfiguration - it is what a program that only transmits looks
+ * like - so there is nothing to report about it.
  *
  * Printing the port number there would say less and mislead.  The number is
  * this machine's answer to "which upstream index", neither axports nor
@@ -751,9 +762,10 @@ static int axsock_server_local(void)
  * upstream's channels share its stride, so a number cannot tell channel 0
  * from channel 5.  The name is what the operator wrote and can go and fix.
  *
- * An empty result stays empty.  A source callsign that is nobody's port is
- * not a misconfiguration - it is what a program that only transmits looks
- * like - so there is nothing to report about it.
+ * Exact match first, then the base-call fallback, and in that order for both
+ * answers: the entry has to be the same one whichever of the two found it, or
+ * a monitor could name an entry that the port it is reporting did not come
+ * from.
  *
  * Not axsock_copy_call(): a port name is written the way axports spells it,
  * and uppercasing would print RADIO0 where the operator wrote radio0.  A
@@ -787,43 +799,43 @@ static size_t axsock_copy_port_name(char *dst, size_t dstlen, const char *src)
 	return n;
 }
 
-static void axsock_port_name_of_call(const char *call, char *name,
-				     size_t namelen)
+static int axsock_port_found(const char *entry, char *name, size_t namelen)
+{
+	if (name != NULL && namelen > 0)
+		(void)axsock_copy_port_name(name, namelen, entry);
+
+	return axsock_port_of_entry(entry);
+}
+
+static int axsock_port_lookup(const char *call, char *name, size_t namelen)
 {
 	char *entry, *addr;
-	size_t n;
 
-	if (name == NULL || namelen == 0)
-		return;
-
-	name[0] = '\0';
+	if (name != NULL && namelen > 0)
+		name[0] = '\0';
 	if (call == NULL || call[0] == '\0')
-		return;
+		return -1;
 
-	ax25_config_load_ports();
+	ax25_config_ports_ensure();
 
-	/* Exact match first, then the base-call fallback, and in the same
-	 * order as axsock_port_for() uses: an entry has to be the same one
-	 * here, or a monitor could name an entry that the port it is
-	 * reporting did not come from.  */
 	for (entry = ax25_config_get_next(NULL); entry != NULL;
 	     entry = ax25_config_get_next(entry)) {
 		addr = ax25_config_get_addr(entry);
-		if (addr != NULL && strcasecmp(addr, call) == 0) {
-			n = axsock_copy_port_name(name, namelen, entry);
-			(void)n;
-			return;
-		}
+		if (addr != NULL && strcasecmp(addr, call) == 0)
+			return axsock_port_found(entry, name, namelen);
 	}
 	for (entry = ax25_config_get_next(NULL); entry != NULL;
 	     entry = ax25_config_get_next(entry)) {
 		addr = ax25_config_get_addr(entry);
-		if (addr != NULL && axsock_call_base_equal(addr, call)) {
-			n = axsock_copy_port_name(name, namelen, entry);
-			(void)n;
-			return;
-		}
+		if (addr != NULL && axsock_call_base_equal(addr, call))
+			return axsock_port_found(entry, name, namelen);
 	}
+
+	if (axsock_debug)
+		fprintf(stderr, "axsock: no axports entry has the callsign '%s', "
+			"so no port of it can be named\n", call);
+
+	return -1;
 }
 
 /* The AGWPE port of the entry that owns this callsign, or -1 when nothing
@@ -832,37 +844,7 @@ static void axsock_port_name_of_call(const char *call, char *name,
  * hear that rather than be handed the first one.  */
 static int axsock_port_for(const char *call)
 {
-	char *name, *addr;
-	unsigned char i = 0;
-	const char *entry = NULL;
-
-	ax25_config_load_ports();
-
-	/* Exact match first, then the base-call fallback: an exact entry
-	 * anywhere wins over a base match earlier in the list.  */
-	for (name = ax25_config_get_next(NULL); name != NULL;
-	     name = ax25_config_get_next(name), i++) {
-		addr = ax25_config_get_addr(name);
-		if (addr != NULL && strcasecmp(addr, call) == 0) {
-			entry = name;
-			break;
-		}
-	}
-	if (entry == NULL) {
-		i = 0;
-		for (name = ax25_config_get_next(NULL); name != NULL;
-		     name = ax25_config_get_next(name), i++) {
-			addr = ax25_config_get_addr(name);
-			if (addr != NULL && axsock_call_base_equal(addr, call)) {
-				entry = name;
-				break;
-			}
-		}
-	}
-	if (entry == NULL)
-		return -1;
-
-	return axsock_port_of_entry(entry);
+	return axsock_port_lookup(call, NULL, 0);
 }
 
 /*
@@ -1014,10 +996,10 @@ static int axsock_bind_port(const struct sockaddr *addr,
 		 * name goes out with the number: a number alone cannot be
 		 * read back as a name once the port does not exist, and a
 		 * monitor that then has nothing to print says less than
-		 * the one line that got the frame onto the wire.  */
-		axsock_port_name_of_call(ax25_ntoa(&fsa->fsa_digipeater[0]),
-					 name, namelen);
-		return axsock_port_for(ax25_ntoa(&fsa->fsa_digipeater[0]));
+		 * the one line that got the frame onto the wire.  One
+		 * lookup for both - see axsock_port_lookup().  */
+		return axsock_port_lookup(ax25_ntoa(&fsa->fsa_digipeater[0]),
+					  name, namelen);
 	}
 
 	*named = 0;
@@ -1031,8 +1013,7 @@ static int axsock_bind_port(const struct sockaddr *addr,
 	 * monitor must not read a name into it.  port_known() says which of
 	 * the two this is, and axsock_port_name() is asked only when it does.
 	 */
-	axsock_port_name_of_call(local, name, namelen);
-	p = axsock_port_for(local);
+	p = axsock_port_lookup(local, name, namelen);
 	*known = (p >= 0);
 	return (p >= 0) ? p : 0;
 }
@@ -1101,7 +1082,7 @@ static const char *axsock_port_name(unsigned char port)
 {
 	char *name;
 
-	ax25_config_load_ports();
+	ax25_config_ports_ensure();
 	for (name = ax25_config_get_next(NULL); name != NULL;
 	     name = ax25_config_get_next(name))
 		if (axsock_port_of_entry(name) == port)

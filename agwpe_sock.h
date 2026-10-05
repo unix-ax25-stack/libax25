@@ -85,8 +85,12 @@ int agwpe_write(int fd, const void *buf, size_t len, ssize_t *ret);
  *
  * Always returns 1 with the descriptor in *ret, or 1 with -1 when there is
  * neither a server nor a node to refuse quietly.
+ *
+ * mask is AGWPE_MONMASK_*: what the program wants the raw frames to carry.
+ * It is one value for the connection, which is the program's, and it is sent
+ * when the first monitor socket exists and again whenever the link comes back.
  */
-int agwpe_mon_open(int protocol, int *ret);
+int agwpe_mon_open(int protocol, unsigned char mask, int *ret);
 
 /*
  * And the way out.  A descriptor made here changes hands when bind() finds

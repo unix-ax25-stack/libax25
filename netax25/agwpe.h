@@ -109,6 +109,31 @@ struct agwpe_s {
 #define	AGWPE_CTL_KILL			'K'
 #define	AGWPE_CTL_PARAM			'P'
 
+/* Private extension of ax25netd: what the monitor may leave out.
+ *
+ *   data[0] = AGWPE_CTL_MONMASK
+ *   data[1] = the mask
+ *
+ * One byte, and it says about payloads only.  A bit that is off takes the
+ * information field out of the frames of that kind; the addresses, the
+ * control byte and the PID stay, so the frame is still a frame and still
+ * says who talked to whom and with which control field.
+ *
+ * It is asked for and answered per connection, the same as the 'k' toggle it
+ * belongs with, because every monitor is its own AGWPE client: a program that
+ * wants every payload and a program on the same machine that wants none do
+ * not argue about it.
+ *
+ * Both on is the default on both sides, which is also why nothing is sent
+ * unless a program asked for less.
+ */
+#define	AGWPE_CTL_MONMASK		'M'
+
+#define	AGWPE_MONMASK_I			0x01	/* keep I frame payloads */
+#define	AGWPE_MONMASK_UI		0x02	/* keep UI frame payloads */
+#define	AGWPE_MONMASK_ALL		(AGWPE_MONMASK_I | \
+					 AGWPE_MONMASK_UI)
+
 /* Scope of a parameter change.  */
 #define	AGWPE_CTL_SCOPE_CONN		0	/* the addressed connection */
 #define	AGWPE_CTL_SCOPE_PORT		1	/* port defaults */

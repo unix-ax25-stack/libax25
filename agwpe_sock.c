@@ -2934,8 +2934,16 @@ int agwpe_mon_open(int protocol, int *ret)
 		s->raw = 1;
 		axsock_nraw++;
 		fd = s->fd;
-		if (!said) {
+		if (axsock_debug && !said) {
 			said = 1;
+			/* The name comes from a resolve here and not straight
+			 * out of axsock_host: that is still the default until the
+			 * reader has looked at ax25common once, so a monitor
+			 * opened before that reported the default under the name
+			 * of the answer - or, with the host pointer untouched, as
+			 * "(null)".  Resolve runs at most once and the reader is
+			 * going to call it anyway. */
+			axsock_resolve_server();
 			fprintf(stderr, "axsock: no ax25netd at %s yet - "
 				"the monitor starts receiving when it is "
 				"there\n", axsock_host);

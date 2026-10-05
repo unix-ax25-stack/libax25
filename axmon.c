@@ -407,6 +407,55 @@ int axmon_alive(const struct axmon *mon)
 	return n;
 }
 
+/*
+ * Name the source, for a message.  Both programs that watch raw frames need
+ * the same words for the same two things, and a user who is told "closed"
+ * without being told what closed cannot act on it.
+ */
+const char *axmon_source_name(const struct axmon *mon, int idx)
+{
+	if (idx < 0 || idx >= mon->nfd)
+		return "AX.25 source";
+	return (mon->kind[idx] == AXMON_KERNEL)
+		? "AX.25 packet socket"
+		: "AX.25 monitor";
+}
+
+/*
+ * Give up one source and report how many are left.
+ *
+ * Every way a source can stop ends here: a stream at end of file, a read
+ * that failed, a connection reset in the middle of a frame.  They are
+ * different events and a caller may well say which - but they have the same
+ * consequence, which is never to end a program that still has a source left.
+ * listen(1) took a failing read as the end of the world and died with the
+ * errno as its exit status when its kernel AX.25 module was unloaded under
+ * it, while the ax25netd source next to it was still delivering.
+ *
+ * The monitor descriptor is closed through agwpe_close() and not with
+ * close(): it belongs to the interception layer, and this file is part of
+ * the image that provides that layer, so a close() here is a libc close and
+ * the socket would be left in the table it lives in.  A kernel packet socket
+ * is nobody's and goes to the kernel.
+ *
+ * fd[] is not renumbered - see axmon_poll() - so the caller drops the bit
+ * for idx from its ready mask as well.
+ */
+int axmon_retire(struct axmon *mon, int idx)
+{
+	int ret;
+
+	if (idx < 0 || idx >= mon->nfd || mon->fd[idx] < 0)
+		return axmon_alive(mon);
+	if (mon->kind[idx] == AXMON_MONITOR)
+		(void) agwpe_close(mon->fd[idx], &ret);
+	else
+		real_close(mon->fd[idx]);
+	mon->fd[idx] = -1;
+
+	return axmon_alive(mon);
+}
+
 void axmon_close(struct axmon *mon)
 {
 	int i;

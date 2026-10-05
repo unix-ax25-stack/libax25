@@ -91,6 +91,21 @@ extern int	(*real_socket)(int, int, int);
 extern int	(*real_close)(int);
 #endif
 
+/*
+ * Resolve the real calls, so a caller inside this library may use them.
+ *
+ * Everywhere else they are reached through an interposed entry point that
+ * resolves them on the way past, and a caller there cannot tell whether it is
+ * the first one in the process.  axmon.c can: it opens the kernel's own
+ * packet socket with real_socket() precisely because socket() would ask the
+ * shim instead, which makes it the first thing here to touch one of these -
+ * and on Linux they are NULL until they are resolved.  Calling one before
+ * asking is a call through an empty pointer, which is a crash with nothing on
+ * stderr to say what it was about.
+ */
+extern void	axsock_real_ready(void);
+#define AXSOCK_NEED_REAL()	axsock_real_ready()
+
 #ifndef __APPLE__
 extern int	(*real_bind)(int, const struct sockaddr *, socklen_t);
 extern int	(*real_connect)(int, const struct sockaddr *, socklen_t);

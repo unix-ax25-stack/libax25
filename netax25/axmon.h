@@ -84,10 +84,18 @@ extern "C" {
 extern int axmon_framed(int fd);
 
 /*
- * Read one frame, either way.  Returns the payload length, or -1 with
- * errno set - E2BIG if the frame does not fit in buflen, ECONNRESET if
- * the monitor closed mid frame.  sa/asize are filled in as recvfrom()
- * would, and may be NULL.
+ * Read one frame, either way.  Returns the payload length, 0 at end of
+ * file, or -1 with errno set - E2BIG if the frame does not fit in buflen,
+ * ECONNRESET if the monitor closed mid frame.  sa/asize are filled in as
+ * recvfrom() would, and may be NULL.
+ *
+ * 0 is end of file and cannot be a frame: a KISS framed AX.25 packet
+ * carries at least a channel byte.  A caller that only tests for -1 decodes
+ * the end of the stream as a frame of no bytes and loops on it forever,
+ * which is what every monitor in the suite did when the link to ax25netd
+ * went away - it had no error to report, because nothing had failed, it had
+ * ended.  errno is set to 0 when 0 is returned, so an EOF can be told from
+ * an error by either test.
  *
  * The shim strips its own header before the payload arrives, so both kinds
  * of descriptor hand over exactly one frame per call and the answer from

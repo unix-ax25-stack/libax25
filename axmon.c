@@ -86,6 +86,8 @@ static ssize_t mon_read(int fd, void *buf, size_t len,
 ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
 		   struct sockaddr *sa, socklen_t *asize)
 {
+	ssize_t n;
+
 	/* Both kinds of descriptor hand over one frame per call: the kernel
 	 * one because a packet socket is message oriented, the shim one
 	 * because it takes its header off in recvfrom() before the
@@ -94,5 +96,19 @@ ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
 	 * arrive back to back into one read - and it is why the header
 	 * moved into the shim, where the writer of it already was.  */
 	(void) framed;
-	return mon_read(fd, buf, buflen, sa, asize);
+
+	n = mon_read(fd, buf, buflen, sa, asize);
+
+	/* End of file is 0, and it is reported as 0 rather than as a frame
+	 * of no bytes.  There is no such frame: a KISS framed AX.25 packet
+	 * carries at least a channel byte, so a caller that decodes what it
+	 * got cannot tell the two apart and decoded an empty one.  Every
+	 * program that watches raw frames had that loop, and every one of
+	 * them spun on it printing nothing after the link to the server
+	 * went away - the monitor had no error to report, because nothing
+	 * had failed.  It had ended.  */
+	if (n == 0)
+		errno = 0;
+
+	return n;
 }

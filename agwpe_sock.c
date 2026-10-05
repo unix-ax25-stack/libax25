@@ -194,6 +194,24 @@ static agwpe_client_t		*axsock_agwpe;
 static pthread_t		axsock_thread;
 static int			axsock_up;
 
+/* Whether axsock_reader() exists.  It owns the connection: it brings the link
+ * up, pumps it, and brings it back when it goes away, so a monitor that is
+ * only waiting in poll() does not have to notice anything.  The application
+ * side starts it and waits for the link (axsock_ensure_locked()).
+ */
+static int			axsock_thread_alive;
+
+/* Why the last attempt to bring the link up failed, for the thread that is
+ * waiting to be told.  errno belongs to whoever set it, and the thread that
+ * tried is the one that is asleep when the answer is wanted. */
+static int			axsock_err;
+
+/* Seconds axsock_ensure_locked() waits for the link before giving up.  Long
+ * enough that a server which is being restarted under a running program is
+ * waited out rather than refused; short enough that a server which is not
+ * coming back is not waited on forever. */
+#define AXSOCK_ENSURE_TIMEOUT	10
+
 /* Client lifetime across sends that run without axsock_lock (see
  * axsock_client_acquire): a sender snapshots axsock_agwpe and bumps the
  * reference, so ensure_locked() must not free a client still in flight.
@@ -2045,13 +2063,30 @@ out:
 	pthread_mutex_unlock(&axsock_lock);
 }
 
+static int axsock_link_up_locked(void);
+
 /*
- * Background thread: wait for frames from the AGWPE server and dispatch
- * them.  On connection loss every session is terminated inward.
+ * Background thread: bring the AGWPE connection up, wait for frames from the
+ * server and dispatch them, and bring it back up when it goes away.
+ *
+ * It is the one owner of the connection.  That is the whole point of it being
+ * a loop rather than a straight line: it used to return when the link was
+ * lost, and nothing in the library ever started it again - a program that
+ * only reads (listen(1), mheardd(8), ax25mond(8)) has no call path that
+ * brings the link back, so after one "systemctl restart ax25netd" every
+ * monitor in the suite was waiting on a socket whose reader had gone away,
+ * with a zero-length read to show for it.  Restarting every service by hand
+ * was the workaround.
+ *
+ * Sessions still get EOF when the link goes: a connection that cannot be
+ * carried is a connection that ended, and a program that is transferring has
+ * to hear that rather than sit in read() until its process is killed.
  */
 static void *axsock_reader(void *arg)
 {
 	sigset_t set;
+	unsigned backoff = 0;
+	int up = 0;
 
 	(void)arg;
 
@@ -2060,12 +2095,42 @@ static void *axsock_reader(void *arg)
 	pthread_sigmask(SIG_BLOCK, &set, NULL);
 
 	for (;;) {
+		int wait;
+
+		if (!up) {
+			unsigned nap;
+
+			pthread_mutex_lock(&axsock_lock);
+			if (axsock_link_up_locked() == 0) {
+				up = 1;
+				backoff = 0;
+				if (axsock_debug)
+					fprintf(stderr, "axsock: link to the "
+						"server is up again\n");
+			} else {
+				nap = 1u << (backoff < 5 ? backoff : 5);
+				if (backoff < 5)
+					backoff++;
+			}
+			/* Whoever is inside a socket call waiting for the
+			 * link has to be released on both answers, or it
+			 * waits out its full timeout for one that has
+			 * already come. */
+			pthread_cond_broadcast(&axsock_cond);
+			if (!up) {
+				pthread_mutex_unlock(&axsock_lock);
+				sleep(nap);
+				continue;
+			}
+			pthread_mutex_unlock(&axsock_lock);
+		}
+
 		/* Blocking wait as before while nothing is queued.  With a
 		 * queue there is a second thing to wait for - the peer end
 		 * becoming writable - and it is not on this select, so come
 		 * back regularly instead.  The cost falls only on the case
 		 * that used to lose the data. */
-		int wait = __atomic_load_n(&axsock_npending, __ATOMIC_RELAXED)
+		wait = __atomic_load_n(&axsock_npending, __ATOMIC_RELAXED)
 			? 20 : -1;
 
 		if (agwpe_client_pump(axsock_agwpe, wait) < 0) {
@@ -2081,10 +2146,11 @@ static void *axsock_reader(void *arg)
 					/* Not axsock_peer_close_locked(): this
 					 * thread is the one that would come
 					 * back to finish the queue, and it is
-					 * about to return.  Push what fits,
-					 * let the rest go, and close - a
-					 * socket that never reaches EOF would
-					 * be worse than a short one. */
+					 * about to leave the pump.  Push
+					 * what fits, let the rest go, and
+					 * close - a socket that never reaches
+					 * EOF would be worse than a short
+					 * one. */
 					axsock_peer_flush_locked(s);
 					if (s->plen > 0)
 						fprintf(stderr,
@@ -2097,14 +2163,21 @@ static void *axsock_reader(void *arg)
 					s->state = AXSOCK_NEW;
 				}
 			}
+			/* The port table belongs to the server and does not
+			 * survive it: after a restart it can name other
+			 * upstreams, or other channels of the same one, so
+			 * asking for it again is the only way to find out.
+			 * Leaving the old numbers in place sent frames on
+			 * a port that now belongs to a different radio. */
+			axsock_gnports = -1;
 			pthread_cond_broadcast(&axsock_cond);
 			pthread_mutex_unlock(&axsock_lock);
-			return NULL;
+			up = 0;
+			continue;
 		}
 		if (__atomic_load_n(&axsock_npending, __ATOMIC_RELAXED))
 			axsock_flush_pending();
 	}
-	return NULL;
 }
 
 /*
@@ -2125,9 +2198,15 @@ static void axsock_client_retire(void)
 }
 
 /*
- * Make sure the AGWPE connection is up.  Called with the lock held.
+ * Bring the AGWPE connection up.  Called with the lock held.
+ *
+ * The work the reader used to be told to do by whoever started it: connect,
+ * log in, and re-register everything this process had registered with the
+ * server before.  A reconnect runs the same path, which is what makes the
+ * 'k' toggle and the registrations come back by themselves - both are state
+ * of the connection, and a new connection starts without either.
  */
-static int axsock_ensure_locked(void)
+static int axsock_link_up_locked(void)
 {
 	const struct agwpe_client_cb cb = {
 		.raw_frame = axsock_dispatch,
@@ -2144,7 +2223,7 @@ static int axsock_ensure_locked(void)
 	axsock_agwpe = agwpe_client_new(&cb, NULL);
 
 	if (axsock_agwpe == NULL) {
-		errno = ENOMEM;
+		axsock_err = ENOMEM;
 		return -1;
 	}
 
@@ -2152,7 +2231,7 @@ static int axsock_ensure_locked(void)
 		int e = agwpe_client_err(axsock_agwpe);
 
 		axsock_client_retire();
-		errno = (e != 0) ? e : ECONNREFUSED;
+		axsock_err = (e != 0) ? e : ECONNREFUSED;
 		return -1;
 	}
 
@@ -2170,13 +2249,8 @@ static int axsock_ensure_locked(void)
 					   (pass != NULL) ? pass : "");
 	}
 
-	if (pthread_create(&axsock_thread, NULL, axsock_reader, NULL) != 0) {
-		axsock_client_retire();
-		errno = EAGAIN;
-		return -1;
-	}
-
 	axsock_up = 1;
+	axsock_err = 0;
 	axsock_register_all_locked();
 	/*
 	 * Raw monitoring is a toggle on the connection, and a new
@@ -2190,6 +2264,45 @@ static int axsock_ensure_locked(void)
 	 */
 	if (axsock_nraw > 0)
 		agwpe_client_raw_toggle(axsock_agwpe);
+	return 0;
+}
+
+/*
+ * Make sure the AGWPE connection is up.  Called with the lock held.
+ *
+ * Starts axsock_reader() if it is not running and then waits for it to have
+ * the link.  The reader owns the connection, so this cannot connect itself
+ * without two threads racing to own one socket - and waiting is what lets a
+ * program whose only business is receiving (listen(1), mheardd(8),
+ * ax25mond(8)) have a link restored under it without asking.
+ */
+static int axsock_ensure_locked(void)
+{
+	if (axsock_up)
+		return 0;
+
+	if (!axsock_thread_alive) {
+		axsock_thread_alive = 1;
+		if (pthread_create(&axsock_thread, NULL, axsock_reader, NULL) != 0) {
+			axsock_thread_alive = 0;
+			errno = EAGAIN;
+			return -1;
+		}
+	}
+
+	while (!axsock_up) {
+		struct timespec ts;
+
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_sec += AXSOCK_ENSURE_TIMEOUT;
+		if (pthread_cond_timedwait(&axsock_cond, &axsock_lock, &ts) != 0)
+			break;
+	}
+
+	if (!axsock_up) {
+		errno = (axsock_err != 0) ? axsock_err : ECONNREFUSED;
+		return -1;
+	}
 	return 0;
 }
 
@@ -4099,7 +4212,10 @@ static void axsock_atfork_child(void)
 	axsock_npending = 0;
 	axsock_agwpe = NULL;
 	axsock_up = 0;
+	axsock_err = 0;
 	axsock_nregistered = 0;
+	/* The child inherited axsock_thread_alive, not the thread. */
+	axsock_thread_alive = 0;
 }
 
 

@@ -24,6 +24,8 @@
 #ifndef	_AXCONFIG_H
 #define	_AXCONFIG_H
 
+#include <stddef.h>
+
 #ifndef	TRUE
 #define	TRUE	1
 #endif
@@ -57,6 +59,80 @@ extern int (*ax25_config_lazy_hook)(const char *name, const char *base);
  */
 extern int ax25_config_lazy_remember(const char *call, const char *name);
 extern int ax25_config_lazy_take(const char *call, char *name, size_t namelen);
+
+/*
+ * What a port name is, asked of the whole library rather than guessed by the
+ * caller.
+ *
+ * A machine can have a kernel AX.25 stack, a WAMPES node and an ax25netd at
+ * once, so "which port is this" has no single table to look in.  The shim
+ * already answers it internally, at the two places that decide: wampes_bind()
+ * asks whether a node of that name is configured, agwpe_bind() asks whether
+ * an upstream owns it.  Both questions are asked again here, through one
+ * pair of hooks, rather than reimplemented in each program that wants to
+ * know.  That is not tidiness for its own sake: the numbering of the AGWPE
+ * ports belongs to the server, i*16+channel, and a caller that guessed it
+ * from the position of a name in a file sent frames a whole stride out.
+ *
+ * The fields are those of the axports entry plus what the owning backend
+ * knows about it.  Returns 0 whenever the question could be asked, which
+ * includes a name that nothing claims: that comes back as AX25_PORT_NONE with
+ * the axports fields filled as far as they go, and telling those two apart is
+ * the caller's business, not this function's.
+ */
+enum ax25_port_backend {
+	AX25_PORT_NONE = 0,	/* nobody claims the name */
+	AX25_PORT_KERNEL,	/* an interface the kernel stack answers for */
+	AX25_PORT_WAMPES,	/* a port of a WAMPES node */
+	AX25_PORT_AGWPE		/* a channel of an ax25netd upstream */
+};
+
+struct ax25_port_info {
+	enum ax25_port_backend backend;
+
+	/* From the axports entry of that name.  A name that has no entry
+	 * of its own - one a backend resolves, or a name that is none at
+	 * all - leaves these empty rather than inventing a value.  */
+	char call[16];		/* callsign */
+	char dev[64];		/* device, as written in axports */
+	char desc[80];		/* description */
+	int  baud, window, paclen;
+
+	/* AGWPE.  port is the flat port byte to put in a frame header,
+	 * which is what the server itself numbers, and is -1 for every
+	 * other backend.  channel is the channel of that port, 0 to 15, and
+	 * is -1 when the name is not an AGWPE port at all: "hf" and "hf:0"
+	 * are the same frequency and both say 0 here.  */
+	int  port;
+	int  channel;
+	char upstream[24];	/* the upstream name from the server's list */
+
+	/* WAMPES.  node is the node's name from wampes.conf.  */
+	char node[32];
+};
+
+/* Set by wampes.c: nonzero when the name is a port of a configured node,
+ * writing the node's name into node[].
+ */
+extern int (*ax25_config_port_wampes_hook)(const char *name, char *node,
+					    size_t nodelen);
+
+/* Set by agwpe_sock.c: nonzero when the name is a channel of one of the
+ * server's upstreams, writing the flat port, the channel and the upstream
+ * name of the server's own list.
+ */
+extern int (*ax25_config_port_agwpe_hook)(const char *name, int *port,
+					   int *channel, char *upstream,
+					   size_t uplen);
+
+extern int ax25_port_info(const char *name, struct ax25_port_info *info);
+
+/* The flat AGWPE port of a name, or -1 when it is not one.  ax25_port_info()
+ * for the caller who wants nothing else.  Returns -1 with errno EADDRNOTAVAIL
+ * for a name that is not an AGWPE port, which is the same answer the frame
+ * header path gives and the one a caller is about to hit anyway.
+ */
+extern int ax25_port_number(const char *name);
 
 extern int ax25_config_load_ports(void);
 

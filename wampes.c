@@ -276,6 +276,45 @@ static const char *wampes_node_addr(const char *port)
 	return NULL;
 }
 
+/* The same question, but for ax25_port_info(), and it answers with the node's
+ * NAME rather than the address it listens on.  A caller that wants to know
+ * what a port is wants the name it would write in wampes.conf to change it;
+ * the address is a default that WAMPES_SOCKET overrides anyway, so it is the
+ * one of the two that cannot be acted on.
+ *
+ * The test is wampes_bind()'s own, not a second one: a port belongs to a node
+ * when its name before the colon names a configured node.  Anything else and
+ * this answers no, which lets the question fall through to the next backend
+ * instead of claiming a port the bind would have refused.
+ */
+static int wampes_port_hook(const char *name, char *node, size_t nodelen)
+{
+	char base[32];
+	const char *colon;
+	size_t n;
+	int i;
+
+	if (name == NULL)
+		return 0;
+	if (!Nodes_read)
+		wampes_config_load();
+
+	colon = strchr(name, ':');
+	n = colon != NULL ? (size_t) (colon - name) : strlen(name);
+	if (n == 0 || n >= sizeof(base))
+		return 0;
+	memcpy(base, name, n);
+	base[n] = '\0';
+
+	for (i = 0; i < Nnodes; i++)
+		if (!strcasecmp(Nodes[i].name, base)) {
+			if (node != NULL && nodelen > 0)
+				snprintf(node, nodelen, "%s", Nodes[i].name);
+			return 1;
+		}
+	return 0;
+}
+
 /* A "wampes:70cm" with no axports entry of its own is accepted and the entry
  * for the node used.  What the name alone cannot say is whether the bind
  * that follows means the node or one specific port of it: bind() hands us
@@ -346,6 +385,7 @@ __attribute__((constructor))
 static void wampes_init(void)
 {
 	ax25_config_lazy_hook = wampes_lazy_base;
+	ax25_config_port_wampes_hook = wampes_port_hook;
 	wampes_inherit();
 }
 

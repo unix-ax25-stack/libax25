@@ -402,6 +402,109 @@ int ax25_config_port_is_kernel(const char *name)
 }
 
 /*
+ * Who serves a port name, and what number it has there.
+ *
+ * The backend hooks are installed by the backends themselves, for the same
+ * reason ax25_config_lazy_hook is: this file must not know what a WAMPES node
+ * or an AGWPE upstream is, only that someone may answer for a name.  A build
+ * without either backend leaves both null, and then every name is the
+ * kernel's or nobody's - which is the truth about such a build rather than a
+ * gap in this function.
+ *
+ * The order is the order the sockets are served in: the kernel's ports are
+ * never taken over (a bind naming one was answered by socket() already, and
+ * taking it would put frames on a radio the program never asked for), then
+ * WAMPES, then AGWPE.  agwpe_bind() asks the kernel itself as well; that
+ * duplicate check is deliberate, because that path is reached without this
+ * function in between.
+ */
+int (*ax25_config_port_wampes_hook)(const char *name, char *node,
+				    size_t nodelen);
+int (*ax25_config_port_agwpe_hook)(const char *name, int *port, int *channel,
+				   char *upstream, size_t uplen);
+
+int ax25_port_info(const char *name, struct ax25_port_info *info)
+{
+	AX_Port *p;
+
+	if (info == NULL || name == NULL || *name == '\0')
+		return -1;
+
+	memset(info, 0, sizeof(*info));
+	info->backend = AX25_PORT_NONE;
+	info->port = -1;
+	info->channel = -1;
+
+	/* The entry is looked up without ensuring the list first: a caller
+	 * that wants an answer rather than a read is on a path where the
+	 * program may be holding a bind, and asking for a read there would
+	 * turn every question into a file read.  A program that has just
+	 * edited the file and wants it looked at again calls
+	 * ax25_config_load_ports() itself - that is what it is for.
+	 */
+	p = ax25_port_ptr((char *)name);
+	if (p != NULL) {
+		if (p->Call != NULL)
+			snprintf(info->call, sizeof(info->call), "%s", p->Call);
+		if (p->Device != NULL)
+			snprintf(info->dev, sizeof(info->dev), "%s", p->Device);
+		if (p->Description != NULL)
+			snprintf(info->desc, sizeof(info->desc), "%s",
+				 p->Description);
+		info->baud = p->Baud;
+		info->window = p->Window;
+		info->paclen = p->Paclen;
+	}
+
+	/* Asked about the name, not read out of the entry found above: the
+	 * kernel's verdict is remembered per entry because it can only be
+	 * reached while the list is being read, and a name can be one the
+	 * kernel has without having an entry of its own. */
+	if (ax25_config_port_is_kernel(name)) {
+		info->backend = AX25_PORT_KERNEL;
+		return 0;
+	}
+
+	if (ax25_config_port_wampes_hook != NULL &&
+	    ax25_config_port_wampes_hook(name, info->node,
+					  sizeof(info->node))) {
+		info->backend = AX25_PORT_WAMPES;
+		return 0;
+	}
+
+	if (ax25_config_port_agwpe_hook != NULL &&
+	    ax25_config_port_agwpe_hook(name, &info->port, &info->channel,
+					 info->upstream, sizeof(info->upstream))) {
+		info->backend = AX25_PORT_AGWPE;
+		return 0;
+	}
+
+	return 0;
+}
+
+/*
+ * The flat port byte of a name, for the caller who wants nothing else.
+ *
+ * EADDRNOTAVAIL and not 0 for a name that is not an AGWPE port, because port
+ * 0 is a real port - the first channel of the first upstream - and a caller
+ * that gets 0 for "this is a kernel port" will send on it.
+ */
+int ax25_port_number(const char *name)
+{
+	struct ax25_port_info info;
+
+	if (ax25_port_info(name, &info) != 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (info.backend != AX25_PORT_AGWPE) {
+		errno = EADDRNOTAVAIL;
+		return -1;
+	}
+	return info.port;
+}
+
+/*
  * How many ports are the kernel's, that is: how many axports entries name a
  * callsign that is an AX.25 interface and that interface is up.
  *

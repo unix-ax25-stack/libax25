@@ -44,13 +44,25 @@ typedef struct agwpe_client agwpe_client_t;
 
 /*
  * Result of a "G" (port info) request.  count is the number of "PortN
- * description" tokens received; names and descs hold them without the
- * leading "Port".
+ * name: description" tokens received.
+ *
+ * ports is the flat port byte each entry describes - "Port1" is port 0,
+ * which is the server's own numbering and the byte that goes into a frame
+ * header.  ups is the upstream name, the part in front of the colon, which a
+ * frame does not carry but a person needs: a port number means nothing
+ * without knowing which radio it belongs to.
+ *
+ * names keeps the token as it arrived, "PortN" and all, and descs the text
+ * behind it with the name still in front.  Both predate ports and ups and
+ * are what a caller wants when it wants to show the server's own words; a
+ * caller that wants to know what a port is wants ports and ups.
  */
 struct agwpe_port_list {
 	int			count;
 	char			names[AGWPE_PORT_MAX][24];
 	char			descs[AGWPE_PORT_MAX][64];
+	int			ports[AGWPE_PORT_MAX];
+	char			ups[AGWPE_PORT_MAX][24];
 };
 
 /*

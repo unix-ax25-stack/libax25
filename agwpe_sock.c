@@ -983,8 +983,14 @@ static int axsock_port_for(const char *call)
  * the second radio.  It did so quietly.  A frame on the wrong frequency is
  * the one mistake in this file that cannot be taken back, and nothing at
  * the sending end of it says so.
+ *
+ * channel and upstream are for ax25_port_info(), which has to tell a caller
+ * which channel of which upstream it is looking at: the flat port alone
+ * belongs to the server and says nothing to anybody reading a config file.
+ * Both are optional, and the shim itself asks for neither.
  */
-static int axsock_port_of_entry(const char *entry)
+static int axsock_port_of_entry_ex(const char *entry, int *channel,
+				   char *upstream, size_t uplen)
 {
 	char base[24];
 	const char *colon;
@@ -1015,8 +1021,13 @@ static int axsock_port_of_entry(const char *entry)
 	}
 
 	/* The reserved loop interface is the virtual loopback upstream.  */
-	if (strcasecmp(base, "loop") == 0)
+	if (strcasecmp(base, "loop") == 0) {
+		if (channel != NULL)
+			*channel = 0;
+		if (upstream != NULL && uplen > 0)
+			snprintf(upstream, uplen, "%s", "loop");
 		return AGWPE_PORT_LOOP;
+	}
 
 	/* An upstream has sixteen channels and no more, so a suffix beyond
 	 * that names nothing: i*16+c for c of 99 is a port of the seventh
@@ -1032,17 +1043,82 @@ static int axsock_port_of_entry(const char *entry)
 	if (axsock_ports_fetch() == 0) {
 		p = axsock_gport_channel(axsock_strip_prefix(base),
 					 (idx >= 0) ? idx : 0);
-		if (p >= 0)
+		if (p >= 0) {
+			int i;
+
+			if (channel != NULL)
+				*channel = (idx >= 0) ? idx : 0;
+			/* From the table rather than from the name as typed:
+			 * the entry that carries the port is the one whose
+			 * upstream name the operator would write in
+			 * ax25netd_agwpe.conf, and an "agwpe-" prefix is
+			 * the marker that keeps the two name spaces apart. */
+			if (upstream != NULL && uplen > 0) {
+				upstream[0] = '\0';
+				for (i = 0; i < axsock_gnports; i++)
+					if (axsock_gports[i].port == p) {
+						snprintf(upstream, uplen, "%s",
+							 axsock_gports[i].up);
+						break;
+					}
+			}
 			return p;
+		}
 	}
 
 	if (axsock_server_local()) {
 		up = agwpe_local_upstream(axsock_strip_prefix(base));
-		if (up >= 0)
+		if (up >= 0) {
+			if (channel != NULL)
+				*channel = (idx >= 0) ? idx : 0;
+			/* The name ax25netd_agwpe.conf gave it, which is what
+			 * matched above; there is no table to read it from
+			 * when the server did not answer. */
+			if (upstream != NULL && uplen > 0)
+				snprintf(upstream, uplen, "%s",
+					 axsock_strip_prefix(base));
 			return up * 16 + (idx >= 0 ? idx : 0);
+		}
 	}
 
 	return -1;
+}
+
+static int axsock_port_of_entry(const char *entry)
+{
+	return axsock_port_of_entry_ex(entry, NULL, NULL, 0);
+}
+
+/*
+ * What this backend knows about a port name, for ax25_port_info().
+ *
+ * The same test agwpe_bind() makes, so the two cannot disagree about which
+ * ports are ours: the kernel's first, because a bind naming one of those was
+ * answered by socket() and does not belong to a userspace backend however
+ * much the server behind it might also be able to send.
+ *
+ * No ax25_config_ports_ensure() before axsock_port_of_entry_ex(), which
+ * fetches the server's list and reads ax25netd_agwpe.conf by itself.  Asking
+ * for a read here would make every question cost a file read, and a
+ * diagnostic tool asks the whole table in a loop.
+ */
+static int agwpe_port_hook(const char *name, int *port, int *channel,
+			   char *upstream, size_t uplen)
+{
+	int p;
+
+	if (name == NULL || *name == '\0')
+		return 0;
+	if (ax25_config_port_is_kernel(name))
+		return 0;
+
+	p = axsock_port_of_entry_ex(name, channel, upstream, uplen);
+	if (p < 0)
+		return 0;
+	if (port != NULL)
+		*port = p;
+
+	return 1;
 }
 
 /*
@@ -4486,4 +4562,12 @@ static void agwpe_sock_init(void)
 
 	pthread_atfork(NULL, NULL, axsock_atfork_child);
 
+	/* Installed here and not in a lazy path because ax25_port_info() has
+	 * no way to know whether the shim was built in: it is compiled out
+	 * entirely without --enable-userspace-ax25, and a caller must not
+	 * have to test that.  Order against wampes.c's constructor does not
+	 * matter - the two set different hooks, and ax25_port_info() asks
+	 * them in the order the sockets are served in, not in the order
+	 * they were installed. */
+	ax25_config_port_agwpe_hook = agwpe_port_hook;
 }

@@ -993,13 +993,23 @@ static int axsock_port_of_entry_ex(const char *entry, int *channel,
 				   char *upstream, size_t uplen)
 {
 	char base[24];
+	char upname[24];
 	const char *colon;
 	int idx, p, up;
-	size_t blen;
+	size_t blen, ulen;
 
 	/* Optional ":N" suffix selects a channel of the named upstream,
 	 * not a second upstream: "direwolf:1" is channel 1 of the upstream
-	 * "direwolf", the way AGWPE numbers the channels of one server.  */
+	 * "direwolf", the way AGWPE numbers the channels of one server.
+	 *
+	 * A suffix that is not a number is a refusal and not channel 0.
+	 * It used to fall through to idx = -1, which means channel 0, so
+	 * "direwolf:x" went out on the first radio of the upstream - a
+	 * typo in a config file turned into frames on a frequency nobody
+	 * asked for, and the only sign of it was that the port number
+	 * matched the one for "direwolf".  ax25tcpd has always refused this
+	 * spelling, which is why the two disagreed about it.
+	 */
 	idx = -1;
 	colon = strrchr(entry, ':');
 	if (colon != NULL && colon != entry && colon[1] != '\0') {
@@ -1008,8 +1018,14 @@ static int axsock_port_of_entry_ex(const char *entry, int *channel,
 
 		errno = 0;
 		v = strtol(colon + 1, &end, 10);
-		if (errno == 0 && *end == '\0' && v >= 0 && v < 256)
-			idx = (int)v;
+		if (errno != 0 || *end != '\0' || end == colon + 1 ||
+		    v < 0 || v > 15) {
+			if (axsock_debug)
+				fprintf(stderr, "axsock: '%s': a channel is a "
+					"number, 0 to 15\n", entry);
+			return -1;
+		}
+		idx = (int)v;
 		blen = (size_t)(colon - entry);
 		if (blen >= sizeof(base))
 			blen = sizeof(base) - 1;
@@ -1020,8 +1036,31 @@ static int axsock_port_of_entry_ex(const char *entry, int *channel,
 		base[sizeof(base) - 1] = '\0';
 	}
 
+	/* The namespace marker comes off before anything is looked up, and
+	 * not only for the upstream table: "agwpe-loop" is the loop port as
+	 * much as "loop" is, because the marker is what keeps the virtual
+	 * AGWPE names apart from kernel AX.25 ones and says nothing about
+	 * which upstream is meant.
+	 *
+	 * It used to be tested against the marked name, so "agwpe-loop"
+	 * skipped the check below and fell through to the position of
+	 * "loop" in ax25netd_agwpe.conf - a port of the second upstream,
+	 * not 255.  agwpe_owns_port() strips the marker first and so has
+	 * always said that name was ours, which made the two disagree
+	 * about the port of a port that was claimed.
+	 */
+	{
+		const char *stripped = axsock_strip_prefix(base);
+
+		ulen = strlen(stripped);
+		if (ulen >= sizeof(upname))
+			ulen = sizeof(upname) - 1;
+		memcpy(upname, stripped, ulen);
+		upname[ulen] = '\0';
+	}
+
 	/* The reserved loop interface is the virtual loopback upstream.  */
-	if (strcasecmp(base, "loop") == 0) {
+	if (strcasecmp(upname, "loop") == 0) {
 		if (channel != NULL)
 			*channel = 0;
 		if (upstream != NULL && uplen > 0)
@@ -1032,17 +1071,10 @@ static int axsock_port_of_entry_ex(const char *entry, int *channel,
 	/* An upstream has sixteen channels and no more, so a suffix beyond
 	 * that names nothing: i*16+c for c of 99 is a port of the seventh
 	 * upstream, and letting the arithmetic produce one is the very thing
-	 * this function refuses to do.  */
-	if (idx >= 16) {
-		if (axsock_debug)
-			fprintf(stderr, "axsock: '%s': an upstream has 16 "
-				"channels, 0 to 15\n", entry);
-		return -1;
-	}
-
+	 * this function refuses to do.  Refused above, where the suffix is
+	 * read, so that the two cannot disagree about what a channel is. */
 	if (axsock_ports_fetch() == 0) {
-		p = axsock_gport_channel(axsock_strip_prefix(base),
-					 (idx >= 0) ? idx : 0);
+		p = axsock_gport_channel(upname, (idx >= 0) ? idx : 0);
 		if (p >= 0) {
 			int i;
 
@@ -1067,7 +1099,7 @@ static int axsock_port_of_entry_ex(const char *entry, int *channel,
 	}
 
 	if (axsock_server_local()) {
-		up = agwpe_local_upstream(axsock_strip_prefix(base));
+		up = agwpe_local_upstream(upname);
 		if (up >= 0) {
 			if (channel != NULL)
 				*channel = (idx >= 0) ? idx : 0;
@@ -1075,8 +1107,7 @@ static int axsock_port_of_entry_ex(const char *entry, int *channel,
 			 * matched above; there is no table to read it from
 			 * when the server did not answer. */
 			if (upstream != NULL && uplen > 0)
-				snprintf(upstream, uplen, "%s",
-					 axsock_strip_prefix(base));
+				snprintf(upstream, uplen, "%s", upname);
 			return up * 16 + (idx >= 0 ? idx : 0);
 		}
 	}

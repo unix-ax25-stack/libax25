@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -608,6 +609,21 @@ int agwpe_client_outstanding_conn(agwpe_client_t *c, unsigned char port,
  * Parse the "G" reply: a sequence of ';' separated ASCII tokens, the
  * first one being the number of ports.
  */
+
+/* A whole string of digits and at least one of them, as strtol() with
+ * endptr hands back but without having to keep the endptr.  "Portx" and
+ * "Port12x" are not numbers and are not taken as one: a port number is
+ * put in a frame header, so the spelling has to be exactly right. */
+static int all_digits(const char *s)
+{
+	if (s == NULL || !isdigit((unsigned char)*s))
+		return 0;
+	for (; *s; s++)
+		if (!isdigit((unsigned char)*s))
+			return 0;
+	return 1;
+}
+
 static void parse_ports(agwpe_client_t *c, const unsigned char *data, size_t len)
 {
 	struct agwpe_port_list *list;
@@ -643,7 +659,7 @@ static void parse_ports(agwpe_client_t *c, const unsigned char *data, size_t len
 			continue;
 		}
 
-		/* Port token: "PortN description".  */
+		/* Port token: "PortN name: description".  */
 		if (strncmp(tok, "Port", 4) == 0) {
 			char *sp = strchr(tok, ' ');
 			int i = list->count;
@@ -658,8 +674,43 @@ static void parse_ports(agwpe_client_t *c, const unsigned char *data, size_t len
 				while (*sp == ' ')
 					sp++;
 				strncpy(list->descs[i], sp, sizeof(list->descs[i]) - 1);
+				list->descs[i][sizeof(list->descs[i]) - 1] = '\0';
 			} else {
 				strncpy(list->names[i], tok, sizeof(list->names[i]) - 1);
+				list->names[i][sizeof(list->names[i]) - 1] = '\0';
+			}
+
+			/* The number is counted from one, which is the
+			 * server's spelling and not a port number: "Port1"
+			 * is port 0.  A table that counts from zero is not a
+			 * server, and taking its word for it would put a
+			 * frame on port -1.  */
+			list->ports[i] = -1;
+			if (all_digits(list->names[i] + 4))
+				list->ports[i] = atoi(list->names[i] + 4) - 1;
+			if (list->ports[i] < 0 || list->ports[i] > 255)
+				list->ports[i] = -1;
+
+			/* The upstream name is what stands in front of the
+			 * colon; the rest of the token is a description for
+			 * a person and the two may be confused, which is the
+			 * whole reason this is stored separately rather than
+			 * left to the caller. */
+			{
+				char *colon = strchr(list->descs[i], ':');
+				size_t ulen;
+
+				if (colon == NULL)
+					list->ups[i][0] = '\0';
+				else {
+					ulen = (size_t)(colon -
+							list->descs[i]);
+					if (ulen >= sizeof(list->ups[i]))
+						ulen = sizeof(list->ups[i]) - 1;
+					memcpy(list->ups[i], list->descs[i],
+					       ulen);
+					list->ups[i][ulen] = '\0';
+				}
 			}
 			list->count++;
 		}

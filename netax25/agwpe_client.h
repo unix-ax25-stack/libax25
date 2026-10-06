@@ -210,6 +210,29 @@ extern int agwpe_client_raw_toggle(agwpe_client_t *c);
  */
 extern int agwpe_client_mon_mask(agwpe_client_t *c, unsigned char mask);
 
+/*
+ * Ask for UI frames addressed to the call signs registered on this connection
+ * to be delivered as 'M' frames, so that a datagram socket does not have to
+ * turn the raw monitor stream on to get them.
+ */
+extern int agwpe_client_uisub(agwpe_client_t *c);
+
+/*
+ * Take a KISS-encapsulated AX.25 frame off the raw monitor stream apart into
+ * the two addresses, the protocol id and the information field.  Returns 1 for
+ * a UI frame it could read, 0 for anything else: another frame kind, a
+ * truncated frame, or more digipeaters than AX.25 allows.  *repeated says
+ * whether a digipeater in the path has already repeated the frame.
+ *
+ * Exported because ax25netd(8) reads the same frames and has to agree with the
+ * library about what is in them.  info points into k and is valid as long as k
+ * is; dst, src, pid, info, ilen and repeated may not be NULL.
+ */
+extern int agwpe_kiss_ui_parse(const unsigned char *k, size_t klen,
+			       char *dst, size_t dstlen, char *src, size_t srclen,
+			       unsigned char *pid, const unsigned char **info,
+			       size_t *ilen, int *repeated);
+
 /* Send an UNPROTO (UI) frame.  */
 extern int agwpe_client_send_unproto(agwpe_client_t *c, unsigned char port,
 				     unsigned char pid, const char *from,

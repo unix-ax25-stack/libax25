@@ -129,6 +129,29 @@ struct agwpe_s {
  */
 #define	AGWPE_CTL_MONMASK		'M'
 
+/* Private extension of ax25netd: "give me the UI frames addressed to the call
+ * signs I have registered on this port, as 'M' frames".
+ *
+ *   data[0] = AGWPE_CTL_UISUB
+ *
+ * One byte, and it carries no call sign and no channel: those are in the 'X'
+ * frames the client has already sent, and this only says that a UI frame
+ * addressed to one of them should be handed over directly rather than being
+ * picked out of the raw monitor stream by the client itself.
+ *
+ * It exists because the raw stream is all or nothing per connection.  A
+ * monitor decoder reads all of it; a datagram socket reads one UI frame kind,
+ * for one port, for one call, for one protocol id, and throws the rest away.
+ * Asking for the stream anyway works, at the price of the server duplicating
+ * every heard frame with its full payload into that connection - and of the
+ * stream staying on, for every userland program on the machine, for as long as
+ * that one socket is open.  This is how a datagram socket stops asking.
+ *
+ * Per connection, like the mask above, and never forwarded to an upstream: it
+ * is a statement about what this client wants from this server.
+ */
+#define	AGWPE_CTL_UISUB			'U'
+
 #define	AGWPE_MONMASK_I			0x01	/* keep I frame payloads */
 #define	AGWPE_MONMASK_UI		0x02	/* keep UI frame payloads */
 #define	AGWPE_MONMASK_ALL		(AGWPE_MONMASK_I | \

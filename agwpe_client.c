@@ -493,6 +493,123 @@ int agwpe_client_mon_mask(agwpe_client_t *c, unsigned char mask)
 			      sizeof(data));
 }
 
+/*
+ * "Give me the UI frames addressed to the call signs I have registered", over
+ * the 'Q' frame.  No payload and no port: the registrations the client has
+ * already sent with 'X' name the call signs and the channels, and this says
+ * only that a UI frame addressed to one of them should arrive as an 'M' frame
+ * instead of having to be picked out of the raw stream.
+ *
+ * It is the whole point of the subscription, so it is sent even when there is
+ * nothing else to say.  Unlike the mask above there is no default that makes
+ * it redundant: without it the raw monitor stream has to be on for this
+ * connection, and then every frame of every session on every port is
+ * duplicated into it.
+ */
+int agwpe_client_uisub(agwpe_client_t *c)
+{
+	unsigned char data[1];
+
+	data[0] = AGWPE_CTL_UISUB;
+	return agwpe_send_cmd(c, 0, AGWPE_CMD_CTL, 0, NULL, NULL, data,
+			      sizeof(data));
+}
+
+/*
+ * An AX.25 frame off the raw monitor stream, taken apart far enough to say who
+ * sent it to whom and whether it is a UI frame at all.
+ *
+ * listen(1) has a decoder for this and it lives in ax25-apps, which cannot be
+ * reached from here, so this is a small one: addresses, the control byte, the
+ * protocol id.  It reads what direwolf transmits and what ax25netd(8) rebuilds
+ * in the same shape - a KISS marker, then destination, source, digipeaters
+ * until the extension bit, then control and pid.
+ *
+ * It lives here, and not in the socket layer that first needed it, because
+ * ax25netd(8) has to take the same frames apart the same way: it is the one
+ * that decides which of them belongs to which of its clients, and two parsers
+ * of one frame format are two answers to the question of what is in it.  A
+ * server that read the addresses differently from the library would deliver
+ * frames to the wrong socket, or none.
+ */
+
+#define	AGWPE_AX25_UI		0x03	/* control, P/F masked off */
+#define	AGWPE_AX25_PF		0x10
+#define	AGWPE_AX25_EXT		0x01	/* last address, in the SSID byte */
+#define	AGWPE_AX25_HBIT		0x80	/* has been repeated */
+#define	AGWPE_AX25_ADDR_LEN	7
+
+static void agwpe_kiss_addr_text(const unsigned char *a, char *out, size_t outlen)
+{
+	char call[8];
+	int i, n = 0, ssid;
+
+	for (i = 0; i < 6; i++) {
+		char c = (char)(a[i] >> 1);
+
+		if (c == ' ')
+			break;
+		call[n++] = c;
+	}
+	call[n] = '\0';
+	ssid = (a[6] >> 1) & 0x0f;
+	if (ssid != 0)
+		snprintf(out, outlen, "%.6s-%d", call, ssid);
+	else
+		snprintf(out, outlen, "%.6s", call);
+}
+
+/*
+ * Returns 1 for a UI frame it could read, 0 for anything else - another frame
+ * kind, a truncated one, more digipeaters than AX.25 allows.  repeated says
+ * whether any digipeater in the path has already repeated it, which is what
+ * tells a frame coming back from a digipeater apart from the copy of our own
+ * transmission.
+ *
+ * dst, src and pid may not be NULL; info and ilen may not be NULL.  info
+ * points into k, so it is valid as long as k is.
+ */
+int agwpe_kiss_ui_parse(const unsigned char *k, size_t klen,
+			char *dst, size_t dstlen, char *src, size_t srclen,
+			unsigned char *pid, const unsigned char **info,
+			size_t *ilen, int *repeated)
+{
+	const unsigned char *a;
+	size_t off = 1;			/* past the KISS marker */
+	int naddr = 0;
+
+	*repeated = 0;
+	if (klen < 1 + 2 * AGWPE_AX25_ADDR_LEN + 2)
+		return 0;
+
+	for (;;) {
+		if (off + AGWPE_AX25_ADDR_LEN > klen)
+			return 0;
+		a = k + off;
+		if (naddr == 0)
+			agwpe_kiss_addr_text(a, dst, dstlen);
+		else if (naddr == 1)
+			agwpe_kiss_addr_text(a, src, srclen);
+		else if (a[6] & AGWPE_AX25_HBIT)
+			*repeated = 1;
+		off += AGWPE_AX25_ADDR_LEN;
+		naddr++;
+		if (a[6] & AGWPE_AX25_EXT)
+			break;
+		if (naddr > 2 + AGWPE_MAX_DIGIS)
+			return 0;
+	}
+	if (naddr < 2 || off + 2 > klen)
+		return 0;
+	if ((k[off] & ~AGWPE_AX25_PF) != AGWPE_AX25_UI)
+		return 0;		/* not a UI frame */
+	off++;
+	*pid = k[off++];
+	*info = k + off;
+	*ilen = klen - off;
+	return 1;
+}
+
 int agwpe_client_send_unproto(agwpe_client_t *c, unsigned char port,
 			      unsigned char pid, const char *from,
 			      const char *to, const unsigned char *data, int len)

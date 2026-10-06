@@ -126,11 +126,6 @@ struct axsock_sock {
 					 * not take yet, in order */
 	size_t			plen;	/* how many of them are waiting */
 	size_t			pcap;	/* how much pend can hold */
-	int			rawfeed;	/* datagram socket fed from the
-						 * monitor stream: no AGWPE
-						 * server delivers UI to a
-						 * callsign, so off the loop
-						 * port this is the only way */
 	int			peer_eof;	/* the session ended with the
 						 * queue not yet empty: close
 						 * the router end once it is */
@@ -196,6 +191,13 @@ static pthread_cond_t	axsock_cond = PTHREAD_COND_INITIALIZER;
 static struct axsock_sock	*axsock_list;
 static int			axsock_nsock;
 static int			axsock_nraw;	/* open SOCK_PACKET monitors */
+static int			axsock_nuisub;	/* datagram sockets off the
+						   * loop port: the UI
+						   * subscription is for
+						   * the connection, so it
+						   * has to be (re)sent
+						   * while any of them is
+						   * open */
 static unsigned char		axsock_mon_mask = AGWPE_MONMASK_ALL;
 static int			axsock_npending; /* sockets with a queue, so the
 					  * reader knows to come back */
@@ -1757,90 +1759,6 @@ static void axsock_flush_pending(void)
  * Both directions, because the caller reads its own confirmation from the
  * same dispatch.
  */
-/*
- * An AX.25 frame off the monitor stream, taken apart far enough to say who
- * sent it to whom and whether it is a UI frame at all.
- *
- * listen(1) has a decoder for this and it lives in ax25-apps, which cannot be
- * reached from here, so this is a small one: addresses, the control byte, the
- * protocol id.  It reads what direwolf transmits and what ax25netd(8) rebuilds
- * in the same shape - a KISS marker, then destination, source, digipeaters
- * until the extension bit, then control and pid.
- */
-
-#define	AXSOCK_AX25_UI		0x03	/* control, P/F masked off */
-#define	AXSOCK_AX25_PF		0x10
-#define	AXSOCK_AX25_EXT		0x01	/* last address, in the SSID byte */
-#define	AXSOCK_AX25_HBIT	0x80	/* has been repeated */
-#define	AXSOCK_ADDR_LEN		7
-
-static void agwpe_addr_text(const unsigned char *a, char *out, size_t outlen)
-{
-	char call[8];
-	int i, n = 0, ssid;
-
-	for (i = 0; i < 6; i++) {
-		char c = (char)(a[i] >> 1);
-
-		if (c == ' ')
-			break;
-		call[n++] = c;
-	}
-	call[n] = '\0';
-	ssid = (a[6] >> 1) & 0x0f;
-	if (ssid != 0)
-		snprintf(out, outlen, "%.6s-%d", call, ssid);
-	else
-		snprintf(out, outlen, "%.6s", call);
-}
-
-/*
- * Returns 1 for a UI frame it could read, 0 for anything else - another frame
- * kind, a truncated one, more digipeaters than AX.25 allows.  repeated says
- * whether any digipeater in the path has already repeated it, which is what
- * tells a frame coming back from a digipeater apart from the copy of our own
- * transmission.
- */
-static int agwpe_ui_parse(const unsigned char *k, size_t klen,
-			  char *dst, size_t dstlen, char *src, size_t srclen,
-			  unsigned char *pid, const unsigned char **info,
-			  size_t *ilen, int *repeated)
-{
-	const unsigned char *a;
-	size_t off = 1;			/* past the KISS marker */
-	int naddr = 0;
-
-	*repeated = 0;
-	if (klen < 1 + 2 * AXSOCK_ADDR_LEN + 2)
-		return 0;
-
-	for (;;) {
-		if (off + AXSOCK_ADDR_LEN > klen)
-			return 0;
-		a = k + off;
-		if (naddr == 0)
-			agwpe_addr_text(a, dst, dstlen);
-		else if (naddr == 1)
-			agwpe_addr_text(a, src, srclen);
-		else if (a[6] & AXSOCK_AX25_HBIT)
-			*repeated = 1;
-		off += AXSOCK_ADDR_LEN;
-		naddr++;
-		if (a[6] & AXSOCK_AX25_EXT)
-			break;
-		if (naddr > 2 + AX25_MAX_DIGIS)
-			return 0;
-	}
-	if (naddr < 2 || off + 2 > klen)
-		return 0;
-	if ((k[off] & ~AXSOCK_AX25_PF) != AXSOCK_AX25_UI)
-		return 0;		/* not a UI frame */
-	off++;
-	*pid = k[off++];
-	*info = k + off;
-	*ilen = klen - off;
-	return 1;
-}
 
 /*
  * Our own transmissions come back on the monitor stream, and a station is not
@@ -2021,42 +1939,17 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 				continue;	/* monitor fell behind: drop */
 			s->port = hdr->port;
 		}
-
 		/*
-		 * And the datagram sockets fed from here.  No AGWPE server
-		 * delivers a UI frame to the callsign it is addressed to -
-		 * that is a private extension of ax25netd(8) and works on its
-		 * loop port only - so off the loop this stream is the only
-		 * way one arrives.  Which is what a monitor channel is for.
+		 * Only the monitors are fed from here.  A datagram socket
+		 * used to be fed from here as well, which worked and was
+		 * wrong in two ways at once: it had to turn the raw monitor
+		 * stream on for its connection to get here, and then every
+		 * frame of every session on every port of this server was
+		 * duplicated into that connection for it to pick one out of.
+		 * What it wanted is delivered now, over the UI subscription
+		 * (agwpe_client_uisub) and the 'M' frames ax25netd(8) sends
+		 * in answer - the way the loop port has always done it.
 		 */
-		{
-			char dst[AGWPE_MAX_CALL], src[AGWPE_MAX_CALL];
-			const unsigned char *info;
-			size_t ilen;
-			unsigned char pid;
-			int repeated;
-
-			if (!agwpe_ui_parse(data, len, dst, sizeof(dst),
-					    src, sizeof(src), &pid, &info,
-					    &ilen, &repeated))
-				goto out;
-			if (agwpe_was_ours_locked(hdr->port, pid, src, dst,
-						  info, ilen, repeated))
-				goto out;
-			for (s = axsock_list; s != NULL; s = s->next) {
-				if (!s->rawfeed || s->peer < 0)
-					continue;
-				if (s->port != hdr->port)
-					continue;
-				if (strcasecmp(s->local, dst) != 0 &&
-				    !axsock_call_match(s->local, dst))
-					continue;
-				if (s->pid != pid)
-					continue;
-				agwpe_ui_deliver_locked(s, src, info, ilen);
-				break;
-			}
-		}
 		goto out;
 	}
 
@@ -2126,12 +2019,14 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 	}
 
 	/*
-	 * An incoming UI frame.  ax25netd routes one on the loop port to the
-	 * client that registered the destination callsign and hands it on as
-	 * it arrived, so it reaches us as 'M' or 'V'.  Against a real AGWPE
-	 * server this does not happen at all - the protocol has no per
-	 * callsign UI delivery, only the monitor stream - which is the other
-	 * half of this and is not built yet.
+	 * An incoming UI frame.  ax25netd routes one to the client that
+	 * registered the destination callsign and hands it on as it
+	 * arrived, so it reaches us as 'M' or 'V'.  That is the loop port's
+	 * own mechanism, and since the UI subscription (see
+	 * agwpe_client_uisub) it is how a radio port works as well - which
+	 * is what lets a datagram socket off the loop port read its UI
+	 * frames without the raw monitor stream being turned on for this
+	 * connection.
 	 */
 	if (!found && (hdr->datakind == AGWPE_CMD_UNPROTO ||
 		       hdr->datakind == AGWPE_CMD_UNPROTO_VIA)) {
@@ -2153,8 +2048,21 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 				best = s;	/* the pid is a preference */
 		}
 		if (best != NULL) {
-			agwpe_ui_deliver_locked(best, hdr->call_from, data,
-						len);
+			/*
+			 * Our own UI frames come back addressed to us when
+			 * we digipeated them, and a station is not told its
+			 * own frames.  Tested here rather than in the loop
+			 * port's own path, which did not have to: a frame
+			 * that loop port hands back can only be one this
+			 * client just sent to somebody else, whereas off the
+			 * loop port the address can be our own.
+			 */
+			if (!agwpe_was_ours_locked(hdr->port,
+						   hdr->pid ? hdr->pid : AGWPE_PID_AX25,
+						   hdr->call_from, hdr->call_to,
+						   data, len, 0))
+				agwpe_ui_deliver_locked(best, hdr->call_from,
+							data, len);
 			found = 1;
 		}
 		goto out;
@@ -2529,6 +2437,15 @@ static void axsock_link_publish(agwpe_client_t *c)
 	axsock_err = 0;
 
 	axsock_register_all_locked();
+	/*
+	 * The UI subscription is state of the connection too, and a new
+	 * connection starts without it - the same mistake the 'k' toggle
+	 * was, and with the same consequence: the datagram socket keeps
+	 * its registration, so it looks healthy, and receives nothing,
+	 * because the 'M' frames it is now waiting for are never sent.
+	 */
+	if (axsock_nuisub > 0)
+		agwpe_client_uisub(c);
 	/*
 	 * Raw monitoring is a toggle on the connection, and a new
 	 * connection starts with it off.  axsock_nraw still counts the
@@ -3469,22 +3386,28 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 	if (s->type == SOCK_DGRAM && s->local[0] != '\0' && !s->registered) {
 		pthread_mutex_lock(&axsock_lock);
 		if (axsock_ensure_locked() == 0) {
-			axsock_register_locked(s->local, s->port, 0);
-			s->registered = 1;
-
 			/*
-			 * On the loop port ax25netd routes a UI frame to
-			 * whoever registered the callsign, so the direct
-			 * path serves it.  Anywhere else nobody does, and
-			 * the monitor stream is where the frame is - so ask
-			 * for it, sharing the toggle with the SOCK_PACKET
-			 * monitors, and take it off again at close().
+			 * The subscription is per connection rather than
+			 * per call sign, so it is asked for here and not
+			 * in axsock_register_locked(): a second socket on
+			 * the same call sign would ask again for a thing
+			 * the server already does.  Counted rather than
+			 * flagged, so that closing the last one stops it
+			 * being put back onto a connection that comes
+			 * again, and sent here as well as on that
+			 * connection, because a new one has it off
+			 * until somebody asks.
+			 *
+			 * On the loop port nothing is asked for: the
+			 * daemon routes those frames already, and did so
+			 * before this existed.
 			 */
 			if (s->port != AGWPE_PORT_LOOP) {
-				s->rawfeed = 1;
-				if (axsock_nraw++ == 0)
-					axsock_mon_state_locked();
+				axsock_nuisub++;
+				agwpe_client_uisub(axsock_agwpe);
 			}
+			axsock_register_locked(s->local, s->port, 0);
+			s->registered = 1;
 		}
 		pthread_mutex_unlock(&axsock_lock);
 	}
@@ -4102,7 +4025,26 @@ int agwpe_close(int fd, int *ret)
 	if (s->registered)
 		axsock_unregister_locked(s->local, s->port);
 
-	if (s->raw || s->rawfeed) {
+	/*
+	 * The raw monitor stream falls with the last reader of it, and a
+	 * reader is a monitor socket.  It is not "the last user of raw
+	 * frames": a datagram socket off the loop port is one of those, and
+	 * counting it here is what left the stream running for every
+	 * userland program on the machine for as long as one socket was
+	 * open, even after the listen that shared it had gone.
+	 *
+	 * A datagram socket's own subscription is not withdrawn from the
+	 * server, and there is nothing to withdraw: it is per connection,
+	 * there is no frame for un-asking, and the frames it asked for are
+	 * addressed to call signs this socket held.  What has to be undone
+	 * is the count, so that a connection which comes back does not carry
+	 * a subscription nobody in this process wants any more.
+	 */
+	if (s->type == SOCK_DGRAM && s->local[0] != '\0' &&
+	    s->port != AGWPE_PORT_LOOP && axsock_nuisub > 0)
+		axsock_nuisub--;
+
+	if (s->raw) {
 		if (--axsock_nraw == 0 && axsock_up && axsock_agwpe != NULL)
 			agwpe_client_raw_toggle(axsock_agwpe);
 	}

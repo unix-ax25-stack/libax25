@@ -149,6 +149,29 @@ extern int axmon_open(int protocol, const char *port, struct axmon *mon);
  * AX.25 stack beside the ax25netd, a program that asked for no payloads still
  * gets them over the packet socket.  What the mask buys is what the server
  * sends, and on a host where ax25netd carries the ports that is all of it.
+ *
+ * Both of the things a monitor asks for live on the connection to the server,
+ * not on the socket, because both are one bit on the wire:
+ *
+ *   - the mask above.  One per connection, so two monitors in one process with
+ *     two different wishes have no answer between them: the later one is sent
+ *     and both are given it.  Which is not a corner of the API, it is what the
+ *     'k' toggle has always been - one bit for every program on the machine.
+ *
+ *   - the raw stream itself.  It is a toggle, and it follows its readers:
+ *     it goes on when the first monitor socket opens and off when the last one
+ *     closes, so a machine with no monitor has no raw stream, and a program
+ *     that opens one for a moment does not leave it running.
+ *
+ * A datagram socket is deliberately not a reader of that stream any more, so
+ * it is not one of the things that keeps it on.  It used to be: a socket bound
+ * to a call sign off the loop port read the UI frames addressed to it out of
+ * the raw stream, because nothing else delivered them, and a program holding
+ * one open therefore held the whole stream - with the payload of every heard
+ * frame on every port of that server - for as long as it lived.  It is now
+ * delivered the frames it registered for, as 'M' frames, by ax25netd itself
+ * (see agwpe_client_uisub() and mux_upstream_ui() in ax25netd(8)), which is
+ * the mechanism the loop port always used.
  */
 #define	AXMON_MASK_I		AGWPE_MONMASK_I	/* I frame payloads */
 #define	AXMON_MASK_UI		AGWPE_MONMASK_UI	/* UI frame payloads */

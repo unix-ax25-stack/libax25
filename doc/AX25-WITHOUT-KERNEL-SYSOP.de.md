@@ -414,18 +414,21 @@ das es bindet.
 
 Sagt Euch das laut, denn jedes davon ist still und nicht laut:
 
-* **Kein Monitor.**  `listen(1)`, `mheardd(8)` und alles andere, das rohe Rahmen
-  beobachtet, sieht über einen WAMPES-Port nichts.  Das Dienstprotokoll hat
-  keinen Monitorstrom — nichts schickt eine Kopie jedes Rahmens zurück, wie es
-  der AGWPE-Weg tut.  Der Socket wird herausgegeben und bleibt still, mit einer
-  Zeile auf der Standardfehlerausgabe, die es sagt.  Der Knoten schreibt auf
-  seiner eigenen Konsole mit; dort ist nachzusehen.
+* **Ein Monitor braucht den AGWPE-Server.**  `listen(1)`, `mheardd(8)` und
+  alles andere, das rohe Rahmen beobachtet, sieht über einen WAMPES-Port, was
+  `ax25netd(8)` trägt: Das Dienstprotokoll hat keinen Monitorstrom von selbst,
+  deshalb schiebt die libax25-Seite die Rahmen, die sie trägt, in denselben
+  AGWPE-Monitor-Kanal.  Kein Server erreichbar, und der Socket wird
+  herausgegeben und bleibt still, mit einer Zeile auf der
+  Standardfehlerausgabe, die es unter `AXSOCK_DEBUG` sagt.  Der Knoten
+  schreibt zusätzlich auf seiner eigenen Konsole mit.
 * **Das repeated-bit reist nur in eine Richtung.**  Ein ankommender Rahmen
   bringt seinen Pfad mitsamt `*` — die Marke wird zum Bit im SSID-Byte des
-  Digipeaters, wie auf dem Band.  Hinaus fällt sie weg: der Pfad wird aus der
-  Adresse geschrieben, wie sie ist, und nichts trägt die Marke.  Es gibt
-  Anwendungen dafür — einen Rahmen weiterleiten, oder festhalten, dass der
-  erste Sprung schon erfolgt ist — es ist schlicht noch nicht gebaut.
+  Digipeaters, wie auf dem Band, und zeigt sich im Monitor und in der
+  `accept()`-Adresse.  Hinaus fällt sie weg: der Pfad wird aus der Adresse
+  geschrieben, wie sie ist, und nichts trägt die Marke.  Es gibt Anwendungen
+  dafür — einen Rahmen weiterleiten, oder festhalten, dass der erste Sprung
+  schon erfolgt ist — es ist schlicht noch nicht gebaut.
 * **Die Kanalparameter aus `axports(5)` reisen nicht mit.**  `window`, und die
   Timer, die ein Programm daneben setzen mag, gehören dem, der die
   AX.25-Maschine betreibt — dem Knoten oder einem `direwolf` —, und jeder nimmt

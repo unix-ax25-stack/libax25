@@ -1859,6 +1859,7 @@ static void agwpe_ui_deliver_locked(struct axsock_sock *s, const char *from,
 {
 	unsigned char hdr[AXSOCK_UI_HDR];
 	unsigned char *rec;
+	size_t n;
 
 	if (len > AXMON_FRAME_MAX)
 		return;			/* nothing here could read it */
@@ -1867,8 +1868,20 @@ static void agwpe_ui_deliver_locked(struct axsock_sock *s, const char *from,
 	hdr[1] = (unsigned char)(len >> 16);
 	hdr[2] = (unsigned char)(len >> 8);
 	hdr[3] = (unsigned char) len;
+
+	/* The field is zeroed first, so the terminator does not have to
+	 * come from the copy, and a loop is used instead of strncpy()
+	 * because that is what GCC complains about: strncpy() writes no
+	 * terminator of its own, so -Wstringop-truncation fires on it even
+	 * here, where the memset before it has already made the result
+	 * correct.  The loop takes at most AGWPE_MAX_CALL - 1 bytes and
+	 * leaves the zero the memset put into byte AGWPE_MAX_CALL - 1, and
+	 * it cannot read past AGWPE_MAX_CALL - 1 bytes of from - which is
+	 * what matters, because from is a callsign field that came off the
+	 * wire and need not be terminated at all. */
 	memset(hdr + 4, 0, AGWPE_MAX_CALL);
-	strncpy((char *) hdr + 4, from, AGWPE_MAX_CALL - 1);
+	for (n = 0; n < AGWPE_MAX_CALL - 1 && from[n] != '\0'; n++)
+		hdr[4 + n] = (unsigned char) from[n];
 
 	/* One write, so the queue in axsock_peer_write_locked() can never
 	 * hold half a record: a reader that has the length must be able to

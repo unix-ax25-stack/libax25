@@ -3020,9 +3020,16 @@ int agwpe_mon_open(int protocol, unsigned char mask, int *ret)
 	 * Still hand out a descriptor that stays quiet rather than failing,
 	 * so a program that opens a monitor beside its real work is not
 	 * taken down by the absence of a server.  It costs that program one
-	 * feature and leaves the rest working.  With no node configured
-	 * either, the refusal is a configuration fault and worth reporting
-	 * as one.
+	 * feature and leaves the rest working.  A server that is named but
+	 * not up yet is in this same case: named is a source, and the reader
+	 * is already on its way.  Only with no server named and no node
+	 * configured either is the refusal a configuration fault worth
+	 * reporting as one.
+	 *
+	 * The reader cannot answer the question here: it holds the link, not
+	 * this lock, so having just been started it still reports no link
+	 * however healthy the server is.  What decides is whether anything is
+	 * named at all - a server on this side, a node on the other.
 	 *
 	 * Neither case waits for the server.  A monitor is worth having and
 	 * not worth a program that stands still for it: it starts the
@@ -3046,10 +3053,14 @@ int agwpe_mon_open(int protocol, unsigned char mask, int *ret)
 		*ret = -1;
 		return 1;
 	}
-	if (!axsock_up && !wampes_configured()) {
-		/* Nobody to feed the monitor and nothing to feed it with:
-		 * not a server, not a node.  Saying so beats a program
-		 * that shows nothing for ever and says why not. */
+	/* Resolve the name first: a server that is named is a source even
+	 * before it is up, so "nothing is named" is the question, not
+	 * "nothing is up".  axsock_host is only valid after this call. */
+	axsock_resolve_server();
+	if (!axsock_up && !wampes_configured() && axsock_host == NULL) {
+		/* Nothing names a server and no node is configured: nothing
+		 * will ever feed it.  Saying so beats a program that shows
+		 * nothing for ever and says why not. */
 		pthread_mutex_unlock(&axsock_lock);
 		*ret = -1;
 		return 1;

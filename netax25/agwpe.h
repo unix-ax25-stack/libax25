@@ -152,6 +152,28 @@ struct agwpe_s {
  */
 #define	AGWPE_CTL_UISUB			'U'
 
+/*
+ * Private extension of ax25netd: its session table, and ending a session by
+ * the handle the server gave it.
+ *
+ *   data[0] = AGWPE_CTL_SESSIONS
+ *     Asks the server for what is connected.  It answers with a 'Q' frame
+ *     whose data begins with AGWPE_CTL_SESSIONS and carries the rows as
+ *     ';'-separated ASCII tokens, the first the row count.  This is how
+ *     ax25netctl(8) shows the sessions without being the client that owns
+ *     them.
+ *
+ *   data[0] = AGWPE_CTL_KILLID
+ *     data[1..4]  the session id, little endian
+ *     Ends that session wherever it is, without the caller naming its port
+ *     and call pair.  ax25netctl uses it; axkill(8) still names the pair.
+ *
+ * Both are answered by ax25netd itself and never reach an upstream: a radio
+ * AGWPE has no such table to be asked.
+ */
+#define	AGWPE_CTL_SESSIONS		'S'
+#define	AGWPE_CTL_KILLID		'I'
+
 #define	AGWPE_MONMASK_I			0x01	/* keep I frame payloads */
 #define	AGWPE_MONMASK_UI		0x02	/* keep UI frame payloads */
 #define	AGWPE_MONMASK_ALL		(AGWPE_MONMASK_I | \

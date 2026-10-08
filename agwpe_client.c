@@ -516,6 +516,36 @@ int agwpe_client_uisub(agwpe_client_t *c)
 }
 
 /*
+ * ax25netd's own session table, and ending one by the handle it gave.  Both
+ * travel in the private 'Q' control extension and are answered by ax25netd
+ * itself, never forwarded to a radio: a plain AGWPE has no such table.
+ *
+ * The reply is asynchronous and arrives at the sessions callback; the kill
+ * has no reply at all, so the caller cannot be told whether the id named a
+ * session - the same silence axkill(8) keeps for a call pair that is not
+ * connected.
+ */
+int agwpe_client_get_sessions(agwpe_client_t *c)
+{
+	unsigned char data[1];
+
+	data[0] = AGWPE_CTL_SESSIONS;
+	return agwpe_send_cmd(c, 0, AGWPE_CMD_CTL, 0, NULL, NULL, data,
+			      sizeof(data));
+}
+
+int agwpe_client_kill_id(agwpe_client_t *c, uint32_t id)
+{
+	unsigned char data[5];
+	uint32_t nid = agwpe_host2netle(id);
+
+	data[0] = AGWPE_CTL_KILLID;
+	memcpy(data + 1, &nid, sizeof(nid));
+	return agwpe_send_cmd(c, 0, AGWPE_CMD_CTL, 0, NULL, NULL, data,
+			      sizeof(data));
+}
+
+/*
  * An AX.25 frame off the raw monitor stream, taken apart far enough to say who
  * sent it to whom and whether it is a UI frame at all.
  *
@@ -839,6 +869,78 @@ static void parse_ports(agwpe_client_t *c, const unsigned char *data, size_t len
 	free(list);
 }
 
+/*
+ * Parse the session reply: the subcommand byte, then ';' separated ASCII
+ * tokens, the first the number of rows.  Each row is
+ *
+ *	id port upstream chan from to pid
+ *
+ * with decimal numbers and the call pair spelled as the server keeps it.  A
+ * row that does not parse is skipped rather than guessed at: a table that is
+ * wrong should show as short, not as a session that is not there.
+ */
+static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
+			   size_t len)
+{
+	struct agwpe_session_list *list;
+	char *s, *p, *tok;
+
+	if (c->cb.sessions == NULL)
+		return;
+
+	if (len < 1 || data[0] != AGWPE_CTL_SESSIONS)
+		return;
+
+	list = calloc(1, sizeof(*list));
+	if (list == NULL)
+		return;
+
+	s = malloc(len);
+	if (s == NULL) {
+		free(list);
+		return;
+	}
+	memcpy(s, data + 1, len - 1);
+	s[len - 1] = '\0';
+
+	p = s;
+	while (p != NULL && list->count < AGWPE_SESSION_MAX) {
+		unsigned int id, port, chan, pid;
+		char up[24], from[AGWPE_MAX_CALL], to[AGWPE_MAX_CALL];
+		struct agwpe_session *e;
+
+		tok = p;
+		p = strchr(p, ';');
+		if (p != NULL)
+			*p++ = '\0';
+
+		/* First token is the total number of sessions.  */
+		if (tok == s)
+			continue;
+		if (tok[0] == '\0')
+			continue;
+
+		if (sscanf(tok, "%u %u %23s %u %9s %9s %u",
+			   &id, &port, up, &chan, from, to, &pid) != 7)
+			continue;
+
+		e = &list->sessions[list->count];
+		e->id = id;
+		e->port = (int)port;
+		snprintf(e->up, sizeof(e->up), "%s", up);
+		e->chan = (unsigned char)chan;
+		snprintf(e->from, sizeof(e->from), "%s", from);
+		snprintf(e->to, sizeof(e->to), "%s", to);
+		e->pid = (unsigned char)pid;
+		list->count++;
+	}
+
+	free(s);
+
+	c->cb.sessions(c, list);
+	free(list);
+}
+
 static void parse_capab(agwpe_client_t *c, const struct agwpe_s *hdr,
 			const unsigned char *data, size_t len)
 {
@@ -1010,6 +1112,14 @@ static void dispatch_frame(agwpe_client_t *c, const struct agwpe_s *hdr,
 	case AGWPE_DK_RAW:
 		if (c->cb.raw != NULL)
 			c->cb.raw(c, hdr, data, len);
+		break;
+
+	/* ax25netd's 'Q' carries several things; the only one that comes back
+	 * as a 'Q' is the session table.  A kill is not answered.  */
+	case AGWPE_CMD_CTL:
+		if (data != NULL && len >= 1 &&
+		    data[0] == AGWPE_CTL_SESSIONS)
+			parse_sessions(c, data, len);
 		break;
 
 	default:

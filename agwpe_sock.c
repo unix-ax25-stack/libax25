@@ -210,7 +210,7 @@ static int			axsock_up;
 /* Whether axsock_reader() exists.  It owns the connection: it brings the link
  * up, pumps it, and brings it back when it goes away, so a monitor that is
  * only waiting in poll() does not have to notice anything.  The application
- * side starts it and waits for the link (axsock_ensure_locked()).
+ * side starts it and waits for its verdict (axsock_ensure_locked()).
  */
 static int			axsock_thread_alive;
 
@@ -220,10 +220,14 @@ static int			axsock_thread_alive;
  * asleep in its backoff when the answer is wanted. */
 static int			axsock_err;
 
-/* Seconds axsock_ensure_locked() waits for the link before giving up.  Long
- * enough that a server which is being restarted under a running program is
- * waited out rather than refused; short enough that a server which is not
- * coming back is not waited on forever. */
+/* Seconds axsock_ensure_locked() waits for an in-flight connect verdict
+ * before giving up.  The verdict itself normally arrives immediately - a
+ * unix socket or a localhost peer decides within milliseconds, and
+ * agwpe_connect_wait() bounds a far-away peer at five seconds.  This is
+ * only the outside edge, for a connect that is still being attempted
+ * (a name resolution, a peer that has fallen silent) when the caller
+ * already knows the wait cannot be short.
+ */
 #define AXSOCK_ENSURE_TIMEOUT	10
 
 /*
@@ -1443,6 +1447,12 @@ static int axsock_new_sock(int type, int pid)
  * it are delivered to this client.  listener selects the 'L' extension
  * (a listening socket on the loop port) instead of the plain 'X'.  Called
  * with the lock held.
+ *
+ * The registration is recorded even when the link is down: the reader
+ * replays every recorded registration when the link comes back
+ * (axsock_register_all_locked()), so asking for one while the server is
+ * absent costs nothing but the memory of asking.  The frame itself is
+ * only sent when there is a connection to send it on.
  */
 static void axsock_register_locked(const char *call, unsigned char port,
 				   int listener)
@@ -1471,6 +1481,8 @@ static void axsock_register_locked(const char *call, unsigned char port,
 	axsock_nregistered++;
 
 send:
+	if (!axsock_up)
+		return;		/* no link; replayed when it comes back */
 	if (listener)
 		agwpe_client_listen(axsock_agwpe, port, call);
 	else
@@ -2252,11 +2264,15 @@ static void *axsock_reader(void *arg)
 			}
 
 			/*
-			 * Nobody waiting for the link gets its answer by
-			 * the backoff ending, so the waiters have to be
-			 * released here, on both answers - a caller that
-			 * waits out its full timeout for an answer that
-			 * has already come is ten seconds of nothing.
+			 * The waiters have to be released here, on both
+			 * answers: the answer to "is the server there"
+			 * exists the moment the attempt completes, and a
+			 * caller that sits out its timeout for an answer
+			 * that has already come is ten seconds of nothing.
+			 * With the verdict published in axsock_err, a
+			 * waiter in axsock_ensure_locked() takes it and
+			 * goes, instead of waiting for the backoff to end
+			 * and never being told.
 			 */
 			pthread_mutex_lock(&axsock_lock);
 			axsock_err = e;
@@ -2267,8 +2283,17 @@ static void *axsock_reader(void *arg)
 				fprintf(stderr, "axsock: no server at %s: %s\n",
 					axsock_server_name(), strerror(e));
 
-			nap = 1u << (backoff < 5 ? backoff : 5);
-			if (backoff < 5)
+			/* Doubling backoff from 1 s, capped at 8 s.  The
+			 * cap is a recovery promise, not a politeness: a
+			 * connect to a missing unix socket costs nothing
+			 * (the result is immediate), and a registration
+			 * that was asked for while the server was away is
+			 * replayed the moment a connection fits again.
+			 * Thirty-two seconds of silence after a server
+			 * restart is thirty-two seconds of ports that
+			 * look live and carry nothing. */
+			nap = 1u << (backoff < 3 ? backoff : 3);
+			if (backoff < 3)
 				backoff++;
 			sleep(nap);
 			continue;
@@ -2496,30 +2521,41 @@ static int axsock_reader_start_locked(void)
 /*
  * Make sure the AGWPE connection is up.  Called with the lock held.
  *
- * Starts axsock_reader() if it is not running and then waits for it to have
- * the link.  The reader owns the connection, so this cannot connect itself
- * without two threads racing to own one socket - and waiting is what lets a
- * program whose only business is receiving (listen(1), mheardd(8),
- * ax25mond(8)) have a link restored under it without asking.
+ * Starts axsock_reader() if it is not running and then waits for it to
+ * say which way the connect went.  The reader owns the connection, so
+ * this cannot connect itself without two threads racing to own one
+ * socket - and the verdict is the moment the reader can give one, which
+ * the connect itself has already answered by then: a unix socket or a
+ * localhost TCP peer decides success or refusal within milliseconds, and
+ * the timeout that bounds a far-away peer (agwpe_connect_wait(), 5 s) is
+ * all an in-flight connect is ever asked to take.  Waiting past the
+ * verdict would wait on a question that has already been answered.
  *
- * Used where the link is not optional: a connect(2) or a listen(2) that has
- * nothing to carry without it.  A monitor asks for less and gets less - see
- * agwpe_mon_open(), which starts the reader and hands out a quiet descriptor
- * rather than making the program that wants to watch the air wait for it.
+ * Used where the link is not optional: a connect(2) or a send on a
+ * connection that has nothing to carry without it.  A listener and a
+ * monitor ask for less and get less - agwpe_listen() records its
+ * registration and lets the reader replay it when the link comes back,
+ * and agwpe_mon_open() hands out a quiet descriptor rather than making
+ * the program that wants to watch the air wait.
  */
 static int axsock_ensure_locked(void)
 {
+	struct timespec ts;
+
 	if (axsock_up)
 		return 0;
 
 	if (axsock_reader_start_locked() != 0)
 		return -1;
 
-	while (!axsock_up) {
-		struct timespec ts;
-
-		clock_gettime(CLOCK_REALTIME, &ts);
-		ts.tv_sec += AXSOCK_ENSURE_TIMEOUT;
+	/* One deadline, not one per reader attempt.  A verdict that fails
+	 * (ENOENT, ECONNREFUSED) would otherwise restart this window over
+	 * and over: unix connects answer in milliseconds, and twenty-five
+	 * seconds later the caller would still sit waiting for a link that
+	 * cannot appear while the attempt keeps failing. */
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_sec += AXSOCK_ENSURE_TIMEOUT;
+	while (!axsock_up && axsock_err == 0) {
 		if (pthread_cond_timedwait(&axsock_cond, &axsock_lock, &ts) != 0)
 			break;
 	}
@@ -3409,30 +3445,45 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 	 */
 	if (s->type == SOCK_DGRAM && s->local[0] != '\0' && !s->registered) {
 		pthread_mutex_lock(&axsock_lock);
-		if (axsock_ensure_locked() == 0) {
-			/*
-			 * The subscription is per connection rather than
-			 * per call sign, so it is asked for here and not
-			 * in axsock_register_locked(): a second socket on
-			 * the same call sign would ask again for a thing
-			 * the server already does.  Counted rather than
-			 * flagged, so that closing the last one stops it
-			 * being put back onto a connection that comes
-			 * again, and sent here as well as on that
-			 * connection, because a new one has it off
-			 * until somebody asks.
-			 *
-			 * On the loop port nothing is asked for: the
-			 * daemon routes those frames already, and did so
-			 * before this existed.
-			 */
-			if (s->port != AGWPE_PORT_LOOP) {
-				axsock_nuisub++;
-				agwpe_client_uisub(axsock_agwpe);
-			}
-			axsock_register_locked(s->local, s->port, 0);
-			s->registered = 1;
+		/* Record the ask whether or not the link is there; only the
+		 * sending waits for it (see axsock_register_locked()).  The
+		 * reader must exist for the replay, but adding it must not
+		 * fork a ten-second wait onto a bind() - the verdict on a
+		 * server that is not there is already out, and the recorder
+		 * takes it. */
+		if (axsock_reader_start_locked() != 0) {
+			pthread_mutex_unlock(&axsock_lock);
+			*ret = -1;
+			return 1;
 		}
+		/*
+		 * The subscription is per connection rather than
+		 * per call sign, so it is asked for here and not
+		 * in axsock_register_locked(): a second socket on
+		 * the same call sign would ask again for a thing
+		 * the server already does.  Counted rather than
+		 * flagged, so that closing the last one stops it
+		 * being put back onto a connection that comes
+		 * again, and sent here as well as on that
+		 * connection, because a new one has it off
+		 * until somebody asks.
+		 *
+		 * On the loop port nothing is asked for: the
+		 * daemon routes those frames already, and did so
+		 * before this existed.
+		 *
+		 * The count is kept even without a connection, so
+		 * that axsock_link_publish() re-sends the 'M' its
+		 * new connection starts without when the link
+		 * comes back.
+		 */
+		if (s->port != AGWPE_PORT_LOOP) {
+			axsock_nuisub++;
+			if (axsock_up)
+				agwpe_client_uisub(axsock_agwpe);
+		}
+		axsock_register_locked(s->local, s->port, 0);
+		s->registered = 1;
 		pthread_mutex_unlock(&axsock_lock);
 	}
 	if (axsock_debug)
@@ -4139,11 +4190,25 @@ int agwpe_listen(int fd, int *ret)
 				fd, s->local, s->port, listener);
 		/* Announce the listening call so inbound connects are
 		 * delivered: 'L' on the loop port, plain 'X' elsewhere.
+		 *
+		 * Not gated on the link: announce now, send when there is
+		 * a connection to send on.  Waiting for the server here
+		 * stalled every socket in the process for the whole time
+		 * the reader took to deliver a verdict it already had - a
+		 * port that belongs to ax25netd had even a WAMPES-served
+		 * listener stand behind a server it does not use.
+		 * A registration recorded without a connection is replayed
+		 * by axsock_register_all_locked() the moment the link
+		 * comes back, so listen() answers immediately and the
+		 * port carries when the server does.
 		 */
-		if (axsock_ensure_locked() == 0) {
-			axsock_register_locked(s->local, s->port, listener);
-			s->registered = 1;
+		if (axsock_reader_start_locked() != 0) {
+			pthread_mutex_unlock(&axsock_lock);
+			*ret = -1;
+			return 1;
 		}
+		axsock_register_locked(s->local, s->port, listener);
+		s->registered = 1;
 	}
 	pthread_mutex_unlock(&axsock_lock);
 	*ret = 0;

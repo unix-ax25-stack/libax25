@@ -66,6 +66,37 @@ struct agwpe_port_list {
 };
 
 /*
+ * One row of the session table a "sessions" request returns.
+ *
+ * id is the server's handle for the session, stable for as long as it lives,
+ * and is what a kill by id names; port is the flat port the session runs on,
+ * up the upstream it belongs to ("loop" for the virtual port), and chan the
+ * radio channel there.  from is the local call, to the remote station.
+ */
+struct agwpe_session {
+	uint32_t		id;
+	int			port;
+	char			up[24];
+	unsigned char		chan;
+	char			from[AGWPE_MAX_CALL];
+	char			to[AGWPE_MAX_CALL];
+	unsigned char		pid;
+};
+
+/*
+ * A whole "sessions" reply.  The table is a fixed array because the reply is
+ * parsed in one callback and there is nowhere to wait for more.  count is the
+ * number of rows kept, never more than AGWPE_SESSION_MAX; a server with more
+ * rows than that has the rest dropped, and the caller sees the cap.
+ */
+#define	AGWPE_SESSION_MAX	256
+
+struct agwpe_session_list {
+	int			count;
+	struct agwpe_session	sessions[AGWPE_SESSION_MAX];
+};
+
+/*
  * Result of a "g" (port capabilities) request.
  */
 struct agwpe_port_capab {
@@ -113,6 +144,7 @@ struct agwpe_client_cb {
 	void	(*registered)(agwpe_client_t *c, const struct agwpe_s *hdr,
 			      int registered);
 	void	(*ports)(agwpe_client_t *c, struct agwpe_port_list *list);
+	void	(*sessions)(agwpe_client_t *c, struct agwpe_session_list *list);
 	void	(*capab)(agwpe_client_t *c, const struct agwpe_s *hdr,
 			 const struct agwpe_port_capab *cap);
 	void	(*heard)(agwpe_client_t *c, const struct agwpe_s *hdr,
@@ -269,6 +301,19 @@ extern int agwpe_client_send_data(agwpe_client_t *c, unsigned char port,
 
 extern int agwpe_client_disconnect(agwpe_client_t *c, unsigned char port,
 				   const char *from, const char *to);
+
+/*
+ * The session table of the server, for a "Q" server that tracks connections
+ * itself (ax25netd).  A radio AGWPE has no such answer and stays silent, so a
+ * caller that needs one connects to ax25netd.
+ */
+extern int agwpe_client_get_sessions(agwpe_client_t *c);
+
+/*
+ * End the session with this id, wherever the server keeps it.  A kill, not a
+ * disconnect: the server tears the connection down; nothing is reported back.
+ */
+extern int agwpe_client_kill_id(agwpe_client_t *c, uint32_t id);
 
 /* How many connections are pending.  */
 extern int agwpe_client_outstanding_port(agwpe_client_t *c,

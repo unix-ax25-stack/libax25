@@ -873,11 +873,13 @@ static void parse_ports(agwpe_client_t *c, const unsigned char *data, size_t len
  * Parse the session reply: the subcommand byte, then ';' separated ASCII
  * tokens, the first the number of rows.  Each row is
  *
- *	id port upstream chan from to pid
+ *	id port upstream chan from to pid [state]
  *
- * with decimal numbers and the call pair spelled as the server keeps it.  A
- * row that does not parse is skipped rather than guessed at: a table that is
- * wrong should show as short, not as a session that is not there.
+ * with decimal numbers, the call pair spelled as the server keeps it, and an
+ * optional trailing link state ("SABM" or "ESTABLISHED").  A row that does not
+ * parse in its first seven fields is skipped rather than guessed at: a table
+ * that is wrong should show as short, not as a session that is not there.  A
+ * server that predates the state word still fills a row.
  */
 static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 			   size_t len)
@@ -907,6 +909,7 @@ static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 	while (p != NULL && list->count < AGWPE_SESSION_MAX) {
 		unsigned int id, port, chan, pid;
 		char up[24], from[AGWPE_MAX_CALL], to[AGWPE_MAX_CALL];
+		char state[16];
 		struct agwpe_session *e;
 
 		tok = p;
@@ -920,8 +923,16 @@ static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 		if (tok[0] == '\0')
 			continue;
 
-		if (sscanf(tok, "%u %u %23s %u %9s %9s %u",
-			   &id, &port, up, &chan, from, to, &pid) != 7)
+		/*
+		 * The trailing state word is the server's link state,
+		 * "SABM" or "ESTABLISHED".  An older server sends seven
+		 * fields and no state; the value stays empty and the row is
+		 * still a row, because state is the only thing that came
+		 * after the pid.
+		 */
+		state[0] = '\0';
+		if (sscanf(tok, "%u %u %23s %u %9s %9s %u %15s",
+			   &id, &port, up, &chan, from, to, &pid, state) < 7)
 			continue;
 
 		e = &list->sessions[list->count];
@@ -932,6 +943,7 @@ static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 		snprintf(e->from, sizeof(e->from), "%s", from);
 		snprintf(e->to, sizeof(e->to), "%s", to);
 		e->pid = (unsigned char)pid;
+		snprintf(e->state, sizeof(e->state), "%s", state);
 		list->count++;
 	}
 

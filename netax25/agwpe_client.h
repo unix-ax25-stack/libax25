@@ -72,6 +72,11 @@ struct agwpe_port_list {
  * and is what a kill by id names; port is the flat port the session runs on,
  * up the upstream it belongs to ("loop" for the virtual port), and chan the
  * radio channel there.  from is the local call, to the remote station.
+ *
+ * state is the link state as the server sees it: "SABM" while a connect has
+ * gone out and is not yet answered, "ESTABLISHED" once it is up.  It is the
+ * last field of the row and empty for a server that does not send it, which
+ * is what a reader is handed by a netd old enough to lack it.
  */
 struct agwpe_session {
 	uint32_t		id;
@@ -81,6 +86,7 @@ struct agwpe_session {
 	char			from[AGWPE_MAX_CALL];
 	char			to[AGWPE_MAX_CALL];
 	unsigned char		pid;
+	char			state[16];
 };
 
 /*

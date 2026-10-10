@@ -74,9 +74,14 @@ struct agwpe_port_list {
  * radio channel there.  from is the local call, to the remote station.
  *
  * state is the link state as the server sees it: "SABM" while a connect has
- * gone out and is not yet answered, "ESTABLISHED" once it is up.  It is the
- * last field of the row and empty for a server that does not send it, which
- * is what a reader is handed by a netd old enough to lack it.
+ * gone out and is not yet answered, "ESTABLISHED" once it is up, and
+ * "LISTENING" for a registered listening call no one has connected to yet.
+ * It is the last field of the row and empty for a server that does not send
+ * it, which is what a reader is handed by a netd old enough to lack it.
+ *
+ * A listening row is not a session and has no id: it is id 0 and the remote
+ * is "*", any caller.  Everything else about the row reads the same, so a
+ * reader that only prints can treat it as one more row.
  */
 struct agwpe_session {
 	uint32_t		id;

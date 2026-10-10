@@ -2351,8 +2351,21 @@ static void *axsock_reader(void *arg)
 			 * upstreams, or other channels of the same one, so
 			 * asking for it again is the only way to find out.
 			 * Leaving the old numbers in place sent frames on
-			 * a port that now belongs to a different radio. */
+			 * a port that now belongs to a different radio.
+			 *
+			 * The retry stamp is cleared with it.  It guards a
+			 * server that does not answer against an ask per
+			 * frame, but a table invalidated here MUST be asked
+			 * for again at once: leaving the stamp meant the
+			 * next ask was refused for up to AXSOCK_GPORTS_RETRY
+			 * seconds, and until then every name resolved from
+			 * the table was gone - a bound monitor matched no
+			 * port and showed nothing, and the frames it had
+			 * shown as its own came back without a name.  The
+			 * guard re-arms on the next ask, so a server that is
+			 * still silent is still not asked per frame. */
 			axsock_gnports = -1;
+			axsock_gports_asked = 0;
 			pthread_cond_broadcast(&axsock_cond);
 			pthread_mutex_unlock(&axsock_lock);
 			up = 0;

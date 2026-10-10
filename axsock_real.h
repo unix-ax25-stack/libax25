@@ -67,6 +67,7 @@ extern int axsock_debug;
  */
 extern ssize_t	axsock_ep_recvfrom(int, void *, size_t, int,
 				     struct sockaddr *, socklen_t *);
+extern int	axsock_ep_bind(int, const struct sockaddr *, socklen_t);
 #define real_socket		socket
 #define real_bind		bind
 #define real_connect		connect

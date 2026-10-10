@@ -1259,6 +1259,13 @@ static int axsock_bind_port(const struct sockaddr *addr,
  * not recoverable later - the number does not say which entry wanted it, and
  * for a port no upstream serves there is no index to compute one from.
  *
+ * s->bound is the answer for a raw monitor: listen(1) -p and net2kiss -i
+ * bind the socket to a device name, and the kernel's SOCK_PACKET reports
+ * that same name in sa_data for a bound socket.  A port that is configured
+ * but served by no upstream is exactly where it matters - the frames still
+ * reach the monitor, the number alone says nothing, and the device the
+ * operator bound to is true.
+ *
  * With neither, sa_data stays as the memset left it.  A caller that has
  * nothing to print is not a mistake to paper over: a source callsign that is
  * nobody's port is what a program that only transmits looks like, and
@@ -1293,7 +1300,9 @@ static void axsock_raw_name(struct axsock_sock *s, unsigned char port,
 		name = axsock_port_name(port);
 	if (name == NULL)
 		name = s->portname;
-	if (name == NULL || datalen == 0)
+	if ((name == NULL || name[0] == '\0') && s->bound[0] != '\0')
+		name = s->bound;	/* the device a raw monitor bound to */
+	if (name == NULL || name[0] == '\0' || datalen == 0)
 		return;
 
 	/* Marked when it does not fit, which for an axports name is a

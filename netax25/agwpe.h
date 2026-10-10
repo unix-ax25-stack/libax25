@@ -159,9 +159,11 @@ struct agwpe_s {
  *   data[0] = AGWPE_CTL_SESSIONS
  *     Asks the server for what is connected.  It answers with a 'Q' frame
  *     whose data begins with AGWPE_CTL_SESSIONS and carries the rows as
- *     ';'-separated ASCII tokens, the first the row count.  This is how
- *     ax25netctl(8) shows the sessions without being the client that owns
- *     them.
+ *     ';'-separated ASCII tokens, the first the row count.  A row is
+ *     "id port upstream chan from to pid [state]", the optional last word
+ *     the link state ("SABM" while a connect's answer is still awaited,
+ *     "ESTABLISHED" otherwise).  This is how ax25netctl(8) shows the
+ *     sessions without being the client that owns them.
  *
  *   data[0] = AGWPE_CTL_KILLID
  *     data[1..4]  the session id, little endian

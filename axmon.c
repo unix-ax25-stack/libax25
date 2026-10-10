@@ -323,10 +323,20 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 				 * entry as a second chance.  Not the device: a
 				 * userspace port has none, and a port name is
 				 * what the frames are reported under.
+				 *
+				 * AXSOCK_ENTRY(bind), not real_bind: the
+				 * descriptor is the shim's (agwpe_mon_open just
+				 * handed it out), and it keeps the name in
+				 * s->bound for both the frame filter and the
+				 * name report.  real_bind would reach libc and
+				 * bind nothing - the socket pair end it is
+				 * called on is nobody's - and the monitor would
+				 * silently show every port's frames under no
+				 * name.
 				 */
 				strncpy(spp.sa_data, port, sizeof(spp.sa_data) - 1);
-				real_bind(fd, (struct sockaddr *)&spp,
-					  sizeof(spp));
+				AXSOCK_ENTRY(bind)(fd, (struct sockaddr *)&spp,
+						   sizeof(spp));
 			}
 			mon->fd[mon->nfd] = fd;
 			mon->framed[mon->nfd] = axmon_framed(fd);

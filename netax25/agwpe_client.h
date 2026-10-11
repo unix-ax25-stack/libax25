@@ -76,12 +76,16 @@ struct agwpe_port_list {
  * state is the link state as the server sees it: "SABM" while a connect has
  * gone out and is not yet answered, "ESTABLISHED" once it is up, and
  * "LISTENING" for a registered listening call no one has connected to yet.
- * It is the last field of the row and empty for a server that does not send
- * it, which is what a reader is handed by a netd old enough to lack it.
+ * It is empty for a server that does not send it, which is what a reader is
+ * handed by a netd old enough to lack it.
  *
  * A listening row is not a session and has no id: it is id 0 and the remote
  * is "*", any caller.  Everything else about the row reads the same, so a
  * reader that only prints can treat it as one more row.
+ *
+ * owner is the pid of the local program the row belongs to and prog its
+ * name, "-" when the server has none to give; both come after the state,
+ * so a reader that was written for the earlier row stops there.
  */
 struct agwpe_session {
 	uint32_t		id;
@@ -92,6 +96,8 @@ struct agwpe_session {
 	char			to[AGWPE_MAX_CALL];
 	unsigned char		pid;
 	char			state[16];
+	uint32_t		owner;
+	char			prog[16];
 };
 
 /*

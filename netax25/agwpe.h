@@ -160,13 +160,14 @@ struct agwpe_s {
  *     Asks the server for what is connected.  It answers with a 'Q' frame
  *     whose data begins with AGWPE_CTL_SESSIONS and carries the rows as
  *     ';'-separated ASCII tokens, the first the row count.  A row is
- *     "id port upstream chan from to pid [state]", the optional last word
- *     the link state ("SABM" while a connect's answer is still awaited,
- *     "ESTABLISHED" otherwise).  A callsign a client listens on and that
- *     no one has connected to yet is a row of its own, with id 0 - no
- *     handle - the remote "*", and the state "LISTENING".  This is how
- *     ax25netctl(8) shows the sessions and the listeners without being
- *     the client that owns them.
+ *     "id port upstream chan from to pid [state [owner prog]]", the optional
+ *     tail the link state ("SABM" while a connect's answer is still awaited,
+ *     "ESTABLISHED" otherwise) and, after it, the pid of the local program
+ *     the row belongs to and its name, "-" when the server has neither.  A
+ *     callsign a client listens on and that no one has connected to yet is a
+ *     row of its own, with id 0 - no handle - the remote "*", and the state
+ *     "LISTENING".  This is how ax25netctl(8) shows the sessions and the
+ *     listeners without being the client that owns them.
  *
  *   data[0] = AGWPE_CTL_KILLID
  *     data[1..4]  the session id, little endian

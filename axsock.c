@@ -617,6 +617,8 @@ int AXSOCK_ENTRY(ioctl)(int fd, unsigned long request, ...)
 	arg = va_arg(ap, void *);
 	va_end(ap);
 
+	if (wampes_ioctl(fd, request, arg, &ret))
+		return ret;
 	if (agwpe_ioctl(fd, request, arg, &ret))
 		return ret;
 	return real_ioctl(fd, request, arg);

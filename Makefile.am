@@ -18,6 +18,7 @@ endif
 if USERSPACE_AX25
 USE_LIBAX25_AXSOCK = axsock.c agwpe_sock.c wampes.c \
 		     axsock_real.h agwpe_sock.h wampes.h
+USE_LIBAX25_WAMPES_CLIENT_H = netax25/wampes_client.h
 endif
 if !NETROM_H
 USE_LIBAX25_NETROM_H = netrom/netrom.h
@@ -38,6 +39,7 @@ nobase_libax25include_HEADERS = 	\
 	netax25/agwpe.h			\
 	netax25/agwpe_client.h		\
 	netax25/agwpe_config.h		\
+	$(USE_LIBAX25_WAMPES_CLIENT_H)	\
 	netax25/axcommon.h		\
 	netax25/axmon.h			\
 	$(USE_LIBAX25_AX25_H)		\
@@ -77,6 +79,7 @@ libax25_la_SOURCES = \
 	netax25/axmon.h \
 	$(USE_LIBAX25_AX25_H) \
 	$(USE_LIBAX25_AXSOCK) \
+	$(USE_LIBAX25_WAMPES_CLIENT_H) \
 	$(USE_LIBAX25_ROSE_H)
 
 libax25io_la_SOURCES = \

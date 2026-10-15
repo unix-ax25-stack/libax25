@@ -4390,9 +4390,12 @@ int agwpe_getsockopt(int fd, int level, void *optval, socklen_t *optlen,
 }
 
 /*
- * No WAMPES half: a descriptor served by a node is an ordinary socketpair
- * end, so FIONREAD and friends work on it as they are, and the node has no
- * equivalent of SIOCAX25CTLCON - axctl(8) and axkill(8) reach AGWPE only.
+ * The WAMPES half of this is handled elsewhere: the node serves
+ * "sessions"/"close" over its service socket, and wampes.c turns
+ * SIOCAX25CTLCON into exactly that (see wampes_ioctl()).  What is answered
+ * here is only what belongs to a descriptor this backend built: FIONREAD and
+ * friends on the socketpair end, and SIOCAX25CTLCON's 'Q' KILL for a session
+ * ax25netd holds.
  */
 int agwpe_ioctl(int fd, unsigned long request, void *arg, int *ret)
 {

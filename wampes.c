@@ -45,6 +45,7 @@
 #include "netax25/axconfig.h"
 
 #include "netax25/agwpe_client.h"
+#include "netax25/wampes_client.h"
 
 #include "pathnames.h"
 
@@ -64,6 +65,13 @@
 #define WAMPES_DEFAULT_SOCKET WAMPES_SOCKET_DIR "/sockets/ax25"
 #define WAMPES_CALLLEN  10              /* "DL9SAU-15" and the NUL */
 #define AX25_REPEATED	0x80		/* in the SSID byte, as on the air */
+
+/* AX.25 control bytes for the synthesized link frames of the mirror.  These
+ * are the values mheard.c's ftype() reads back out, so SABM, UA and DISC are
+ * recognized as themselves by a monitor and by the heard list. */
+#define WAMPES_CTL_SABM	0x2f
+#define WAMPES_CTL_DISC	0x43
+#define WAMPES_CTL_UA	0x63
 
 /* A socket the application holds.  After connect() the descriptor IS the
  * connection and nothing intercepts read(), write(), poll() or close() any
@@ -104,6 +112,15 @@ struct wampes_sock {
 	 */
 	struct full_sockaddr_ax25 me, him;
 	int have_me, have_him;
+	/* The digipeaters a connected link was set up through, in the
+	 * direction the call that opened it travelled: away from us when
+	 * connect() opened it (we_called), toward us when accept() took a
+	 * call.  Kept only so that the synthesized link frames of the mirror
+	 * carry the same path (documentation/..., (C) and (F)); npath is 0
+	 * when there is no path or nothing is known. */
+	ax25_address path[AX25_MAX_DIGIS];
+	int npath;
+	int we_called;
 };
 
 static struct wampes_sock *Socks;
@@ -945,6 +962,19 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
  */
 static int write_all(int fd, const void *data, size_t len);
 
+/* The mirror of a connected link's lifecycle (SABM/UA/DISC) is defined with
+ * the other mirror helpers further down; connect(), accept() and close() use
+ * it, so it and the path helper it uses are declared here. */
+static void wampes_mirror_link(const ax25_address *dest,
+			       const ax25_address *src,
+			       const ax25_address *digis, int ndigis,
+			       unsigned char ctl);
+static int wampes_link_path(int we_called, const ax25_address *path, int npath,
+			    int to_us, ax25_address *out);
+static void wampes_mirror_setup(int we_called, const ax25_address *path,
+				int npath, const ax25_address *me,
+				const ax25_address *him, unsigned char sabm);
+
 int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		   int *ret)
 {
@@ -960,6 +990,12 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	int pid;
 	int sock;
 	struct wampes_sock *s;
+	/* the source this call goes out with, parsed once below */
+	ax25_address me;
+	/* mirror of the setup: values copied out under the lock */
+	ax25_address path[AX25_MAX_DIGIS];
+	int npath;
+	ax25_address mirror_me, mirror_him;
 
 	/* keep the entry alive while the node answers: the dial and the
 	 * verdict run without the lock, during which a close() on another
@@ -981,6 +1017,22 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		return 1;
 	}
 	sa = (const struct sockaddr_ax25 *) addr;
+
+	/* The bound source, as ax25_ntoa() wrote it into s->local.  An empty
+	 * callsign with an SSID reads back as "-2" or "-10", which is no
+	 * station at all, and ax25_aton_entry() has already said so on stderr
+	 * - the program that bound it simply ignored the return.  Check here,
+	 * before the dial: cmd below would hand the text to the node
+	 * unchanged, and s->me is taken from this further down, so a failing
+	 * parse would leave an empty call for ax25d and axspawn to answer
+	 * with afterwards.
+	 */
+	memset(&me, 0, sizeof(me));
+	if (local[0] != '\0' && ax25_aton_entry(local, me.ax25_call) == -1) {
+		errno = EINVAL;
+		sock_put(s);
+		return 1;
+	}
 
 	if ((sock = wampes_dial(wampes_address(port))) < 0) {
 		sock_put(s);
@@ -1122,11 +1174,31 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	s->have_him = 1;
 	memset(&s->me, 0, sizeof(s->me));
 	s->me.fsa_ax25.sax25_family = AF_AX25;
-	if (local[0] != '\0')
-		ax25_aton_entry(local, s->me.fsa_ax25.sax25_call.ax25_call);
+	/* Parsed once, at the top of this function: a source that would not
+	 * parse was turned away before the dial, so this is the same text
+	 * and cannot fail here. */
+	s->me.fsa_ax25.sax25_call = me;
 	s->have_me = 1;
+	/* The digipeaters this call goes out through, in the direction it
+	 * travels, kept so the synthesized SABM/UA of the mirror carry the
+	 * same path (documentation/..., (C) and (F)).  Copied out here
+	 * because the mirror runs after the lock is dropped. */
+	s->we_called = 1;
+	s->npath = 0;
+	for (i = 0; i < ndigis && i < AX25_MAX_DIGIS; i++) {
+		s->path[i] = fsa->fsa_digipeater[i];
+		s->npath++;
+	}
+	npath = s->npath;
+	memcpy(path, s->path, sizeof(path));
+	mirror_me = s->me.fsa_ax25.sax25_call;
+	mirror_him = s->him.fsa_ax25.sax25_call;
 	sock_unref(s);
 	pthread_mutex_unlock(&wampes_lock);
+	/* The exchange the link setup made, as a monitor would have heard
+	 * it: our SABM going out, the callee's UA coming back. */
+	wampes_mirror_setup(1, path, npath, &mirror_me, &mirror_him,
+			    WAMPES_CTL_SABM);
 	*ret = 0;
 	return 1;
 }
@@ -1279,6 +1351,8 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 	struct wampes_sock *s;
 	int listening;
 	int n;
+	int mn;				/* the mirror of the setup */
+	ax25_address mpath[AX25_MAX_DIGIS], mme, mhim;
 
 	/* The parent entry is kept alive while accept() blocks on the node.
 	 * A close() of the listening socket from another thread would
@@ -1344,6 +1418,7 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 		struct full_sockaddr_ax25 him, me;
 		struct wampes_sock *ns;
 		char *arrow;
+		int i;
 
 		memset(&him, 0, sizeof(him));
 		memset(&me, 0, sizeof(me));
@@ -1383,6 +1458,16 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 			ns->him = him;
 			ns->have_me = 1;
 			ns->have_him = 1;
+			/* The path the caller came by, in the direction it
+			 * travelled (toward us); the mirror reads it back out
+			 * for either direction ((C) and (F)). */
+			ns->we_called = 0;
+			ns->npath = 0;
+			for (i = 0; i < him.fsa_ax25.sax25_ndigis &&
+			     i < AX25_MAX_DIGIS; i++) {
+				ns->path[i] = him.fsa_digipeater[i];
+				ns->npath++;
+			}
 			snprintf(ns->port, sizeof(ns->port), "%s", port);
 			pthread_mutex_lock(&wampes_lock);
 			ns->next = Socks;
@@ -1390,8 +1475,22 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 			Nsocks++;
 			pthread_mutex_unlock(&wampes_lock);
 		}
+		/* Copy the calls and the path out for the mirror, which runs
+		 * without any lock.  Even when the entry could not be made the
+		 * exchange happened and is worth showing. */
+		mn = 0;
+		for (i = 0; i < him.fsa_ax25.sax25_ndigis &&
+		     i < AX25_MAX_DIGIS; i++) {
+			mpath[i] = him.fsa_digipeater[i];
+			mn++;
+		}
+		mme = me.fsa_ax25.sax25_call;
+		mhim = him.fsa_ax25.sax25_call;
 	}
 	sock_put(s);
+	/* The exchange the link setup made, as a monitor would have heard it:
+	 * the caller's SABM coming in, our UA going back. */
+	wampes_mirror_setup(0, mpath, mn, &mme, &mhim, WAMPES_CTL_SABM);
 	*ret = newfd;
 	return 1;
 }
@@ -1530,30 +1629,34 @@ fail:
 	return -1;
 }
 
-static void wampes_mirror_frame(const ax25_address dest,
-				const ax25_address src,
-				const ax25_address *digis, int ndigis,
-				unsigned char pid,
-				const unsigned char *info, size_t ilen)
+/* Lay the address field of a raw frame into buf: KISS data marker, the
+ * destination, the source, the digipeaters in the order the frame traverses
+ * them, and the end-of-address bit.  Returns how many bytes that took.
+ * Shared by the UI mirror and the synthesized link frames, which differ only
+ * in what follows the addresses.
+ *
+ * ax25_ntoa() returns one static buffer, so the header's two call names are
+ * copied out one at a time; two calls in one argument list would leave both
+ * names holding what the second one produced.
+ */
+static size_t wampes_mirror_addr(unsigned char *buf,
+				 const ax25_address *dest,
+				 const ax25_address *src,
+				 const ax25_address *digis, int ndigis)
 {
-	unsigned char buf[1 + 7 * (AX25_MAX_DIGIS + 2) + 2 + 256];
 	unsigned char *p = buf;
-	struct agwpe_s hdr;
 	int i;
 
 	if (ndigis > AX25_MAX_DIGIS)
 		ndigis = AX25_MAX_DIGIS;
 
-	if (wampes_mirror_open() != 0)
-		return;
-
 	*p++ = 0;				/* KISS data marker */
 
-	memcpy(p, dest.ax25_call, 7);
+	memcpy(p, dest->ax25_call, 7);
 	p[6] |= 0xE0;
 	p += 7;
 
-	memcpy(p, src.ax25_call, 7);
+	memcpy(p, src->ax25_call, 7);
 	p[6] |= 0x60;
 	p += 7;
 
@@ -1564,19 +1667,121 @@ static void wampes_mirror_frame(const ax25_address dest,
 	}
 	p[-1] |= 0x01;				/* end of the address field */
 
-	*p++ = 0x03;				/* UI, command */
-	*p++ = pid;
+	return (size_t) (p - buf);
+}
 
-	if (ilen > (size_t) (sizeof(buf) - (p - buf)))
-		ilen = sizeof(buf) - (p - buf);
-	if (info != NULL && ilen > 0)
-		memcpy(p, info, ilen);
-	p += ilen;
+static void wampes_mirror_frame(const ax25_address dest,
+				const ax25_address src,
+				const ax25_address *digis, int ndigis,
+				unsigned char pid,
+				const unsigned char *info, size_t ilen)
+{
+	unsigned char buf[1 + 7 * (AX25_MAX_DIGIS + 2) + 2 + 256];
+	char from[WAMPES_CALLLEN], to[WAMPES_CALLLEN];
+	struct agwpe_s hdr;
+	size_t n;
 
+	if (wampes_mirror_open() != 0)
+		return;
+
+	n = wampes_mirror_addr(buf, &dest, &src, digis, ndigis);
+
+	buf[n++] = 0x03;			/* UI, command */
+	buf[n++] = pid;
+
+	if (info != NULL && ilen > 0) {
+		if (ilen > sizeof(buf) - n)
+			ilen = sizeof(buf) - n;
+		memcpy(buf + n, info, ilen);
+		n += ilen;
+	}
+
+	snprintf(from, sizeof(from), "%s", ax25_ntoa(&src));
+	snprintf(to, sizeof(to), "%s", ax25_ntoa(&dest));
 	agwpe_header_init(&hdr, AGWPE_PORT_LOOP, AGWPE_CMD_RAW, pid,
-			  ax25_ntoa(&src), ax25_ntoa(&dest),
-			  (uint32_t) (p - buf));
+			  from, to, (uint32_t) n);
 	(void) agwpe_client_send_frame(wampes_mirror_client, &hdr, buf);
+}
+
+/* Mirror one synthesized link frame: the SABM of a connect, the UA of an
+ * accept, the DISC of a close.  It has no PID and no information field, so
+ * nothing is invented beyond the fact and the direction of the exchange -
+ * which is why the frame layer can be shown at all (documentation/..., 4e).
+ * ctl is the AX.25 control byte (SABM/SABME/UA/DISC/DM), the same values
+ * mheard.c reads back out.
+ */
+static void wampes_mirror_link(const ax25_address *dest,
+			       const ax25_address *src,
+			       const ax25_address *digis, int ndigis,
+			       unsigned char ctl)
+{
+	unsigned char buf[1 + 7 * (AX25_MAX_DIGIS + 2) + 1];
+	char from[WAMPES_CALLLEN], to[WAMPES_CALLLEN];
+	struct agwpe_s hdr;
+	size_t n;
+
+	if (wampes_mirror_open() != 0)
+		return;
+
+	n = wampes_mirror_addr(buf, dest, src, digis, ndigis);
+	buf[n++] = ctl;
+
+	snprintf(from, sizeof(from), "%s", ax25_ntoa(src));
+	snprintf(to, sizeof(to), "%s", ax25_ntoa(dest));
+	agwpe_header_init(&hdr, AGWPE_PORT_LOOP, AGWPE_CMD_RAW, 0,
+			  from, to, (uint32_t) n);
+	(void) agwpe_client_send_frame(wampes_mirror_client, &hdr, buf);
+}
+
+/* The digipeaters of a connected link, in the direction a frame asked for
+ * travels: away from us (to_us == 0) or toward us (to_us == 1).  path/npath
+ * are stored in the direction of the call that opened the link - away from
+ * us when we_called, toward us when the other end called - so they are used
+ * as they stand for the frame that opened it and reversed for the other
+ * direction, which walks the same digipeaters the other way round.  The
+ * values are passed in rather than read from the entry so that the caller
+ * can copy them under the lock and mirror afterwards, when the entry may
+ * already be gone.  Returns the number of digipeaters written to out.
+ */
+static int wampes_link_path(int we_called, const ax25_address *path, int npath,
+			    int to_us, ax25_address *out)
+{
+	int i, reverse;
+
+	if (npath > AX25_MAX_DIGIS)
+		npath = AX25_MAX_DIGIS;
+	reverse = we_called ? to_us : !to_us;
+
+	for (i = 0; i < npath; i++)
+		out[i] = reverse ? path[npath - 1 - i] : path[i];
+	return npath;
+}
+
+/* Both frames of a link setup, as a monitor would have heard them: the SABM
+ * that opened it and the UA that came back.  We called when we_called is
+ * set - our SABM went out and the callee's UA came in - otherwise the other
+ * end called and we answered.  Either way the two frames travel opposite
+ * ways and their paths are read accordingly, so the exchange reads in the
+ * direction each frame really went.
+ */
+static void wampes_mirror_setup(int we_called, const ax25_address *path,
+				int npath, const ax25_address *me,
+				const ax25_address *him, unsigned char sabm)
+{
+	ax25_address p[AX25_MAX_DIGIS];
+	int n;
+
+	if (we_called) {
+		n = wampes_link_path(we_called, path, npath, 0, p);
+		wampes_mirror_link(him, me, p, n, sabm);	/* our SABM */
+		n = wampes_link_path(we_called, path, npath, 1, p);
+		wampes_mirror_link(me, him, p, n, WAMPES_CTL_UA);/* his UA */
+	} else {
+		n = wampes_link_path(we_called, path, npath, 1, p);
+		wampes_mirror_link(me, him, p, n, sabm);	/* his SABM */
+		n = wampes_link_path(we_called, path, npath, 0, p);
+		wampes_mirror_link(him, me, p, n, WAMPES_CTL_UA);/* our UA */
+	}
 }
 
 /* The callsign a frame goes out under: the one bind() gave the socket, or
@@ -2239,10 +2444,310 @@ int wampes_setsockopt(int fd, int level, int optname, int *ret)
 
 /*---------------------------------------------------------------------------*/
 
+/* SIOCAX25CTLCON - what axctl(8) and axkill(8) send.
+ *
+ * The AGWPE backend turns it into a 'Q' control frame to ax25netd, which
+ * holds the session state there; a node holds its own, and the same request
+ * travels to it as the "sessions" / "close <handle>" pair the service socket
+ * offers (documentation/wampes-sessions-in-netd.md).  The node lets the
+ * forwarding go exactly as it would for a program that closed the descriptor.
+ *
+ * The descriptor cannot say whether the request is ours.  axkill(8) and
+ * axctl(8) never bind their socket, and a socket with no port has not been
+ * handed to this backend - it is an AGWPE one, or a kernel one.  What names
+ * the backend is the PORT in the request: ctl->port_addr is the callsign of an
+ * axports entry, so it is resolved to the entry, and the entry to the node
+ * that serves it - the same answer bind() would give.  A port that resolves to
+ * no node of ours is left alone, and the next backend answers for it.
+ */
+
+/* Is the row's pair the one the request named?  The request carries the two
+ * ends and does not say which is which - the kernel matches either order - so
+ * a row matches when both are there, whichever way round.
+ */
+static int wampes_pair_is(const char *from, const char *to,
+			  const char *src, const char *dest)
+{
+	return (!strcasecmp(from, src) && !strcasecmp(to, dest)) ||
+	       (!strcasecmp(from, dest) && !strcasecmp(to, src));
+}
+
+/* One "sessions" row is
+ *
+ *	<id> <port> <from> <to> <proto> <state> <owner> <prog> <path>
+ *
+ * A row that names the pair the request asked for yields its id.  A claimed
+ * callsign ("-" in the id column) is skipped: it says a program holds the
+ * callsign, not that a link is up, and there is nothing there to close.
+ */
+static int wampes_row_handle(const char *line, const char *src,
+			     const char *dest, char *handle, size_t hlen)
+{
+	char buf[512];
+	char *f[9];
+	int nf = 0;
+	char *p;
+
+	if (strlen(line) >= sizeof(buf))
+		return -1;
+	strcpy(buf, line);
+	for (p = strtok(buf, " \t"); p != NULL && nf < 9;
+	     p = strtok(NULL, " \t"))
+		f[nf++] = p;
+	if (nf < 4 || strcmp(f[0], "-") == 0)
+		return -1;
+	if (!wampes_pair_is(f[2], f[3], src, dest))
+		return -1;
+	if (strlen(f[0]) >= hlen)
+		return -1;
+	strcpy(handle, f[0]);
+	return 0;
+}
+
+/* Look for one forwarding in a node's table and close it.  pick() is handed
+ * every row and answers with the handle to close, or NULL to keep looking;
+ * the pointer it gives back must stay valid for the call, so it can point into
+ * its own arg.  The table and the close go over one connection, the way an
+ * operator would do it: "sessions", then "close <handle>".
+ *
+ * Returns 0 when a row was picked and the close went out, -1 with errno
+ * otherwise: ESRCH when no row was picked, ECONNRESET when the node closed
+ * before the list ended.  The reads wait as long as they must, the way the
+ * connect verdict does: the node answers as soon as it has looked, and it
+ * closes a connection it cannot make sense of - an unknown command is one - so
+ * waiting here cannot wait forever.
+ */
+static int wampes_close_where(const char *addr,
+			      const char *(*pick)(void *arg, const char *line),
+			      void *arg)
+{
+	char line[512];
+	const char *handle = NULL;
+	int fd, r, save;
+
+	if ((fd = wampes_dial(addr)) < 0)
+		return -1;
+	if (write_all(fd, "sessions\n", 9) != 0)
+		goto fail;
+	while ((r = read_line(fd, line, sizeof(line), NULL, 0)) >= 0) {
+		if (axsock_debug)
+			fprintf(stderr, "wampes: kill reads \"%s\"\n", line);
+		if (line[0] == '*')		/* "*** N session(s)" */
+			break;
+		if ((handle = pick(arg, line)) != NULL)
+			break;
+	}
+	if (handle == NULL) {
+		save = errno;
+		close(fd);
+		errno = r >= 0 ? ESRCH :
+			(r == WAMPES_EOF ? ECONNRESET : save);
+		return -1;
+	}
+	if (write_all(fd, "close ", 6) != 0 ||
+	    write_all(fd, handle, strlen(handle)) != 0 ||
+	    write_all(fd, "\n", 1) != 0)
+		goto fail;
+	close(fd);
+	return 0;
+fail:
+	save = errno;
+	close(fd);
+	errno = save;
+	return -1;
+}
+
+/* The pair a kill named, and where the row it names keeps its handle. */
+struct wampes_pair_find {
+	const char *src;
+	const char *dest;
+	char handle[16];
+};
+
+static const char *wampes_pair_pick(void *arg, const char *line)
+{
+	struct wampes_pair_find *k = arg;
+
+	if (wampes_row_handle(line, k->src, k->dest, k->handle,
+			      sizeof(k->handle)) != 0)
+		return NULL;
+	return k->handle;
+}
+
+/* Ask the node which of its forwardings is the one named, and let it go. */
+static int wampes_kill(const char *addr, const ax25_address *src,
+		       const ax25_address *dest)
+{
+	struct wampes_pair_find k;
+	char srcname[WAMPES_CALLLEN];
+	char destname[WAMPES_CALLLEN];
+
+	/* ax25_ntoa() hands back one shared buffer - copy before the next. */
+	strncpy(srcname, ax25_ntoa(src), sizeof(srcname) - 1);
+	srcname[sizeof(srcname) - 1] = '\0';
+	strncpy(destname, ax25_ntoa(dest), sizeof(destname) - 1);
+	destname[sizeof(destname) - 1] = '\0';
+
+	k.src = srcname;
+	k.dest = destname;
+	return wampes_close_where(addr, wampes_pair_pick, &k);
+}
+
+int wampes_ioctl(int fd, unsigned long request, void *arg, int *ret)
+{
+	struct ax25_ctl_struct *ctl = arg;
+	const char *name;
+	const char *addr;
+
+	(void) fd;
+
+	if (request != SIOCAX25CTLCON)
+		return 0;
+	if (ctl == NULL) {
+		errno = EFAULT;
+		*ret = -1;
+		return 1;
+	}
+
+	/* The port table belongs to the application, and a program that only
+	 * had this library preloaded never filled it - ask for it the way the
+	 * bind path does rather than read "not ours" out of an empty table. */
+	ax25_config_ports_ensure();
+	if ((name = ax25_config_get_port(&ctl->port_addr)) == NULL)
+		return 0;                       /* not a configured port */
+	if (wampes_node_addr(name) == NULL)
+		return 0;                       /* a port, but not one of ours */
+	addr = wampes_address(name);            /* WAMPES_SOCKET still wins */
+
+	/* Ours from here on.  A command we cannot carry out is refused, not
+	 * passed on: axctl(8) sends T1, N2 and the rest through the same
+	 * ioctl, and a fall-through would have the AGWPE backend answer for a
+	 * session it has never heard of. */
+	if (ctl->cmd != AX25_KILL) {
+		errno = EOPNOTSUPP;
+		*ret = -1;
+		return 1;
+	}
+
+	*ret = wampes_kill(addr, &ctl->source_addr, &ctl->dest_addr);
+	return 1;
+}
+
+/*---------------------------------------------------------------------------*/
+
+/* The configured nodes, by index, for a caller that has to ask each one what
+ * it carries.  The name is what wampes_address() and the "sessions" line of
+ * ax25netctl use; a machine with no wampes.conf has none, which is the same
+ * nothing that keeps bind() from claiming a port.
+ */
+int wampes_node_count(void)
+{
+	if (!Nodes_read)
+		wampes_config_load();
+	return Nnodes;
+}
+
+const char *wampes_node_name(int i)
+{
+	if (!Nodes_read)
+		wampes_config_load();
+	if (i < 0 || i >= Nnodes)
+		return NULL;
+	return Nodes[i].name;
+}
+
+/* Ask a node for its session table and hand every row to cb, in the order it
+ * arrived and without the "***" line that ends it.  node names the node, not
+ * one of its ports: the table is the node's, the same for every port of it.
+ *
+ * A callback that returns nonzero stops the walk, and the table is then a
+ * whole one - the caller chose to stop, the node did not.  Returns 0 when the
+ * table came whole, -1 with errno set when the node could not be reached or
+ * the list broke off before its terminator (ECONNRESET): half a table must
+ * not read as a whole one.
+ */
+int wampes_sessions(const char *node,
+		    int (*cb)(void *arg, const char *line), void *arg)
+{
+	char line[512];
+	int fd, r, save;
+
+	if (cb == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+	if ((fd = wampes_dial(wampes_address(node))) < 0)
+		return -1;
+	if (write_all(fd, "sessions\n", 9) != 0)
+		goto fail;
+	while ((r = read_line(fd, line, sizeof(line), NULL, 0)) >= 0) {
+		if (axsock_debug)
+			fprintf(stderr, "wampes: sessions reads \"%s\"\n", line);
+		if (line[0] == '*') {		/* "*** N session(s)" */
+			close(fd);
+			return 0;
+		}
+		if (cb(arg, line) != 0) {
+			close(fd);
+			return 0;
+		}
+	}
+	save = errno;
+	close(fd);
+	errno = r == WAMPES_EOF ? ECONNRESET : save;
+	return -1;
+fail:
+	save = errno;
+	close(fd);
+	errno = save;
+	return -1;
+}
+
+/* The handle a close named, and the id column it has to match. */
+struct wampes_id_find {
+	const char *want;
+};
+
+static const char *wampes_id_pick(void *arg, const char *line)
+{
+	struct wampes_id_find *k = arg;
+	size_t n = strcspn(line, " \t");
+
+	if (n == 0 || line[0] == '-')
+		return NULL;			/* a claim is not a session */
+	if (n == strlen(k->want) && strncmp(line, k->want, n) == 0)
+		return k->want;
+	return NULL;
+}
+
+int wampes_close_session(const char *node, const char *handle)
+{
+	struct wampes_id_find k;
+
+	/* A handle is the node's own running number, nothing else.  Checked
+	 * here so that "close -" and "close 4x" are the argument errors they
+	 * are rather than a search for a row the node cannot have.
+	 */
+	if (handle == NULL || *handle == '\0' ||
+	    strspn(handle, "0123456789") != strlen(handle)) {
+		errno = EINVAL;
+		return -1;
+	}
+	k.want = handle;
+	return wampes_close_where(wampes_address(node), wampes_id_pick, &k);
+}
+
+/*---------------------------------------------------------------------------*/
+
 int wampes_close(int fd)
 {
 	struct wampes_sock *s;
 	int ctl;
+	int disc = 0;
+	int dnpath = 0;
+	int dwe = 0;
+	ax25_address dme, dhim;
+	ax25_address dpath[AX25_MAX_DIGIS], mpath[AX25_MAX_DIGIS];
 
 	/* Take the entry out of the list and drop the list reference while
 	 * holding the lock; the in-flight reference below keeps it alive
@@ -2260,10 +2765,31 @@ int wampes_close(int fd)
 	 * application's: nothing else will ever close it. */
 	ctl = s->ctl;
 	s->ctl = -1;
+	/* A connected link that goes away says so on the air: the mirror
+	 * shows our DISC going out, in the direction it travels.  Copied
+	 * out here because the entry is freed below.  A listening or
+	 * datagram socket has no link and says nothing. */
+	if (s->connected && s->have_me && s->have_him) {
+		int i;
+
+		dme = s->me.fsa_ax25.sax25_call;
+		dhim = s->him.fsa_ax25.sax25_call;
+		dwe = s->we_called;
+		dnpath = (s->npath > AX25_MAX_DIGIS) ?
+			AX25_MAX_DIGIS : s->npath;
+		for (i = 0; i < dnpath; i++)
+			dpath[i] = s->path[i];
+		disc = 1;
+	}
 	sock_drop_locked(s);
 	pthread_mutex_unlock(&wampes_lock);
 	if (ctl >= 0)
 		close(ctl);
+	if (disc) {
+		int n = wampes_link_path(dwe, dpath, dnpath, 0, mpath);
+
+		wampes_mirror_link(&dhim, &dme, mpath, n, WAMPES_CTL_DISC);
+	}
 	sock_put(s);
 	return 0;
 }

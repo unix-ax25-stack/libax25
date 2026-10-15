@@ -71,13 +71,15 @@ struct agwpe_port_list {
  * id is the server's handle for the session, stable for as long as it lives,
  * and is what a kill by id names; port is the flat port the session runs on,
  * up the upstream it belongs to ("loop" for the virtual port), and chan the
- * radio channel there.  from is the local call, to the remote station.
+ * radio channel there.  from is the caller and to the called, so the row reads
+ * in the direction the call travelled; path is the digipeater path in that
+ * same direction, comma-separated and "-" when there was none.
  *
- * state is the link state as the server sees it: "SABM" while a connect has
- * gone out and is not yet answered, "ESTABLISHED" once it is up, and
- * "LISTENING" for a registered listening call no one has connected to yet.
- * It is empty for a server that does not send it, which is what a reader is
- * handed by a netd old enough to lack it.
+ * state is the link state as the server sees it: "CONNECTING" while a
+ * connect has gone out and is not yet answered, "ESTABLISHED" once it is up,
+ * and "LISTENING" for a registered listening call no one has connected to
+ * yet.  It is empty for a server that does not send it, which is what a
+ * reader is handed by a netd old enough to lack it.
  *
  * A listening row is not a session and has no id: it is id 0 and the remote
  * is "*", any caller.  Everything else about the row reads the same, so a
@@ -98,6 +100,7 @@ struct agwpe_session {
 	char			state[16];
 	uint32_t		owner;
 	char			prog[16];
+	char			path[AGWPE_PATH_MAX];
 };
 
 /*

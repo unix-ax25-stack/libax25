@@ -873,16 +873,18 @@ static void parse_ports(agwpe_client_t *c, const unsigned char *data, size_t len
  * Parse the session reply: the subcommand byte, then ';' separated ASCII
  * tokens, the first the number of rows.  Each row is
  *
- *	id port upstream chan from to pid [state] [owner prog]
+ *	id port upstream chan from to pid [state] [owner prog] [path]
  *
  * with decimal numbers, the call pair spelled as the server keeps it, and an
- * optional trailing link state ("SABM", "ESTABLISHED" or "LISTENING").  A row
- * that does not parse in its first seven fields is skipped rather than guessed
- * at: a table that is wrong should show as short, not as a session that is not
- * there.  A server that predates a word still fills the row it knows.
+ * optional trailing link state ("CONNECTING", "ESTABLISHED" or "LISTENING").
+ * A row that does not parse in its first seven fields is skipped rather than
+ * guessed at: a table that is wrong should show as short, not as a session
+ * that is not there.  A server that predates a word still fills the row it
+ * knows.
  *
- * After the state come the owning process id and its name.  A server that does
- * not send them leaves owner 0 and prog "-".
+ * After the state come the owning process id and its name, and after those
+ * the digipeater path in the direction from -> to.  A server that does not
+ * send them leaves owner 0, prog "-" and path "-".
  */
 static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 			   size_t len)
@@ -912,7 +914,7 @@ static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 	while (p != NULL && list->count < AGWPE_SESSION_MAX) {
 		unsigned int id, port, chan, pid, owner = 0;
 		char up[24], from[AGWPE_MAX_CALL], to[AGWPE_MAX_CALL];
-		char state[16], prog[16];
+		char state[16], prog[16], path[AGWPE_PATH_MAX];
 		struct agwpe_session *e;
 
 		tok = p;
@@ -928,15 +930,16 @@ static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 
 		/*
 		 * The trailing words are the server's: the link state, then
-		 * the owning pid and its name.  An older server sends fewer,
-		 * what it omits stays empty (or 0), and the row is still a
-		 * row.
+		 * the owning pid and its name, then the path.  An older
+		 * server sends fewer, what it omits stays empty (or 0), and
+		 * the row is still a row.
 		 */
 		state[0] = '\0';
 		prog[0] = '\0';
-		if (sscanf(tok, "%u %u %23s %u %9s %9s %u %15s %u %15s",
+		path[0] = '\0';
+		if (sscanf(tok, "%u %u %23s %u %9s %9s %u %15s %u %15s %87s",
 			   &id, &port, up, &chan, from, to, &pid, state,
-			   &owner, prog) < 7)
+			   &owner, prog, path) < 7)
 			continue;
 
 		e = &list->sessions[list->count];
@@ -951,6 +954,8 @@ static void parse_sessions(agwpe_client_t *c, const unsigned char *data,
 		e->owner = (uint32_t)owner;
 		snprintf(e->prog, sizeof(e->prog), "%s",
 			 prog[0] != '\0' ? prog : "-");
+		snprintf(e->path, sizeof(e->path), "%s",
+			 path[0] != '\0' ? path : "-");
 		list->count++;
 	}
 

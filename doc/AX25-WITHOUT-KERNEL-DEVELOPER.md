@@ -327,13 +327,19 @@ framing on the way to the application — the descriptor is a socketpair and a
 byte stream, so each frame arrives behind a length and the sender's callsign,
 which is what lets `recvfrom()` name it.
 
-Both routes exist, and which one is in force follows the port.  On the loop
-port of `ax25netd(8)` the daemon routes a UI frame to whoever registered the
-destination callsign, and it arrives directly.  Anywhere else nobody does —
-AGWPE has no per-callsign UI delivery, only the monitor stream — so a datagram
-socket there asks for raw monitoring and the frames it wants are picked out of
-what comes back.  That is not a workaround; carrying every frame is what a
-monitor channel is for.
+The daemon routes the frame to whoever holds the destination callsign, on
+every port alike.  On the loop port of `ax25netd(8)` that is the mechanism it
+has always had.  On a radio port the same delivery now runs: the datagram
+socket subscribes to it (`agwpe_client_uisub()`), and every heard frame
+addressed to one of its call signs is handed to it as an `M` frame
+(`mux_upstream_ui()`), the pid picking between its sockets as it always did.
+
+This is deliberately not the monitor stream.  The stream is a toggle on the
+whole connection, so a datagram socket that turned it on to pick its frames
+out of it had every frame of every session on every port of the server
+duplicated into that one connection — and left it on, for the whole process,
+for as long as that socket was open.  A subscription says only which call
+signs are wanted.
 
 The copy of the station's own transmission is suppressed, because a station is
 not told its own frames.  Only that: a digipeater repeating us carries the

@@ -41,6 +41,11 @@ extern "C" {
 #define	AGWPE_MAX_CALL		10
 #define	AGWPE_MAX_DIGIS		8
 
+/* A digipeater path: up to AGWPE_MAX_DIGIS calls and the commas between
+ * them, NUL-terminated.  Eight calls of nine characters and seven commas are
+ * 79, so this is the room for the most a row can carry.  */
+#define	AGWPE_PATH_MAX		(AGWPE_MAX_DIGIS * (AGWPE_MAX_CALL + 1))
+
 /* The wire protocol identifies the radio ports starting at zero.  */
 #define	AGWPE_PORT_DEFAULT	8000
 #define	AGWPE_PORT_MAX		100

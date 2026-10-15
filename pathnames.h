@@ -24,4 +24,9 @@
 #define	PROC_RS_NODES_FILE	"/proc/net/rose_nodes"
 #define	PROC_RS_ROUTES_FILE	"/proc/net/rose_routes"
 
+/* /var/lock is a Linux convention; macOS keeps these locks in /var/run */
+#ifdef __APPLE__
+#define	LOCK_SERIAL_DIR		"/var/run"
+#else
 #define	LOCK_SERIAL_DIR		"/var/lock"
+#endif

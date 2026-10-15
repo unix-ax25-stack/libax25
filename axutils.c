@@ -124,6 +124,28 @@ int ax25_aton_entry(const char *name, char *buf)
 	return 0;
 }
 
+/*
+ * ax25_aton_entry(), for a program that has nothing better to do with a
+ * rejected callsign than stop.  The reason is printed already, and every
+ * caller that went on anyway went on with a half written address: the
+ * callsign bytes are written as they are read, the SSID byte only at the
+ * end, so a text that failed between the two left whatever the buffer held
+ * before - the port's own SSID, most often, since that is what was parsed
+ * into the same bytes a line earlier.
+ *
+ * For a command line tool only, whose every callsign comes from its own
+ * arguments or its own configuration: one the parser rejects leaves it
+ * nothing to do, and a half written address is worse than no program.
+ * ax25netd parses AGWPE requests with the plain form and treats -1 as "drop
+ * this one", and a daemon reloading a configuration must be able to fall
+ * back rather than die - see netax25/axlib.h.
+ */
+void ax25_aton_entry_or_exit(const char *name, char *buf)
+{
+	if (ax25_aton_entry(name, buf) == -1)
+		exit(1);
+}
+
 int ax25_aton(const char *call, struct full_sockaddr_ax25 *sax)
 {
 	char *bp, *np;
@@ -219,6 +241,27 @@ int ax25_aton_arglist(const char *call[], struct full_sockaddr_ax25 *sax)
 	sax->fsa_ax25.sax25_family = AF_AX25;
 
 	return sizeof(struct full_sockaddr_ax25);
+}
+
+/*
+ * ax25_aton() and ax25_aton_arglist() under the same policy as
+ * ax25_aton_entry_or_exit() above.  Both reach ax25_aton_entry() for every
+ * address they are given, so a rejected one has been named on stderr
+ * already; what is left for a command line tool is to stop.  Its digipeater
+ * list and its port's own address are as much its input as the argument it
+ * was started with.
+ */
+void ax25_aton_or_exit(const char *call, struct full_sockaddr_ax25 *sax)
+{
+	if (ax25_aton(call, sax) == -1)
+		exit(1);
+}
+
+void ax25_aton_arglist_or_exit(const char *call[],
+			       struct full_sockaddr_ax25 *sax)
+{
+	if (ax25_aton_arglist(call, sax) == -1)
+		exit(1);
 }
 
 /*

@@ -57,6 +57,20 @@ extern ax25_address null_ax25_address;
 extern int ax25_aton_entry(const char *, char *);
 
 /*
+ * ax25_aton_entry(), ax25_aton() and ax25_aton_arglist(), for a program that
+ * reads its callsigns from its own arguments or configuration.  The reason
+ * has been named on stderr already, and there is nothing left to salvage
+ * afterwards: a caller that ignored the return went on with the callsign
+ * bytes written and the SSID byte untouched, which is how a source of "-0"
+ * left the station carrying the port's own SSID instead.
+ *
+ * Not for a daemon.  ax25netd reads the -1 on purpose - to drop one frame or
+ * skip one digipeater - and ax25d falls back to its old configuration when a
+ * reload fails.  Those keep the plain forms and their return.
+ */
+extern void ax25_aton_entry_or_exit(const char *, char *);
+
+/*
  * This converts a string with optional digipeaters into a structure understood
  * by the kernel code.
  *
@@ -68,12 +82,18 @@ extern int ax25_aton_entry(const char *, char *);
  */
 extern int ax25_aton(const char *, struct full_sockaddr_ax25 *);
 
+/* The same two, with ax25_aton_entry_or_exit()'s policy above. */
+extern void ax25_aton_or_exit(const char *, struct full_sockaddr_ax25 *);
+
 /*
  * Similar to convert_call above except the callsign(s) are not held in a
  * string but in a NULL terminated array of pointers to the strings.
  * On error a -1 is returned, otherwise the length of the structure is returned.
  */
 extern int ax25_aton_arglist(const char ** , struct full_sockaddr_ax25 *);
+
+extern void ax25_aton_arglist_or_exit(const char **,
+				      struct full_sockaddr_ax25 *);
 
 /*
  * This function converts an ASCII representation of a Rose address into

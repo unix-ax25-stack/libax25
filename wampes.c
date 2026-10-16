@@ -85,13 +85,6 @@
 #define WAMPES_CALLLEN  10              /* "DL9SAU-15" and the NUL */
 #define AX25_REPEATED	0x80		/* in the SSID byte, as on the air */
 
-/* AX.25 control bytes for the synthesized link frames of the mirror.  These
- * are the values mheard.c's ftype() reads back out, so SABM, UA and DISC are
- * recognized as themselves by a monitor and by the heard list. */
-#define WAMPES_CTL_SABM	0x2f
-#define WAMPES_CTL_DISC	0x43
-#define WAMPES_CTL_UA	0x63
-
 /* A socket the application holds.  After connect() the descriptor IS the
  * connection and nothing intercepts read(), write(), poll() or close() any
  * more; the entry stays only so that the two calls which have no meaning to
@@ -131,15 +124,6 @@ struct wampes_sock {
 	 */
 	struct full_sockaddr_ax25 me, him;
 	int have_me, have_him;
-	/* The digipeaters a connected link was set up through, in the
-	 * direction the call that opened it travelled: away from us when
-	 * connect() opened it (we_called), toward us when accept() took a
-	 * call.  Kept only so that the synthesized link frames of the mirror
-	 * carry the same path (documentation/..., (C) and (F)); npath is 0
-	 * when there is no path or nothing is known. */
-	ax25_address path[AX25_MAX_DIGIS];
-	int npath;
-	int we_called;
 };
 
 static struct wampes_sock *Socks;
@@ -981,19 +965,6 @@ int wampes_bind(int fd, const struct sockaddr *addr, socklen_t len, int *ret)
  */
 static int write_all(int fd, const void *data, size_t len);
 
-/* The mirror of a connected link's lifecycle (SABM/UA/DISC) is defined with
- * the other mirror helpers further down; connect(), accept() and close() use
- * it, so it and the path helper it uses are declared here. */
-static void wampes_mirror_link(const ax25_address *dest,
-			       const ax25_address *src,
-			       const ax25_address *digis, int ndigis,
-			       unsigned char ctl);
-static int wampes_link_path(int we_called, const ax25_address *path, int npath,
-			    int to_us, ax25_address *out);
-static void wampes_mirror_setup(int we_called, const ax25_address *path,
-				int npath, const ax25_address *me,
-				const ax25_address *him, unsigned char sabm);
-
 int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 		   int *ret)
 {
@@ -1011,10 +982,6 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	struct wampes_sock *s;
 	/* the source this call goes out with, parsed once below */
 	ax25_address me;
-	/* mirror of the setup: values copied out under the lock */
-	ax25_address path[AX25_MAX_DIGIS];
-	int npath;
-	ax25_address mirror_me, mirror_him;
 
 	/* keep the entry alive while the node answers: the dial and the
 	 * verdict run without the lock, during which a close() on another
@@ -1198,26 +1165,8 @@ int wampes_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	 * and cannot fail here. */
 	s->me.fsa_ax25.sax25_call = me;
 	s->have_me = 1;
-	/* The digipeaters this call goes out through, in the direction it
-	 * travels, kept so the synthesized SABM/UA of the mirror carry the
-	 * same path (documentation/..., (C) and (F)).  Copied out here
-	 * because the mirror runs after the lock is dropped. */
-	s->we_called = 1;
-	s->npath = 0;
-	for (i = 0; i < ndigis && i < AX25_MAX_DIGIS; i++) {
-		s->path[i] = fsa->fsa_digipeater[i];
-		s->npath++;
-	}
-	npath = s->npath;
-	memcpy(path, s->path, sizeof(path));
-	mirror_me = s->me.fsa_ax25.sax25_call;
-	mirror_him = s->him.fsa_ax25.sax25_call;
 	sock_unref(s);
 	pthread_mutex_unlock(&wampes_lock);
-	/* The exchange the link setup made, as a monitor would have heard
-	 * it: our SABM going out, the callee's UA coming back. */
-	wampes_mirror_setup(1, path, npath, &mirror_me, &mirror_him,
-			    WAMPES_CTL_SABM);
 	*ret = 0;
 	return 1;
 }
@@ -1370,8 +1319,6 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 	struct wampes_sock *s;
 	int listening;
 	int n;
-	int mn;				/* the mirror of the setup */
-	ax25_address mpath[AX25_MAX_DIGIS], mme, mhim;
 
 	/* The parent entry is kept alive while accept() blocks on the node.
 	 * A close() of the listening socket from another thread would
@@ -1437,7 +1384,6 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 		struct full_sockaddr_ax25 him, me;
 		struct wampes_sock *ns;
 		char *arrow;
-		int i;
 
 		memset(&him, 0, sizeof(him));
 		memset(&me, 0, sizeof(me));
@@ -1477,16 +1423,6 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 			ns->him = him;
 			ns->have_me = 1;
 			ns->have_him = 1;
-			/* The path the caller came by, in the direction it
-			 * travelled (toward us); the mirror reads it back out
-			 * for either direction ((C) and (F)). */
-			ns->we_called = 0;
-			ns->npath = 0;
-			for (i = 0; i < him.fsa_ax25.sax25_ndigis &&
-			     i < AX25_MAX_DIGIS; i++) {
-				ns->path[i] = him.fsa_digipeater[i];
-				ns->npath++;
-			}
 			snprintf(ns->port, sizeof(ns->port), "%s", port);
 			pthread_mutex_lock(&wampes_lock);
 			ns->next = Socks;
@@ -1494,22 +1430,8 @@ int wampes_accept(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret)
 			Nsocks++;
 			pthread_mutex_unlock(&wampes_lock);
 		}
-		/* Copy the calls and the path out for the mirror, which runs
-		 * without any lock.  Even when the entry could not be made the
-		 * exchange happened and is worth showing. */
-		mn = 0;
-		for (i = 0; i < him.fsa_ax25.sax25_ndigis &&
-		     i < AX25_MAX_DIGIS; i++) {
-			mpath[i] = him.fsa_digipeater[i];
-			mn++;
-		}
-		mme = me.fsa_ax25.sax25_call;
-		mhim = him.fsa_ax25.sax25_call;
 	}
 	sock_put(s);
-	/* The exchange the link setup made, as a monitor would have heard it:
-	 * the caller's SABM coming in, our UA going back. */
-	wampes_mirror_setup(0, mpath, mn, &mme, &mhim, WAMPES_CTL_SABM);
 	*ret = newfd;
 	return 1;
 }
@@ -1565,244 +1487,6 @@ static int write_all(int fd, const void *data, size_t len)
 
 /*---------------------------------------------------------------------------*/
 
-/* Mirror one frame into the ax25netd monitor channel.
- *
- * The program on this backend sends and receives UI frames over the node's
- * line protocol, so a packet socket (listen) on the same machine never sees
- * that traffic as a frame.  It is still radio traffic, so it belongs in the
- * monitor.
- *
- * ax25netd's loop port 255 re-broadcasts every raw ('K') frame it receives
- * to its own raw monitor clients verbatim - there is nothing to decode on
- * the server, the client sends the finished frame.  So this builds the
- * finished frame exactly the way the server would for an outgoing UI frame
- * (see mux_mirror_raw in ax25-apps/ax25netd): KISS marker, the addresses
- * with the bit patterns direwolf transmits, the last address end-of-field
- * marker, control 0x03 (UI), the PID, the payload.  The has-been-repeated
- * bit ('*' of the TNC2 notation) rides inside the SSID byte it arrived in.
- *
- * The connection to ax25netd is lazy: a datagram socket should not pay for
- * one, let alone open it for a program that only sends beacons, and a
- * server that is not there - the normal case - must not be an error for the
- * sendto() or recvfrom() this is called from.  Nothing here may touch
- * errno, and a server that cannot be reached simply stays unmoved until a
- * later frame finds it again.
- */
-
-static agwpe_client_t *wampes_mirror_client;
-
-static int wampes_mirror_open(void)
-{
-	const struct agwpe_client_cb cb = { 0 };
-	const char *host, *user, *pass;
-	int port;
-
-	if (wampes_mirror_client != NULL) {
-		if (agwpe_client_connected(wampes_mirror_client))
-			return 0;
-
-		/* The server died since; drop the corpse and let a later
-		 * frame find it again. */
-		agwpe_client_free(wampes_mirror_client);
-		wampes_mirror_client = NULL;
-	}
-
-	/* One resolution, the one the AGWPE client itself uses: ax25common.conf
-	 * first, so a node whose loop port is a unix socket is found there and
-	 * not on an address of its own. */
-	host = axsock_server_endpoint(&port);
-	if (host == NULL) {
-		/* Nothing names a server, so there is nothing to mirror into.
-		 * The connector does not need one and must not be charged for
-		 * the monitor wanting it - return and let the frame go. */
-		if (axsock_debug)
-			fprintf(stderr, "wampes: %s - not mirroring frames\n",
-				axsock_server_name());
-		return -1;
-	}
-
-	wampes_mirror_client = agwpe_client_new(&cb, NULL);
-	if (wampes_mirror_client == NULL)
-		return -1;
-
-	if (host[0] == '/') {
-		if (agwpe_client_connect_unix(wampes_mirror_client, host) != 0)
-			goto fail;
-	} else if (agwpe_client_connect_host(wampes_mirror_client, host,
-					     port) != 0) {
-		goto fail;
-	}
-
-	user = getenv("AXSOCK_USER");
-	if (user != NULL && user[0] != '\0') {
-		pass = getenv("AXSOCK_PASSWORD");
-		agwpe_client_login(wampes_mirror_client, user,
-				   (pass != NULL) ? pass : "");
-	}
-
-	return 0;
-
-fail:
-	agwpe_client_free(wampes_mirror_client);
-	wampes_mirror_client = NULL;
-	return -1;
-}
-
-/* Lay the address field of a raw frame into buf: KISS data marker, the
- * destination, the source, the digipeaters in the order the frame traverses
- * them, and the end-of-address bit.  Returns how many bytes that took.
- * Shared by the UI mirror and the synthesized link frames, which differ only
- * in what follows the addresses.
- *
- * ax25_ntoa() returns one static buffer, so the header's two call names are
- * copied out one at a time; two calls in one argument list would leave both
- * names holding what the second one produced.
- */
-static size_t wampes_mirror_addr(unsigned char *buf,
-				 const ax25_address *dest,
-				 const ax25_address *src,
-				 const ax25_address *digis, int ndigis)
-{
-	unsigned char *p = buf;
-	int i;
-
-	if (ndigis > AX25_MAX_DIGIS)
-		ndigis = AX25_MAX_DIGIS;
-
-	*p++ = 0;				/* KISS data marker */
-
-	memcpy(p, dest->ax25_call, 7);
-	p[6] |= 0xE0;
-	p += 7;
-
-	memcpy(p, src->ax25_call, 7);
-	p[6] |= 0x60;
-	p += 7;
-
-	for (i = 0; i < ndigis; i++) {
-		memcpy(p, digis[i].ax25_call, 7);
-		p[6] |= 0x60;
-		p += 7;
-	}
-	p[-1] |= 0x01;				/* end of the address field */
-
-	return (size_t) (p - buf);
-}
-
-static void wampes_mirror_frame(const ax25_address dest,
-				const ax25_address src,
-				const ax25_address *digis, int ndigis,
-				unsigned char pid,
-				const unsigned char *info, size_t ilen)
-{
-	unsigned char buf[1 + 7 * (AX25_MAX_DIGIS + 2) + 2 + 256];
-	char from[WAMPES_CALLLEN], to[WAMPES_CALLLEN];
-	struct agwpe_s hdr;
-	size_t n;
-
-	if (wampes_mirror_open() != 0)
-		return;
-
-	n = wampes_mirror_addr(buf, &dest, &src, digis, ndigis);
-
-	buf[n++] = 0x03;			/* UI, command */
-	buf[n++] = pid;
-
-	if (info != NULL && ilen > 0) {
-		if (ilen > sizeof(buf) - n)
-			ilen = sizeof(buf) - n;
-		memcpy(buf + n, info, ilen);
-		n += ilen;
-	}
-
-	snprintf(from, sizeof(from), "%s", ax25_ntoa(&src));
-	snprintf(to, sizeof(to), "%s", ax25_ntoa(&dest));
-	agwpe_header_init(&hdr, AGWPE_PORT_LOOP, AGWPE_CMD_RAW, pid,
-			  from, to, (uint32_t) n);
-	(void) agwpe_client_send_frame(wampes_mirror_client, &hdr, buf);
-}
-
-/* Mirror one synthesized link frame: the SABM of a connect, the UA of an
- * accept, the DISC of a close.  It has no PID and no information field, so
- * nothing is invented beyond the fact and the direction of the exchange -
- * which is why the frame layer can be shown at all (documentation/..., 4e).
- * ctl is the AX.25 control byte (SABM/SABME/UA/DISC/DM), the same values
- * mheard.c reads back out.
- */
-static void wampes_mirror_link(const ax25_address *dest,
-			       const ax25_address *src,
-			       const ax25_address *digis, int ndigis,
-			       unsigned char ctl)
-{
-	unsigned char buf[1 + 7 * (AX25_MAX_DIGIS + 2) + 1];
-	char from[WAMPES_CALLLEN], to[WAMPES_CALLLEN];
-	struct agwpe_s hdr;
-	size_t n;
-
-	if (wampes_mirror_open() != 0)
-		return;
-
-	n = wampes_mirror_addr(buf, dest, src, digis, ndigis);
-	buf[n++] = ctl;
-
-	snprintf(from, sizeof(from), "%s", ax25_ntoa(src));
-	snprintf(to, sizeof(to), "%s", ax25_ntoa(dest));
-	agwpe_header_init(&hdr, AGWPE_PORT_LOOP, AGWPE_CMD_RAW, 0,
-			  from, to, (uint32_t) n);
-	(void) agwpe_client_send_frame(wampes_mirror_client, &hdr, buf);
-}
-
-/* The digipeaters of a connected link, in the direction a frame asked for
- * travels: away from us (to_us == 0) or toward us (to_us == 1).  path/npath
- * are stored in the direction of the call that opened the link - away from
- * us when we_called, toward us when the other end called - so they are used
- * as they stand for the frame that opened it and reversed for the other
- * direction, which walks the same digipeaters the other way round.  The
- * values are passed in rather than read from the entry so that the caller
- * can copy them under the lock and mirror afterwards, when the entry may
- * already be gone.  Returns the number of digipeaters written to out.
- */
-static int wampes_link_path(int we_called, const ax25_address *path, int npath,
-			    int to_us, ax25_address *out)
-{
-	int i, reverse;
-
-	if (npath > AX25_MAX_DIGIS)
-		npath = AX25_MAX_DIGIS;
-	reverse = we_called ? to_us : !to_us;
-
-	for (i = 0; i < npath; i++)
-		out[i] = reverse ? path[npath - 1 - i] : path[i];
-	return npath;
-}
-
-/* Both frames of a link setup, as a monitor would have heard them: the SABM
- * that opened it and the UA that came back.  We called when we_called is
- * set - our SABM went out and the callee's UA came in - otherwise the other
- * end called and we answered.  Either way the two frames travel opposite
- * ways and their paths are read accordingly, so the exchange reads in the
- * direction each frame really went.
- */
-static void wampes_mirror_setup(int we_called, const ax25_address *path,
-				int npath, const ax25_address *me,
-				const ax25_address *him, unsigned char sabm)
-{
-	ax25_address p[AX25_MAX_DIGIS];
-	int n;
-
-	if (we_called) {
-		n = wampes_link_path(we_called, path, npath, 0, p);
-		wampes_mirror_link(him, me, p, n, sabm);	/* our SABM */
-		n = wampes_link_path(we_called, path, npath, 1, p);
-		wampes_mirror_link(me, him, p, n, WAMPES_CTL_UA);/* his UA */
-	} else {
-		n = wampes_link_path(we_called, path, npath, 1, p);
-		wampes_mirror_link(me, him, p, n, sabm);	/* his SABM */
-		n = wampes_link_path(we_called, path, npath, 0, p);
-		wampes_mirror_link(him, me, p, n, WAMPES_CTL_UA);/* our UA */
-	}
-}
-
 /* The callsign a frame goes out under: the one bind() gave the socket, or
  * the callsign of the axports entry the socket is on when nothing was bound.
  * NULL if there is neither - such a socket has nothing to send a frame from.
@@ -1818,45 +1502,6 @@ static const char *wampes_source_call(const struct wampes_sock *s)
 	    (portcall = ax25_config_get_addr((char *) s->port)) != NULL)
 		return portcall;
 	return NULL;
-}
-
-static void wampes_mirror_path(const struct wampes_sock *s,
-			       const ax25_address *dest,
-			       const ax25_address *src7,
-			       const ax25_address *digis, int ndigis,
-			       int send,
-			       const unsigned char *info, size_t ilen)
-{
-	const ax25_address empty = { { 0 } };
-	ax25_address srcbuf;
-	ax25_address path[AX25_MAX_DIGIS];
-	int i;
-
-	if (src7 == NULL) {
-		const char *src = wampes_source_call(s);
-
-		if (src == NULL)
-			return;
-		if (ax25_aton_entry(src, srcbuf.ax25_call) != 0)
-			return;
-		src7 = &srcbuf;
-	}
-	if (dest == NULL)
-		dest = &empty;
-	if (send) {
-		/* Outgoing.  wampes_sendto prints "*" for a digi whose handle
-		 * carries the has-been-repeated bit, the node understands it
-		 * and the H-bit is on the air, so what is mirrored is what
-		 * left the port - nothing to mask.  The bytes are copied to a
-		 * local buffer only so that nothing here writes into the
-		 * caller's sockaddr. */
-		for (i = 0; i < ndigis && i < AX25_MAX_DIGIS; i++)
-			path[i] = digis[i];
-		digis = path;
-	}
-	wampes_mirror_frame(*dest, *src7, digis, ndigis,
-			    (unsigned char) (s->pid != 0 ? s->pid : 0xf0),
-			    info, ilen);
 }
 
 ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
@@ -2024,11 +1669,6 @@ ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,
 	}
 	*ret = (ssize_t) len;
 
-	/* It is out.  Mirror it now: anything that fails here must not
-	 * change the outcome of the sendto() the application just made. */
-	wampes_mirror_path(s, &sa->sax25_call, NULL,
-			   ndigis ? digis : NULL, ndigis,
-			   1, buf, len);
 	sock_put(s);
 	return 1;
 }
@@ -2336,18 +1976,6 @@ ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
 		memcpy(addr, &him, *alen);
 	}
 
-	/* It is in.  Mirror it now, with the has-been-repeated bits the node
-	 * reported; anything that fails here must not touch errno or the
-	 * frame the application just received. */
-	{
-		ax25_address dest;
-
-		if (ax25_aton_entry(local, dest.ax25_call) == 0)
-			wampes_mirror_path(s, &dest, &him.fsa_ax25.sax25_call,
-					   him.fsa_digipeater,
-					   him.fsa_ax25.sax25_ndigis, 0,
-					   buf, (size_t) *ret);
-	}
 	sock_put(s);
 	return 1;
 }
@@ -2762,11 +2390,6 @@ int wampes_close(int fd)
 {
 	struct wampes_sock *s;
 	int ctl;
-	int disc = 0;
-	int dnpath = 0;
-	int dwe = 0;
-	ax25_address dme, dhim;
-	ax25_address dpath[AX25_MAX_DIGIS], mpath[AX25_MAX_DIGIS];
 
 	/* Take the entry out of the list and drop the list reference while
 	 * holding the lock; the in-flight reference below keeps it alive
@@ -2784,31 +2407,10 @@ int wampes_close(int fd)
 	 * application's: nothing else will ever close it. */
 	ctl = s->ctl;
 	s->ctl = -1;
-	/* A connected link that goes away says so on the air: the mirror
-	 * shows our DISC going out, in the direction it travels.  Copied
-	 * out here because the entry is freed below.  A listening or
-	 * datagram socket has no link and says nothing. */
-	if (s->connected && s->have_me && s->have_him) {
-		int i;
-
-		dme = s->me.fsa_ax25.sax25_call;
-		dhim = s->him.fsa_ax25.sax25_call;
-		dwe = s->we_called;
-		dnpath = (s->npath > AX25_MAX_DIGIS) ?
-			AX25_MAX_DIGIS : s->npath;
-		for (i = 0; i < dnpath; i++)
-			dpath[i] = s->path[i];
-		disc = 1;
-	}
 	sock_drop_locked(s);
 	pthread_mutex_unlock(&wampes_lock);
 	if (ctl >= 0)
 		close(ctl);
-	if (disc) {
-		int n = wampes_link_path(dwe, dpath, dnpath, 0, mpath);
-
-		wampes_mirror_link(&dhim, &dme, mpath, n, WAMPES_CTL_DISC);
-	}
 	sock_put(s);
 	return 0;
 }

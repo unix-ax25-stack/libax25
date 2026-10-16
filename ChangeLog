@@ -1,3 +1,8 @@
+libax25 (git)
+	* Maintained at https://github.com/unix-ax25-stack/libax25
+	  since August 2026.  All packages of the project:
+	  https://github.com/unix-ax25-stack/
+
 libax25 0.0.12
 
 	* Interfaces with a callsign without SSID were not been found anymore

@@ -1,6 +1,9 @@
 AX25 Library
 ============
 
+Maintained at https://github.com/unix-ax25-stack/libax25 since August 2026.
+All packages of the project: https://github.com/unix-ax25-stack/
+
 This library set is still really under test but is now release for
 general use.
 

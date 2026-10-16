@@ -122,13 +122,16 @@ A program
 .B linked
 against
 .B libax25
-needs nothing beyond the configuration files.  A program that opens an AX.25
-socket
-.B without
-ever calling a
+\-\- one built with
+.B \-lax25
+\-\- needs nothing beyond the configuration files.  On Linux that holds even
+for a program that never called a
 .B libax25
-function \-\- a script, or a daemon written when the kernel still answered \--
-can be made to use this without being recompiled, provided the library is
+function: the calls listed above answer for it too.  A program that opens
+an AX.25 socket
+.B without
+such a link \-\- a script, or a daemon written when the kernel still answered
+\-\- can be made to use this without being recompiled, provided the library is
 loaded before the C library.  On Linux, with the directory this build was
 configured to install the library into:
 .PP

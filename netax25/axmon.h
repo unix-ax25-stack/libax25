@@ -87,26 +87,39 @@ extern "C" {
  * shim backend, whose frames carry the length prefix described above;
  * zero means a kernel packet socket, one frame per recvfrom().  Ask once
  * after socket(), then pass the answer to every axmon_read().
+ *
+ * A WAMPES node's monitor is a stream of its own and answers 1 here as
+ * well - it is SOCK_STREAM, like the shim's - so axmon_open_mask() sets
+ * framed[] from what it opened rather than asking this.  This is the
+ * answer for the descriptor a caller made itself with axmon_socket().
  */
 extern int axmon_framed(int fd);
 
 /*
- * Open every source of raw AX.25 frames this machine has, which is two on a
- * host that has both a kernel AX.25 stack and an ax25netd.
+ * Open every source of raw AX.25 frames this machine has, which is three on a
+ * host that has all of them: the kernel's packet socket for the ports the
+ * kernel owns, ax25netd's monitor stream for the radios it carries, and each
+ * WAMPES node's own monitor for the traffic that crosses it.
  *
  * protocol is in network byte order, as socket() wants it.
  *
- * AXMON_MAX_FD is the upper bound, not a promise: a host has one kernel and
- * one ax25netd, so nfd is 1 or 2.  kind[] says which is which, because the
- * two differ in a way a caller has to act on - a kernel descriptor is a
- * packet socket that the kernel filters, and ETH_P_ALL on it still has to be
- * told apart from plain IP by asking the interface, while every frame on a
- * monitor descriptor is AX.25 already.
+ * AXMON_MAX_FD is the upper bound, not a promise: a host has one kernel, one
+ * ax25netd and one WAMPES node at most here, so nfd is 1 to 3.  kind[] says
+ * which is which, because they differ in a way a caller has to act on - a
+ * kernel descriptor is a packet socket that the kernel filters, and ETH_P_ALL
+ * on it still has to be told apart from plain IP by asking the interface,
+ * while every frame on a monitor descriptor is AX.25 already.
  *
  * port restricts the monitor to one axports entry, by name.  It need not be a
  * kernel port: every port that belongs to ax25netd has no interface behind
  * it, and "listen -p loop" is the obvious case that used to be refused as an
- * invalid port name for that reason.  NULL or "" is no restriction.
+ * invalid port name for that reason.  A name that belongs to a WAMPES node
+ * ("wampes:hf") opens that node's monitor and nothing else.  NULL or "" is no
+ * restriction: the kernel and ax25netd sources open broad, and for WAMPES it
+ * is the node WAMPES_SOCKET names, or the place the build was configured for
+ * when the environment names none.  A node that only wampes.conf describes is
+ * not opened by a monitor that named no port - with several nodes there is no
+ * one of them to pick, and picking is not this call's to do.
  *
  * Returns 0 with nfd set, or -1 with errno set (EINVAL for a name in no
  * axports entry, ENXIO when the machine has no source of raw frames at all).
@@ -114,9 +127,26 @@ extern int axmon_framed(int fd);
  * The frame contents are all there: addresses, control field, PID and
  * payload.  axmon_open_mask() is the same call with less of it.
  */
-#define	AXMON_MAX_FD		2
+#define	AXMON_MAX_FD		3
 #define	AXMON_KERNEL		0	/* a kernel packet socket */
 #define	AXMON_MONITOR		1	/* the ax25netd monitor stream */
+#define	AXMON_WAMPES		2	/* a WAMPES node's own monitor */
+
+/*
+ * What a monitor descriptor's frames look like, one value per descriptor -
+ * the framed[] field below, and the argument axmon_read() takes.  Not the
+ * same thing as kind[]: two descriptors of different kinds can arrive the
+ * same way, and this says how to read them.
+ *
+ *   AXMON_FRAMED_NONE    one whole frame per recvfrom(), as a packet socket;
+ *   AXMON_FRAMED_SHIM    a length-prefixed stream, taken apart by the shim
+ *                        before recvfrom() hands the payload over;
+ *   AXMON_FRAMED_WAMPES  a WAMPES node's raw records, taken apart in
+ *                        wampes.c before the payload reaches the caller.
+ */
+#define	AXMON_FRAMED_NONE	0
+#define	AXMON_FRAMED_SHIM	1
+#define	AXMON_FRAMED_WAMPES	2
 
 struct axmon {
 	int		fd[AXMON_MAX_FD];
@@ -147,8 +177,10 @@ extern int axmon_open(int protocol, const char *port, struct axmon *mon);
  * rather than filter one, and a frame that is missing its information field
  * is not a frame - it decodes as a different one.  So on a host with a kernel
  * AX.25 stack beside the ax25netd, a program that asked for no payloads still
- * gets them over the packet socket.  What the mask buys is what the server
- * sends, and on a host where ax25netd carries the ports that is all of it.
+ * gets them over the packet socket.  A WAMPES node's monitor is the same: the
+ * frames are handed over whole and the mask does not reach it.  What the mask
+ * buys is what the server sends, and on a host where ax25netd carries the
+ * ports that is all of it.
  *
  * Both of the things a monitor asks for live on the connection to the server,
  * not on the socket, because both are one bit on the wire:
@@ -209,8 +241,8 @@ extern int axmon_poll(struct axmon *mon, int timeout, unsigned *ready);
  */
 extern int axmon_alive(const struct axmon *mon);
 
-/* Name the source at idx, for a message: "AX.25 packet socket" or
- * "AX.25 monitor". */
+/* Name the source at idx, for a message: "AX.25 packet socket",
+ * "AX.25 monitor" or "WAMPES monitor". */
 extern const char *axmon_source_name(const struct axmon *mon, int idx);
 
 /*
@@ -237,10 +269,13 @@ extern void axmon_close(struct axmon *mon);
  * ended.  errno is set to 0 when 0 is returned, so an EOF can be told from
  * an error by either test.
  *
- * The shim strips its own header before the payload arrives, so both kinds
- * of descriptor hand over exactly one frame per call and the answer from
- * axmon_framed() no longer changes what this does.  It is still worth
- * asking: the two are not told apart anywhere else.
+ * The shim strips its own header before the payload arrives, so a shim
+ * descriptor hands over exactly one frame per call.  A WAMPES node's records
+ * are taken apart here for the same reason: either way the caller gets the
+ * payload the KISS decoder expects, one whole frame at a time.  The framed
+ * argument says which of the three the descriptor is - see the AXMON_FRAMED_*
+ * values - and it is what decides whether the raw recvfrom() or the WAMPES
+ * reader is used.
  */
 extern ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
 			  struct sockaddr *sa, socklen_t *asize);

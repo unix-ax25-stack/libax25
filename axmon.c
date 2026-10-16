@@ -47,6 +47,7 @@
 #include "netax25/axconfig.h"
 #include "netax25/agwpe_config.h"
 #include "agwpe_sock.h"
+#include "wampes.h"
 #include "axsock_real.h"
 
 /*
@@ -124,13 +125,21 @@ ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
 {
 	ssize_t n;
 
-	/* Both kinds of descriptor hand over one frame per call: the kernel
-	 * one because a packet socket is message oriented, the shim one
-	 * because it takes its header off in recvfrom() before the
-	 * payload reaches us (see netax25/axmon.h).  That is what the
-	 * framing is for - a stream would otherwise run two frames that
-	 * arrive back to back into one read - and it is why the header
-	 * moved into the shim, where the writer of it already was.  */
+	/*
+	 * A WAMPES node's records are not stripped anywhere the caller can
+	 * see, so they are taken apart here, before the payload reaches it.
+	 * Same result either way: one whole KISS framed frame per call.
+	 */
+	if (framed == AXMON_FRAMED_WAMPES)
+		return wampes_mon_read(fd, buf, buflen, sa, asize);
+
+	/* The other two kinds of descriptor hand over one frame per call: the
+	 * kernel one because a packet socket is message oriented, the shim one
+	 * because it takes its header off in recvfrom() before the payload
+	 * reaches us (see netax25/axmon.h).  That is what the framing is for -
+	 * a stream would otherwise run two frames that arrive back to back
+	 * into one read - and it is why the header moved into the shim, where
+	 * the writer of it already was.  */
 	(void) framed;
 
 	n = mon_read(fd, buf, buflen, sa, asize);
@@ -346,6 +355,29 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 		}
 	}
 
+	/*
+	 * A WAMPES node's own monitor.  Beside the other two rather than
+	 * behind them: a node's frames are not the kernel's and, once the
+	 * node stopped mirroring them into ax25netd, not the shim's either.
+	 * wampes_mon_open() answers 0 for a port that belongs to nobody here,
+	 * so a kernel or ax25netd entry leaves this source closed.
+	 */
+	{
+		int fd;
+
+		if (wampes_mon_open(protocol, port, &fd) == 1 && fd >= 0) {
+			mon->fd[mon->nfd] = fd;
+			mon->framed[mon->nfd] = AXMON_FRAMED_WAMPES;
+			mon->mask |= (unsigned char)(1u << mon->nfd);
+			mon->kind[mon->nfd] = AXMON_WAMPES;
+			mon->nfd++;
+			if (axsock_debug && mask != AXMON_MASK_ALL)
+				fprintf(stderr, "axmon: the payload mask does "
+					"not reach the WAMPES monitor - the "
+					"node sends whole frames\n");
+		}
+	}
+
 	if (mon->nfd == 0) {
 		/*
 		 * Neither.  Say which, because the two reasons need different
@@ -453,9 +485,14 @@ const char *axmon_source_name(const struct axmon *mon, int idx)
 {
 	if (idx < 0 || idx >= mon->nfd)
 		return "AX.25 source";
-	return (mon->kind[idx] == AXMON_KERNEL)
-		? "AX.25 packet socket"
-		: "AX.25 monitor";
+	switch (mon->kind[idx]) {
+	case AXMON_KERNEL:
+		return "AX.25 packet socket";
+	case AXMON_WAMPES:
+		return "WAMPES monitor";
+	default:
+		return "AX.25 monitor";
+	}
 }
 
 /*
@@ -487,8 +524,11 @@ int axmon_retire(struct axmon *mon, int idx)
 	AXSOCK_NEED_REAL();
 	if (mon->kind[idx] == AXMON_MONITOR)
 		(void) agwpe_close(mon->fd[idx], &ret);
-	else
+	else {
+		if (mon->kind[idx] == AXMON_WAMPES)
+			(void) wampes_mon_close(mon->fd[idx]);
 		real_close(mon->fd[idx]);
+	}
 	mon->fd[idx] = -1;
 
 	return axmon_alive(mon);
@@ -500,8 +540,11 @@ void axmon_close(struct axmon *mon)
 
 	AXSOCK_NEED_REAL();
 	for (i = 0; i < mon->nfd; i++)
-		if (mon->fd[i] >= 0)
+		if (mon->fd[i] >= 0) {
+			if (mon->kind[i] == AXMON_WAMPES)
+				(void) wampes_mon_close(mon->fd[i]);
 			real_close(mon->fd[i]);
+		}
 
 	mon->nfd = 0;
 	mon->mask = 0;

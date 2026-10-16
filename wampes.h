@@ -36,4 +36,42 @@ ssize_t wampes_recvfrom(int fd, void *buf, size_t len, int flags,
 			ssize_t *ret);
 int wampes_close(int fd);
 
+/*
+ * The raw monitor of a node, for axmon.c.  Not the AF_AX25 shim: this opens a
+ * connection of its own to the node's monitor socket and reads the node's own
+ * records - see axmon.c and WAMPES' remote_net.c for the framing.  The
+ * descriptor is a plain libc socket, so it is closed with close() and not
+ * through this header.
+ *
+ * protocol is in network byte order, as socket() wants it: ETH_P_AX25 for what
+ * arrives on the node's ports, ETH_P_ALL to add what the node sends.
+ *
+ * port names an axports entry of a WAMPES node ("wampes:hf"), which also says
+ * which interface to watch; NULL or "" means the node WAMPES_SOCKET names and
+ * every interface of it.  A port that belongs to no node here, or a node whose
+ * address is not a unix socket, is not a monitor to open.
+ *
+ * Returns 1 with the descriptor in *fdp, 0 when this is not a WAMPES monitor,
+ * -1 with errno set when it is one and could not be opened.
+ */
+int wampes_mon_open(int protocol, const char *port, int *fdp);
+
+/*
+ * One whole record off a monitor descriptor, taken apart: the node writes
+ *
+ *	[4 byte big-endian frame length][interface name][NUL][frame]
+ *
+ * and the caller is handed one payload in the shape a kernel packet socket
+ * gives - [KISS data byte][frame] - with the interface name in sa_data as
+ * "<node>:<interface>".  Returns the payload length, 0 at end of the stream
+ * with errno cleared, or -1 with errno set (E2BIG if the frame does not fit
+ * buflen, ECONNRESET if the node went away in the middle of one).
+ */
+ssize_t wampes_mon_read(int fd, void *buf, size_t buflen,
+			struct sockaddr *sa, socklen_t *asize);
+
+/* Forget a descriptor the monitor layer closed, so its node name cannot be
+ * read back for a later socket that happens to land on the same number. */
+int wampes_mon_close(int fd);
+
 #endif

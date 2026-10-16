@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <time.h>
@@ -55,6 +56,24 @@
 #include "axsock_real.h"
 
 #define WAMPES_MAX_SOCK 64
+
+/* For the monitor socket the node's record format names in axmon.c: the
+ * caller passes the protocol in network byte order, and the two values that
+ * say what to watch come from the packet socket world - ETH_P_AX25 for what
+ * the node receives, ETH_P_ALL to add what it sends.  macOS has neither name,
+ * so they are spelled out here as listen(1) spells them. */
+#ifndef ETH_P_AX25
+#define ETH_P_AX25	0x0002
+#endif
+#ifndef ETH_P_ALL
+#define ETH_P_ALL	0x0003
+#endif
+#ifndef PF_PACKET
+#define PF_PACKET	17
+#endif
+#ifndef AF_PACKET
+#define AF_PACKET	PF_PACKET
+#endif
 
 /* Where a node listens when nothing says otherwise: one machine, one node,
  * no configuration file worth the name.  WAMPES_SOCKET_DIR is what
@@ -2792,4 +2811,286 @@ int wampes_close(int fd)
 	}
 	sock_put(s);
 	return 0;
+}
+
+/*---------------------------------------------------------------------------*/
+
+/* THE NODE'S OWN MONITOR.
+ *
+ * Beside the shim's reader in agwpe_sock.c, because a node does not speak
+ * AGWPE and, once it stopped mirroring its traffic into ax25netd, its frames
+ * travel a second way: the node writes one record per frame on its monitor
+ * socket, and this is what takes that apart for axmon.c.  The record is
+ *
+ *	[4 byte big-endian frame length][interface name][NUL][frame]
+ *
+ * as remote_net.c builds it, and the caller is handed one payload in the
+ * shape the kernel and the shim both give - a KISS data byte, then the frame -
+ * with the interface in sa_data as "<node>:<interface>", so listen(1) prints
+ * a port the operator can find in axports and mheardd(8) has a name that
+ * ax25_config_get_name() resolves.  The mask a caller passed reaches neither
+ * the kernel nor the node: both hand whole frames over.
+ *
+ * A node's monitor is a connection of its own, not a mode of the service
+ * socket, so this opens one.  What a record costs the node is a copy, and
+ * what reading one costs here is a read; a frame never waits for a reader,
+ * because the node drops it instead of blocking (see remote_net.c).
+ *
+ * The descriptor is a plain libc socket - wampes_dial() made it - so the
+ * monitor layer closes it with close(), not through the shim's close().
+ */
+
+#define WAMPES_MON_MAX		16
+#define WAMPES_MON_NAME_MAX	64	/* a node's interface name, not a path */
+#define WAMPES_MON_DEFAULT_NODE	"wampes"
+#define WAMPES_MON_FRAME_MAX	1500	/* the payload a reader can hold */
+
+static struct {
+	int fd;
+	char node[32];
+} Mons[WAMPES_MON_MAX];
+static int Nmons;
+
+/* The name to put in front of an interface, found from the address a node was
+ * reached on.  A node WAMPES_SOCKET points at has no name of its own, and the
+ * convention is the one a lone node is written as everywhere else. */
+static const char *wampes_mon_node_for_addr(const char *addr)
+{
+	int i;
+
+	if (!Nodes_read)
+		wampes_config_load();
+	for (i = 0; i < Nnodes; i++)
+		if (!strcmp(Nodes[i].addr, addr))
+			return Nodes[i].name;
+	return NULL;
+}
+
+/* The service socket is "<nodedir>/sockets/ax25" and the monitor is its
+ * sibling.  Only a path with that leaf has one: a node reached over TCP has
+ * no monitor to open, because the record is not spoken there and this is not
+ * the place to invent it. */
+static int wampes_mon_path(const char *addr, char *out, size_t outlen)
+{
+	static const char leaf[] = "monitor";
+	const char *slash;
+	size_t dir;
+
+	if (addr == NULL || addr[0] != '/')
+		return 0;
+	slash = strrchr(addr, '/');
+	if (slash == NULL || strcmp(slash + 1, "ax25") != 0)
+		return 0;
+	dir = (size_t) (slash - addr);
+	if (dir + 1 + sizeof(leaf) > outlen)
+		return 0;
+	memcpy(out, addr, dir + 1);
+	memcpy(out + dir + 1, leaf, sizeof(leaf));
+	return 1;
+}
+
+static void wampes_mon_register(int fd, const char *node)
+{
+	int i;
+
+	for (i = 0; i < Nmons; i++)
+		if (Mons[i].fd == fd) {
+			snprintf(Mons[i].node, sizeof(Mons[i].node), "%s", node);
+			return;
+		}
+	if (Nmons < WAMPES_MON_MAX) {
+		Mons[Nmons].fd = fd;
+		snprintf(Mons[Nmons].node, sizeof(Mons[Nmons].node), "%s", node);
+		Nmons++;
+	}
+}
+
+static const char *wampes_mon_node(int fd)
+{
+	int i;
+
+	for (i = 0; i < Nmons; i++)
+		if (Mons[i].fd == fd)
+			return Mons[i].node;
+	return NULL;
+}
+
+int wampes_mon_close(int fd)
+{
+	int i;
+
+	for (i = 0; i < Nmons; i++)
+		if (Mons[i].fd == fd) {
+			Mons[i] = Mons[Nmons - 1];
+			Nmons--;
+			break;
+		}
+	return 0;
+}
+
+/* One whole run of bytes, 0 for the end of the stream, -1 for an error. */
+static int mon_read_full(int fd, void *buf, size_t len)
+{
+	unsigned char *p = buf;
+	size_t off = 0;
+
+	while (off < len) {
+		ssize_t n = read(fd, p + off, len - off);
+
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (n == 0)
+			return 0;
+		off += (size_t) n;
+	}
+	return 1;
+}
+
+int wampes_mon_open(int protocol, const char *port, int *fdp)
+{
+	char node[32];
+	char path[sizeof(((struct sockaddr_un *) 0)->sun_path)];
+	const char *addr;
+	const char *iface;
+	char cmd[160];
+	int fd, len;
+
+	if (fdp == NULL)
+		return 0;
+	*fdp = -1;
+
+	if (port != NULL && port[0] != '\0') {
+		/* A named port: it is this backend's only if it names a
+		 * configured node, and then it also says which interface to
+		 * watch.  A kernel or ax25netd entry is not ours. */
+		if (!wampes_port_hook(port, node, sizeof(node)))
+			return 0;
+		addr = wampes_address(port);
+	} else {
+		const char *nm;
+
+		addr = wampes_address(NULL);
+		nm = wampes_mon_node_for_addr(addr);
+		snprintf(node, sizeof(node), "%s",
+			 nm != NULL ? nm : WAMPES_MON_DEFAULT_NODE);
+	}
+	if (addr == NULL || !wampes_mon_path(addr, path, sizeof(path)))
+		return 0;		/* no monitor socket to look for */
+	if ((fd = wampes_dial(path)) < 0)
+		return -1;		/* ours, and it would not connect */
+
+	iface = (port != NULL) ? wampes_iface(port) : NULL;
+	len = snprintf(cmd, sizeof(cmd), "monitor%s%s%s\n",
+		       iface != NULL ? " iface=" : "",
+		       iface != NULL ? iface : "",
+		       ntohs((unsigned short) protocol) == ETH_P_ALL
+				? " output" : "");
+	if (len < 0 || (size_t) len >= sizeof(cmd) ||
+	    write_all(fd, cmd, (size_t) len) < 0) {
+		int save = errno;
+
+		close(fd);
+		errno = save;
+		return -1;
+	}
+	wampes_mon_register(fd, node);
+	*fdp = fd;
+	return 1;
+}
+
+ssize_t wampes_mon_read(int fd, void *buf, size_t buflen,
+			struct sockaddr *sa, socklen_t *asize)
+{
+	unsigned char hdr[4];
+	char iface[WAMPES_MON_NAME_MAX + 1];
+	unsigned char drain[WAMPES_MON_FRAME_MAX];
+	unsigned char *out = buf;
+	size_t framelen;
+	int r, i;
+	const char *node;
+
+	r = mon_read_full(fd, hdr, sizeof(hdr));
+	if (r == 0) {
+		errno = 0;		/* closed between records: the end */
+		return 0;
+	}
+	if (r < 0)
+		return -1;
+
+	framelen = ((size_t) hdr[0] << 24) | ((size_t) hdr[1] << 16) |
+		   ((size_t) hdr[2] << 8) | (size_t) hdr[3];
+	if (framelen == 0 || framelen > WAMPES_MON_FRAME_MAX) {
+		/* The node produces neither, so this is not our stream and
+		 * nothing can resynchronize it: say so instead of reading on
+		 * an inner length that looks plausible. */
+		errno = EPROTO;
+		return -1;
+	}
+
+	/* The interface name, up to its NUL, which is where the frame starts.
+	 * Bounded, because a peer that never sends the NUL must not be able to
+	 * make this read for ever. */
+	for (i = 0; ; i++) {
+		if (i >= WAMPES_MON_NAME_MAX) {
+			errno = EPROTO;
+			return -1;
+		}
+		r = mon_read_full(fd, &iface[i], 1);
+		if (r == 0) {
+			errno = ECONNRESET;
+			return -1;
+		}
+		if (r < 0)
+			return -1;
+		if (iface[i] == '\0')
+			break;
+	}
+
+	if (framelen + 1 > buflen) {
+		/* Too small a buffer is the caller's, not the stream's: drop
+		 * the frame whole so the next record still lines up. */
+		size_t left = framelen;
+
+		while (left > 0) {
+			size_t take = left > sizeof(drain) ? sizeof(drain) : left;
+
+			r = mon_read_full(fd, drain, take);
+			if (r <= 0) {
+				errno = r == 0 ? ECONNRESET : errno;
+				return -1;
+			}
+			left -= take;
+		}
+		errno = E2BIG;
+		return -1;
+	}
+
+	r = mon_read_full(fd, out + 1, framelen);
+	if (r == 0) {
+		errno = ECONNRESET;
+		return -1;
+	}
+	if (r < 0)
+		return -1;
+	out[0] = 0x00;			/* the KISS data byte, as the others */
+
+	if (sa != NULL && asize != NULL) {
+		socklen_t want = *asize;
+
+		if (want > (socklen_t) sizeof(*sa))
+			want = (socklen_t) sizeof(*sa);
+		memset(sa, 0, (size_t) want);
+		sa->sa_family = AF_PACKET;
+		node = wampes_mon_node(fd);
+		if (node != NULL && node[0] != '\0')
+			snprintf(sa->sa_data, sizeof(sa->sa_data), "%s:%s",
+				 node, iface[0] != '\0' ? iface : "?");
+		else
+			snprintf(sa->sa_data, sizeof(sa->sa_data), "%s", iface);
+		*asize = (socklen_t) sizeof(*sa);
+	}
+	return (ssize_t) (framelen + 1);
 }

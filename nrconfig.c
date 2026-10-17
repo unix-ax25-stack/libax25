@@ -308,7 +308,7 @@ int nr_config_load_ports(void)
 			memset(&ifr, 0, sizeof(ifr));
 			if (strlen(s) >= IFNAMSIZ) {
 				fprintf(stderr, "nrconfig: interface name too long\n");
-				unreachable();
+				continue;
 			}
 			strcpy(ifr.ifr_name, s);
 

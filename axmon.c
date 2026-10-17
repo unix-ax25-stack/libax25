@@ -184,29 +184,31 @@ static int axmon_port_is_known(const char *name)
 /*
  * Open every source of raw AX.25 frames this machine has.
  *
- * Two, on a host that has both: the kernel's packet socket for the ports the
- * kernel AX.25 stack owns, and ax25netd's monitor stream for everything the
- * userspace side owns - the AGWPE radios, and the WAMPES traffic, which is
- * mirrored into that same stream because there is no packet socket for a node
- * to put frames on.  One, on a host that has only one of them, which is most
- * of them: the kernel socket on a machine whose ports all belong to
- * ax25netd has nothing to hear, and the monitor socket on a machine with no
- * ax25netd has nothing to be fed by.
+ * Up to three, on a host that has all of them: the kernel's packet socket for
+ * the ports the kernel AX.25 stack owns, ax25netd's monitor stream for the
+ * userspace ports it serves - the AGWPE radios - and a WAMPES node's own
+ * monitor for the interfaces that node serves, a stream of its own now that
+ * the node no longer pushes its frames into ax25netd.  Fewer, on a host that
+ * has fewer, which is most of them: a machine whose ports all belong to
+ * ax25netd has no kernel socket worth having, and one with no ax25netd has
+ * nothing to feed the monitor side.
  *
- * Both is what a monitor is for.  listen(1) used to open one socket and get
- * whichever source the process had been given for AF_AX25, so on a dualstack
- * host it showed the kernel's ports and said nothing about the fact that the
- * radios were not in the output.  Nothing in that output was wrong; it was
- * incomplete without saying so, which is the worst kind of wrong for a tool
- * whose job is to show what is on the air.
+ * All of them is what a monitor is for, and it is a decision rather than a
+ * leftover.  listen(1) used to open one socket and get whichever source the
+ * process had been given for AF_AX25, so on a dualstack host it showed the
+ * kernel's ports and said nothing about the fact that the radios were not in
+ * the output.  Nothing in that output was wrong; it was incomplete without
+ * saying so, which is the worst kind of wrong for a tool whose job is to show
+ * what is on the air.
  *
- * port names one axports entry and restricts the monitor to it.  Both sides
- * can filter and both are told to: the kernel by binding its socket to the
- * device the entry names, the monitor by the name the frames carry.  An entry
- * with no device - every userspace port, and the loop port among them - is
- * not an error here.  It was, and that is why there was no "listen -p loop":
- * the check asked ax25_config_get_dev(), which answers NULL for a port that
- * was never an interface, and NULL read as "no such port".
+ * port names one axports entry and restricts the monitor to it - to the single
+ * source that owns that entry, and to that source's failure as an answer: a
+ * port has one backend, and a run that cannot reach it has said nothing about
+ * what it asked for.  An entry with no device - every userspace port, and the
+ * loop port among them - is not an error here.  It was, and that is why there
+ * was no "listen -p loop": the check asked ax25_config_get_dev(), which
+ * answers NULL for a port that was never an interface, and NULL read as "no
+ * such port".  With no port named, all three are opened.
  *
  * protocol is in network byte order, as socket() wants it.
  *
@@ -222,6 +224,8 @@ int axmon_open(int protocol, const char *port, struct axmon *mon)
 int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 		    struct axmon *mon)
 {
+	int named, kernel_owner, wampes_owner, shim_owner;
+
 	mon->nfd = 0;
 	mon->mask = 0;
 
@@ -246,6 +250,27 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 		return -1;
 	}
 
+	/*
+	 * A named port belongs to exactly one of the three sources, and asking
+	 * about it asks about that one.  Opening the others and leaving the
+	 * filtering to the name is what was here, and it made
+	 * "listen -p <userspace port>" open the kernel's packet socket unbound
+	 * - every kernel port reported for a name that has none - and made it
+	 * dial ax25netd for a node's port.  Neither is a filter a wrong name
+	 * slips past; they are the wrong sources.  With no port named all
+	 * three are wanted, which is the case the split exists for.
+	 *
+	 * The ownership test is the one bind() itself uses, not a second
+	 * guess: a port is the kernel's when the entry names an interface of
+	 * its, and a node's when the name before the colon is a configured
+	 * node (the hook wampes.c installs).  Everything else is ax25netd's.
+	 */
+	named = (port != NULL && port[0] != '\0');
+	kernel_owner = named && ax25_config_get_dev((char *)port) != NULL;
+	wampes_owner = named && ax25_config_port_wampes_hook != NULL &&
+		       ax25_config_port_wampes_hook(port, NULL, 0);
+	shim_owner = named && !kernel_owner && !wampes_owner;
+
 #ifdef __linux__
 	/*
 	 * The kernel side.  real_socket() and not socket(): this is the
@@ -265,7 +290,7 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 		fprintf(stderr, "axmon: the payload mask does not reach the "
 			"kernel packet socket - the frames it delivers keep "
 			"the payloads the kernel put in them\n");
-	if (ax25_config_kernel_ports() > 0) {
+	if ((!named || kernel_owner) && ax25_config_kernel_ports() > 0) {
 		int fd = real_socket(PF_PACKET, SOCK_PACKET, protocol);
 
 		if (fd >= 0) {
@@ -285,19 +310,30 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 					/*
 					 * The entry names a device that is
 					 * not there, or the kernel will not
-					 * bind to it.  Say so and leave the
-					 * filter to the other side: the
-					 * monitor still opens, restricted to
-					 * the name rather than to the
-					 * device, which is the narrower of
-					 * the two questions and the one the
-					 * operator meant.
+					 * bind to it.  When the port was
+					 * named, the kernel owns it and this
+					 * is the whole of the answer: an
+					 * unbound packet socket would report
+					 * every kernel port under a name that
+					 * is not one of them.  When nothing
+					 * was named, leave the filter to the
+					 * name rather than to the device,
+					 * which is the narrower of the two
+					 * questions and the one the operator
+					 * meant.
 					 */
+					int save = errno;
+
 					if (axsock_debug)
 						fprintf(stderr, "axmon: "
 							"cannot bind the kernel "
 							"monitor to '%s': %s\n",
-							dev, strerror(errno));
+							dev, strerror(save));
+					if (kernel_owner) {
+						real_close(fd);
+						errno = save ? save : ENODEV;
+						return -1;
+					}
 				}
 			}
 			mon->fd[mon->nfd] = fd;
@@ -315,7 +351,7 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	 * host with a kernel stack has an ax25netd too often enough that the
 	 * question would hide half of what is on the air.
 	 */
-	{
+	if (!named || shim_owner) {
 		int fd;
 
 		if (agwpe_mon_open(protocol, mask, &fd) == 1 && fd >= 0) {
@@ -351,6 +387,15 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 			mon->mask |= (unsigned char)(1u << mon->nfd);
 			mon->kind[mon->nfd] = AXMON_MONITOR;
 			mon->nfd++;
+		} else if (named) {
+			/*
+			 * shim_owner: the named port is ax25netd's and
+			 * there is no reader to feed it.  That is the
+			 * answer to the question, not a half-open monitor
+			 * that shows nothing and says nothing.
+			 */
+			errno = ENXIO;
+			return -1;
 		}
 	}
 
@@ -361,10 +406,11 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	 * wampes_mon_open() answers 0 for a port that belongs to nobody here,
 	 * so a kernel or ax25netd entry leaves this source closed.
 	 */
-	{
+	if (!named || wampes_owner) {
 		int fd;
+		int r = wampes_mon_open(protocol, port, &fd);
 
-		if (wampes_mon_open(protocol, port, &fd) == 1 && fd >= 0) {
+		if (r == 1 && fd >= 0) {
 			mon->fd[mon->nfd] = fd;
 			mon->framed[mon->nfd] = AXMON_FRAMED_WAMPES;
 			mon->mask |= (unsigned char)(1u << mon->nfd);
@@ -374,6 +420,20 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 				fprintf(stderr, "axmon: the payload mask does "
 					"not reach the WAMPES monitor - the "
 					"node sends whole frames\n");
+		} else if (named) {
+			/*
+			 * wampes_owner: the node's monitor is the whole of
+			 * what this port has, and the node would not hand it
+			 * out - refused (EACCES on a socket another group
+			 * owns, ECONNREFUSED for a node not up yet), or a
+			 * node whose address yields no monitor socket at
+			 * all.  Say so, because the alternative is a run
+			 * that watches a different world for a reason that
+			 * never reaches standard error.
+			 */
+			if (r == 0)
+				errno = ENXIO;
+			return -1;
 		}
 	}
 

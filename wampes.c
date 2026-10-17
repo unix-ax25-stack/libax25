@@ -62,7 +62,6 @@
 #include "netax25/axlib.h"
 #include "netax25/axconfig.h"
 
-#include "netax25/agwpe_client.h"
 #include "netax25/wampes_client.h"
 
 #include "pathnames.h"
@@ -2620,6 +2619,39 @@ int wampes_mon_open(int protocol, const char *port, int *fdp)
 	return 1;
 }
 
+/*
+ * The name a monitor frame is reported under: "<node>:<iface>", or the
+ * interface alone when the node is not known.  It goes into sa_data, which is
+ * the 14 bytes of a struct sockaddr and is only ever read back as a string.
+ *
+ * Copied byte by byte rather than with snprintf() because both sources are
+ * longer than the destination in every case that matters, and a snprintf()
+ * left to truncate on its own is a -Wformat-truncation diagnostic on Linux
+ * (it is not one on macOS, and a warning on one is no reason to have none on
+ * the other).  Truncation here is deliberate and the result is always
+ * terminated: a caller strcpy()s it out.
+ */
+static void wampes_mon_name(char *dst, size_t dstlen, const char *node,
+			    const char *iface)
+{
+	const char *p;
+	size_t n = 0;
+
+	if (iface == NULL)
+		iface = "";
+	if (node != NULL && node[0] != '\0') {
+		for (p = node; *p != '\0' && n + 2 < dstlen; p++)
+			dst[n++] = *p;
+		if (n + 1 < dstlen)
+			dst[n++] = ':';
+		if (iface[0] == '\0')
+			iface = "?";
+	}
+	for (p = iface; *p != '\0' && n + 1 < dstlen; p++)
+		dst[n++] = *p;
+	dst[n] = '\0';
+}
+
 ssize_t wampes_mon_read(int fd, void *buf, size_t buflen,
 			struct sockaddr *sa, socklen_t *asize)
 {
@@ -2704,11 +2736,7 @@ ssize_t wampes_mon_read(int fd, void *buf, size_t buflen,
 		memset(sa, 0, (size_t) want);
 		sa->sa_family = AF_PACKET;
 		node = wampes_mon_node(fd);
-		if (node != NULL && node[0] != '\0')
-			snprintf(sa->sa_data, sizeof(sa->sa_data), "%s:%s",
-				 node, iface[0] != '\0' ? iface : "?");
-		else
-			snprintf(sa->sa_data, sizeof(sa->sa_data), "%s", iface);
+		wampes_mon_name(sa->sa_data, sizeof(sa->sa_data), node, iface);
 		*asize = (socklen_t) sizeof(*sa);
 	}
 	return (ssize_t) (framelen + 1);

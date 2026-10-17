@@ -36,11 +36,6 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
-#ifdef __linux__
-#include <net/if.h>
-#include <netpacket/packet.h>
-#endif
-
 #include "netax25/axmon.h"
 #include "netax25/ax25.h"
 #include "netax25/axconfig.h"
@@ -309,15 +304,31 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 				? ax25_config_get_dev((char *)port) : NULL;
 
 			if (dev != NULL) {
-				struct sockaddr_ll sll;
+				/*
+				 * SOCK_PACKET is bound the obsolete way,
+				 * and both halves of that are one address:
+				 * a struct sockaddr of exactly its own
+				 * length with the device name in sa_data,
+				 * which is also the half the read side
+				 * takes each frame's source name from.  A
+				 * struct sockaddr_ll is what SOCK_RAW wants
+				 * for its ifindex, is four bytes longer,
+				 * and is answered by packet_bind_spkt()
+				 * with EINVAL before the device is looked
+				 * at at all - so a named kernel port could
+				 * never be bound, and listen(1) read that
+				 * EINVAL as a name that is in no axports
+				 * entry.
+				 */
+				struct sockaddr sa;
+				size_t n = strlen(dev);
 
-				memset(&sll, 0, sizeof(sll));
-				sll.sll_family = AF_PACKET;
-				sll.sll_protocol = protocol;
-				sll.sll_ifindex = (int)if_nametoindex(dev);
-				if (sll.sll_ifindex == 0 ||
-				    real_bind(fd, (struct sockaddr *)&sll,
-					      sizeof(sll)) < 0) {
+				if (n > sizeof(sa.sa_data) - 1)
+					n = sizeof(sa.sa_data) - 1;
+				memset(&sa, 0, sizeof(sa));
+				sa.sa_family = AF_PACKET;
+				memcpy(sa.sa_data, dev, n);
+				if (real_bind(fd, &sa, sizeof(sa)) < 0) {
 					/*
 					 * The entry names a device that is
 					 * not there, or the kernel will not
@@ -342,7 +353,19 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 							dev, strerror(save));
 					if (kernel_owner) {
 						real_close(fd);
-						errno = save ? save : ENODEV;
+						/*
+						 * EINVAL is this call's word
+						 * for a name that is in no
+						 * axports entry.  A kernel
+						 * that says it about a bind
+						 * means something else, and
+						 * passing it on sends
+						 * listen(1) after a typo
+						 * that is not there.
+						 */
+						errno = (save == 0 ||
+							 save == EINVAL)
+							? ENODEV : save;
 						return -1;
 					}
 				}

@@ -264,9 +264,20 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	 * guess: a port is the kernel's when the entry names an interface of
 	 * its, and a node's when the name before the colon is a configured
 	 * node (the hook wampes.c installs).  Everything else is ax25netd's.
+	 *
+	 * ax25_config_port_is_kernel() and NOT "the entry names a device".
+	 * Those look like the same question and are not: a port that is
+	 * nobody's kernel port still has a device recorded, and it is its own
+	 * name - ax25_config_init_port() sets dev = name for exactly the
+	 * entry that names no interface.  So ax25_config_get_dev() answers
+	 * "is this name in axports at all", and asking it here answered yes
+	 * for every port on the machine, including the userspace ones.
+	 * "listen -p loop" then took the kernel branch, found no interface
+	 * by that name, and gave the whole answer back as a failure before
+	 * either of the sources that do serve the port was asked.
 	 */
 	named = (port != NULL && port[0] != '\0');
-	kernel_owner = named && ax25_config_get_dev((char *)port) != NULL;
+	kernel_owner = named && ax25_config_port_is_kernel(port);
 	wampes_owner = named && ax25_config_port_wampes_hook != NULL &&
 		       ax25_config_port_wampes_hook(port, NULL, 0);
 	shim_owner = named && !kernel_owner && !wampes_owner;

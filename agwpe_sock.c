@@ -3280,10 +3280,13 @@ static void axsock_port_unserved(const struct sockaddr *addr, socklen_t len)
 		/* The entry exists, so this is the one case where the name is
 		 * still known.  All three backends have now said no to it, and
 		 * each of those was a lookup that ran, so each can be stated. */
-		fprintf(stderr,
-			"axsock: no backend serves the port '%s': it is no AX.25 "
-			"interface, no wampes.conf node, and no AGWPE upstream or "
-			"server port.\n", port);
+		{
+			char *paddr = ax25_ntoa(&((const struct full_sockaddr_ax25 *) addr)->fsa_digipeater[0]);
+			fprintf(stderr,
+				"axsock: no backend serves the port '%s' (callsign %s): no AX.25 "
+				"interface carries that callsign, no wampes.conf node, and no AGWPE "
+				"upstream or server port.\n", port, paddr ? paddr : "?");
+		}
 		return;
 	}
 

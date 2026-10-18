@@ -1888,18 +1888,31 @@ Gegenstück zu `wampes_mon_read()`: lazy eine Verbindung auf
 Handshake `monitor\n`, dann der Rekord `[4B Länge][Name][NUL][Frame]`.
 Reißt ein Schreiben, wird der Descriptor geschlossen und `*fdp = -1`; die
 nächste Aufzeichnung beginnt von vorn, statt in einen Knoten zu schreiben,
-der nicht mehr liest.  Im Shim landen `sendto()`/`write()` auf einem
+der nicht mehr liest.  Im Shim landet **`sendto()`** auf einem
 `SOCK_PACKET`-fd im `s->raw`-Zweig von `agwpe_sendto()`: der
 Interface-Name kommt aus `sa_data` (wie beim `bind()`), sonst aus dem
 gebundenen `s->bound`.  Ohne WAMPES-Knoten gibt es kein `sockets/packet`
 und der Rekord paßt in kein AGWPE-Kommando — dann ehrlich `EOPNOTSUPP`
 statt eines Schreibens ins Leere.
 
-**Belegt.**  Beide Seiten übersetzen **warnungsfrei** auf macOS (`-Wall`),
-der Knoten startet und endet sauber.  Der Laufzeitbeleg fürs Einspeisen
-steht noch aus: er braucht ein AX.25-Interface, das ein UI-Frame
-tatsächlich hinausschickt (Kernel-AX.25 `bpq0` auf db0fhn, oder ein
-Pty-Port wie in §11.12).
+`send()`/`write()` sind **noch nicht** dort: sie laufen weiter in
+`axsock_send_data()` (den Paar-Pfad).  Das ist die verbleibende Hälfte von
+§11.9.  Ein Programm, das roh sendet, benutzt ohnehin `sendto()` mit dem
+Gerätenamen — wie der Kernel, der ein `write()` auf einem unadressierten
+`SOCK_PACKET`-fd mit `ENOTCONN` quittiert; der Test (`rawsend.py`) nimmt
+genau diesen Ruf.
+
+**Belegt (Laufzeit, macOS).**  `packete2e.py` (Pty-Port, Knoten mit `-d`,
+ein Client auf `sockets/packet`) fährt beide Richtungen: ein Rekord auf
+`sockets/packet` erscheint als KISS-Rahmen auf der Leitung, ein
+KISS-Rahmen auf der Leitung kommt als Rekord auf `sockets/packet` an, ein
+Rekord mit unbekanntem Port wird still verworfen (die Verbindung und der
+Knoten bleiben), und `sockets/packet` liegt auf **0600** mit der Gruppe des
+Verzeichnisses.  Mit `--shim` läuft zusätzlich `rawsend.py` mit der
+Bibliothek (`DYLD_INSERT_LIBRARIES`): sein `sendto()` auf dem
+`SOCK_PACKET`-fd erreicht den `s->raw`-Zweig und derselbe Rahmen steht auf
+der Leitung.  Die Werkzeuge liegen in `wampes-import/testtools/`
+(`packetinject.py`, `packetread.py`, `rawsend.py`, `packete2e.py`).
 
 **Siehe auch:** `wampes.git/doc/PERMISSIONS.md`, `INSTALL-PATHS.md` (die
 Rechte-Leiter), `AX25-WITHOUT-KERNEL-SYSOP.{de.,}md` (der Sysop-Abschnitt),

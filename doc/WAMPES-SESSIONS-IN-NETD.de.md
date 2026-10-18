@@ -1378,10 +1378,13 @@ denn der Wille steht im Syscall (§11.9).
   senden (`connect()` verlangt Schreibrecht).  Ein eigener Sockel trägt
   eigenen Modus und eigene Gruppe; `sockets/monitor` bleibt die
   Nur-Lese-Sicht auf denselben Rekordstrom.
-* **Offen (Umsetzung der Sendeseite).**  Vorgabe-Modus und -Gruppe von
-  `sockets/packet` (nicht die 0666 des Dienst-Sockels); ob `iface=`
-  und `input|output` wortgleich zu §11.4 bleiben (`iface=` wirkt hier als
-  Erlaubnisliste fürs Einspeisen, Vorgabe: alle AX.25-Interfaces).
+* **Entschieden und gebaut (§11.17).**  Vorgabe-Modus und -Gruppe von
+  `sockets/packet`: **0600** mit der Gruppe von `sockets/`
+  (`inherit_dir_group()`, wie der Monitor) — der gefährlichste Griff des
+  Knotens wartet auf den Sysop, und eine `chgrp` allein öffnet ihn nie.
+  Der Handshake ist **wortgleich zu §11.4**: dasselbe Wort `monitor`,
+  dieselben Optionen (`iface=`, `input`, `output`); `iface=` wirkt hier
+  als Erlaubnisliste fürs Einspeisen, Vorgabe: alle AX.25-Interfaces.
 * **Der Shim führt beide Richtungen hinter *einem* Deskriptor**
   (entschieden 2026-10-17).  Kein Programm soll umgeschrieben werden
   müssen, um zwei Sockets zu öffnen: der **Wille steht im Syscall**, und
@@ -1839,6 +1842,68 @@ kennt sehr wohl eine NET/ROM-Zeile; sie meint aber **NET/ROM-L4-Verbindungen**
 
 **Offen.**  Ob und wann; und wie es sich zum eingehenden Pfad aus den
 Roh-Monitorframes (§8.11) verhält.  Notiert, nicht entschieden.
+
+### 11.17 `sockets/packet` ist gebaut (2026-10-18)
+
+**Der Sockel.**  Die Sendeseite aus §11.8 steht: **`sockets/packet`**, ein
+dritter Listener (`restricted = 3`) neben Dienst (`0`) und Monitor (`2`).
+Er ist die *eine* Datei mit **beiden** Richtungen — Zusehen **und**
+Einspeisen — und die zwei getrennten Sockel bleiben trotzdem: `ax25` (0666)
+verbindet, `monitor` (0660, Gruppe) sieht zu, `packet` (0600, Gruppe)
+speist ein.  Die Gruppe werden `monitor` und `packet` von `sockets/`
+geerbt (§11.12); `ax25` bekommt keine, weil sie bei `0666` nichts
+entscheidet.
+
+**Was entschieden ist.**  Zwei Fragen aus §11.9 sind beantwortet:
+
+* Vorgabe-Modus und -Gruppe: **0600** + `inherit_dir_group()`.
+* Der Handshake bleibt **wortgleich zu §11.4**: dasselbe Wort `monitor`,
+  dieselben Optionen (`iface=`, `input`, `output`).  `iface=` ist hier die
+  Erlaubnisliste fürs Einspeisen (Vorgabe: alle AX.25-Interfaces).
+
+Kein Missverständnis beim Wort `output`: der `packet`-Client liest **den
+Monitorstrom** des Knotens — dieselben Rekorde, dieselben Filter wie
+`sockets/monitor` (`ETH_P_AX25` → eingehende, `ETH_P_ALL` → zusätzlich die
+eigenen Aussendungen des Knotens).  `output` filtert also die
+**zurückkommenden** Rahmen.  Das Einspeisen selbst hat keine Richtung: es
+geht immer hinaus.
+
+**Der Knoten (`remote_net.c`).**  Der Listener kommt als Ordnernde
+`packet` neben `ax25` und `monitor` hoch (`open_listener()`).  Ein
+angenommener `packet`-Client geht nach dem `monitor`-Wort in
+`packet_receive()`: derselbe Rekordstrom wird gelesen, aber jede volle
+Aufzeichnung läuft durch `packet_byte()`/`packet_send()`.  `packet_send()`
+holt das Interface über `if_lookup()` und verlangt AX.25: ist `ifp` kein
+AX.25-Träger (`ifp->output != ax_output`), fällt der Rahmen still — der
+Knoten kann keine Antwort in einen binären Strom schreiben.  Der Rahmen
+wird als **UI** erwartet und über `ax_send_ui()` hinausgegeben; die
+Adressfelder liest `ntohax25()` (`ax25hdr.c`) ab, Ctl/PID kommen nicht mit
+(§11.8).  Ein reiner Leser (`restricted == 2`) bekommt auf ein schreibendes
+Byte eine einmalige Warnzeile — read-only, rohe Rahmen gehen über
+`sockets/packet`.
+
+**Die libax25-Seite.**  `wampes_raw_send()` (`wampes.c`) ist das
+Gegenstück zu `wampes_mon_read()`: lazy eine Verbindung auf
+`sockets/packet` (Geschwisterableitung des Dienst-Pfades, wie der Monitor),
+Handshake `monitor\n`, dann der Rekord `[4B Länge][Name][NUL][Frame]`.
+Reißt ein Schreiben, wird der Descriptor geschlossen und `*fdp = -1`; die
+nächste Aufzeichnung beginnt von vorn, statt in einen Knoten zu schreiben,
+der nicht mehr liest.  Im Shim landen `sendto()`/`write()` auf einem
+`SOCK_PACKET`-fd im `s->raw`-Zweig von `agwpe_sendto()`: der
+Interface-Name kommt aus `sa_data` (wie beim `bind()`), sonst aus dem
+gebundenen `s->bound`.  Ohne WAMPES-Knoten gibt es kein `sockets/packet`
+und der Rekord paßt in kein AGWPE-Kommando — dann ehrlich `EOPNOTSUPP`
+statt eines Schreibens ins Leere.
+
+**Belegt.**  Beide Seiten übersetzen **warnungsfrei** auf macOS (`-Wall`),
+der Knoten startet und endet sauber.  Der Laufzeitbeleg fürs Einspeisen
+steht noch aus: er braucht ein AX.25-Interface, das ein UI-Frame
+tatsächlich hinausschickt (Kernel-AX.25 `bpq0` auf db0fhn, oder ein
+Pty-Port wie in §11.12).
+
+**Siehe auch:** `wampes.git/doc/PERMISSIONS.md`, `INSTALL-PATHS.md` (die
+Rechte-Leiter), `AX25-WITHOUT-KERNEL-SYSOP.{de.,}md` (der Sysop-Abschnitt),
+`LINUX-AX25-SOCKETS.de.md` §8 (Dateirechte statt `CAP_NET_RAW`).
 
 ## 12 Callsign-Eingabe: nicht raten, sondern sterben (2026-10-15)
 

@@ -187,9 +187,13 @@ immer die Funktion `ax25_bind()` bzw. eben jenes historische Define.
 * **`monitor`** (`sockets/monitor`) ist bereits die **Empfangsseite**
   von `AF_PACKET` — bis hin zu `ETH_P_ALL` = `listen -a`.
 * **§11.8 (roh senden)** ist folgerichtig die **Sendeseite desselben
-  Socket-Typs**: Interface je Paket, Rahmen selbst gebaut, jede PID.
-  Es ist **nicht** über `datagram`/`AF_AX25` nachbildbar, ohne die
-  Kernel-Bedeutung zu verbiegen.
+  Socket-Typs** und heißt am Knoten `sockets/packet`: Interface je Paket,
+  Rahmen selbst gebaut, jede PID.  Es ist **nicht** über
+  `datagram`/`AF_AX25` nachbildbar, ohne die Kernel-Bedeutung zu verbiegen.
+  Wo der Kernel `CAP_NET_RAW` verlangt, verlangt der Knoten den Modus der
+  Socket-Datei: `0600` ab Werk, also nur der Besitzer, und `axsock packet
+  group`/`mode` sagen, wer sonst einspeisen darf.  Die Dateirechte treten
+  hier an die Stelle der Capability.
 * **`datagram`** bleibt, was es im Kernel ist: rufzeichen-orientiertes
   UI-Senden/Empfangen, ohne Interface und ohne PID-Filter.
 * **Parität-Lücken** in unserem Shim: `SO_BINDTODEVICE` (`SOL_AX25`)

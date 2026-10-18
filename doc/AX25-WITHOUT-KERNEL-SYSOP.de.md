@@ -213,19 +213,33 @@ Das ist Absicht, und deshalb liegt der Socket dort, wo er liegt: ein
 Unix-Socket trägt seine Rechte im Dateisystem, und das ist ein Werkzeug, das
 Ihr schon kennt.
 
-**Ab Werk ist das VERZEICHNIS das Tor, nicht der Socket:**
+**Ab Werk ist der SOCKET das Tor, nicht das Verzeichnis:**
 
 ```
-drwxr-x---  2 root staff  /tcp/sockets          0750, und das ist das Tor
+drwxr-xr-x  2 root staff  /tcp/sockets          0755, der Weg dorthin
 srw-rw-rw-  1 root staff  /tcp/sockets/ax25     0666, absichtlich offen
 ```
 
-Das wirkt verkehrt herum, bis man sieht, welches von beiden entscheidet.  Das
-Verzeichnis trägt die Gruppe, ein `chgrp hams /tcp/sockets` verschiebt also den
-ganzen Dienst von einer Gruppe in die andere, ohne dass über Socket-Modi
-nachgedacht werden muss.  (Der Socket ist `0666` und nicht `0777`, weil
-`connect()` auf einem Unix-Socket nach **Schreibrecht** fragt und nie nach
-Ausführungsrecht — gemessen, und Linux sagt es in `af_unix.c`.)
+Das Verzeichnis entscheidet, wer den Weg gehen darf — mehr nicht.  Was den
+Dienst erreicht, sagt der Socket, und es sind drei mit drei Graden:
+
+```
+/tcp/sockets/ax25       0666    verbinden  — den Sender benutzen
+/tcp/sockets/monitor    0660    zusehen    — jeden Rahmen des Knotens
+/tcp/sockets/packet     0600    einspeisen — rohe AX.25-Rahmen hinaus
+```
+
+Die Leiter geht mit dem Privileg auf weniger Leute: verbinden darf bei der
+Vorgabe jedes lokale Konto, zusehen die Gruppe, einspeisen nur der Besitzer
+des Knotens.  (Der Socket ist `0666` und nicht `0777`, weil `connect()` auf
+einem Unix-Socket nach **Schreibrecht** fragt und nie nach Ausführungsrecht —
+gemessen, und Linux sagt es in `af_unix.c`.)
+
+Warum die Gruppe bei `monitor` und `packet` vererbt wird und bei `ax25` nicht:
+bei `ax25` entscheidet sie nichts — bei `0666` hat ohnehin jeder Schreibrecht.
+Bei `monitor` und `packet` ist die Gruppe die Entscheidung, und der Socket
+erbt sie von `/tcp/sockets`, damit `chgrp hams /tcp/sockets` auf BSD und Linux
+dasselbe meint (Linux trägt sonst die Gruppe des Prozesses ein).
 
 Wer die Bedingungen lieber am Socket selbst nennt: `net.rc` läuft, nachdem er
 existiert.
@@ -233,14 +247,19 @@ existiert.
 ```
 axsock group hams
 axsock mode 0660          →  srw-rw----  1 root hams  /tcp/sockets/ax25
+axsock monitor group hams          diese Gruppe darf zusehen (Vorgabe 0660)
+axsock packet group hams
+axsock packet mode 0660           diese Gruppe darf einspeisen (Vorgabe 0600)
 ```
 
 Dann dürfen Mitglieder der Gruppe den Sender benutzen und sonst niemand kann
-sich auch nur verbinden.  Feinere Abstufung ist Sache des Dateisystems und
-nicht unsere — eine Gruppe je Daemon, eine ACL für ein Konto, was Eure Maschine
+sich auch nur verbinden.  Einspeisen bleibt bewusst **zwei** Schritte (Gruppe
+*und* Modus): es ist der gefährlichste Griff des Knotens, und eine `chgrp`
+allein öffnet ihn nie.  Feinere Abstufung ist Sache des Dateisystems und nicht
+unsere — eine Gruppe je Daemon, eine ACL für ein Konto, was Eure Maschine
 ohnehin kann.
 
-Diese beiden Zeilen gehören in `net.rc` und nicht in die Finger, und der Grund
+Solche Zeilen gehören in `net.rc` und nicht in die Finger, und der Grund
 ist, dass **die Socket-Datei einen Neustart nicht überlebt**.  Ein startender
 Knoten findet die alte im Weg und entfernt sie vor dem Binden — vorsichtig: nur
 wenn es wirklich ein Socket ist, und nur wenn niemand darauf antwortet, damit
@@ -267,7 +286,9 @@ Was diese Person **nicht** kann:
 * eine Sitzung sehen oder stören, die schon an jemand anderen übergeben wurde.
   Jede Sitzung ist ein eigenes Socket-Paar, dessen eines Ende an den einen
   Client geht, der das Rufzeichen beansprucht hat.  Es gibt keine Möglichkeit,
-  eine Kopie zu erbitten, und keinen Monitorstrom zum Mithören.
+  eine Kopie zu erbitten, und es kommt kein Monitorstrom mit — Zuschauen ist
+  eine eigene Vollmacht (`sockets/monitor`, 0660 mit der Gruppe von
+  `sockets/`).
 
 Kurz: **die Grenze verläuft im Dateisystem, und sie ist echt — aber alles
 innerhalb davon genießt Vertrauen.**  Behandelt die Mitgliedschaft in dieser

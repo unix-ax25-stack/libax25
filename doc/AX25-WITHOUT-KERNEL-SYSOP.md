@@ -204,18 +204,34 @@ service socket, no password, no per-user configuration — whoever can open
 That is deliberate, and it is why the socket is where it is: a unix socket
 carries its rights in the file system, which is a tool you already know.
 
-**Out of the box the gate is the DIRECTORY, not the socket:**
+**Out of the box the SOCKET is the gate, not the directory:**
 
 ```
-drwxr-x---  2 root staff  /tcp/sockets          0750, and this is the gate
+drwxr-xr-x  2 root staff  /tcp/sockets          0755, the way there
 srw-rw-rw-  1 root staff  /tcp/sockets/ax25     0666, deliberately open
 ```
 
-That looks backwards until you see which one decides.  The directory carries
-the group, so one `chgrp hams /tcp/sockets` moves the whole service from one
-group to another and no socket mode has to be reasoned about.  (The socket is
-`0666` and not `0777` because `connect()` on a unix socket asks for **write**
-and never for execute — measured, and Linux says so in `af_unix.c`.)
+The directory decides who may walk the path — nothing more.  What reaches the
+service is what the socket says, and there are three sockets with three
+degrees:
+
+```
+/tcp/sockets/ax25       0666    connect  — use the transmitter
+/tcp/sockets/monitor    0660    watch    — every frame on the node
+/tcp/sockets/packet     0600    inject   — raw AX.25 frames out
+```
+
+The ladder narrows as the privilege grows: connecting is open to every local
+account by default, watching belongs to the group, injecting to the node's
+owner alone.  (The socket is `0666` and not `0777` because `connect()` on a
+unix socket asks for **write** and never for execute — measured, and Linux
+says so in `af_unix.c`.)
+
+Why the group is inherited by `monitor` and `packet` but not by `ax25`: at
+`ax25` it decides nothing — at `0666` everybody has write anyway.  At
+`monitor` and `packet` the group IS the decision, and the socket inherits it
+from `/tcp/sockets` so that `chgrp hams /tcp/sockets` means the same on BSD
+and Linux (Linux would otherwise enter the process's group).
 
 If you would rather state the terms on the socket itself, `net.rc` runs after
 it exists:
@@ -223,11 +239,16 @@ it exists:
 ```
 axsock group hams
 axsock mode 0660          →  srw-rw----  1 root hams  /tcp/sockets/ax25
+axsock monitor group hams          this group may watch (default 0660)
+axsock packet group hams
+axsock packet mode 0660           this group may inject (default 0600)
 ```
 
 Then members of the group may use the transmitter and nobody else can even
-connect.  Finer grain is the file system's business, not ours — a group per
-daemon, an ACL for one account, whatever your machine already does.
+connect.  Injecting stays deliberately **two** steps (group *and* mode): it is
+the node's widest grant, and a `chgrp` alone never opens it.  Finer grain is
+the file system's business, not ours — a group per daemon, an ACL for one
+account, whatever your machine already does.
 
 Both of those lines belong in `net.rc` rather than in your fingers, and the
 reason is that **the socket file does not survive a restart**.  A node that
@@ -255,7 +276,8 @@ What that person **cannot** do:
 * see or interfere with a session already handed to somebody else.  Each
   session is a socket pair of its own, one end passed to the one client that
   claimed the callsign.  There is no way to ask for a copy, and no monitor
-  stream to listen on.
+  stream comes with it — watching is a grant of its own (`sockets/monitor`,
+  0660 with the group of `sockets/`).
 
 In short: **the boundary is a file system one, and it is real — but everything
 inside it is trusted.**  Treat membership in that group as you would treat the

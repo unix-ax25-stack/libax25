@@ -51,6 +51,7 @@ nobase_libax25ioinclude_HEADERS = 	\
 
 libax25_la_SOURCES = \
 	axconfig.c \
+	axconfig_int.h \
 	netax25/axconfig.h \
 	netax25/axlib.h \
 	axutils.c \

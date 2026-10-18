@@ -211,16 +211,20 @@ extern int ax25_config_port_is_kernel(const char *);
 extern int ax25_config_kernel_ports(void);
 
 /*
- * The name in axports of the port a bind address names, 0 on success and 1
- * with an empty name.  The callsign in the first digipeater slot names the
- * port, or the source callsign when no slot is given; a "base:suffix" name
- * that ax25_port_ptr() resolved through the lazy hook is taken from the
- * remembered entry instead, so the suffix survives the round trip.
+ * NOT HERE, AND NOT BY ACCIDENT.  ax25_config_bind_port() - the name in
+ * axports of the port a bind address names, asked once for both backends -
+ * takes a struct sockaddr and a socklen_t, and a header that names a type has
+ * to name the header that defines it.  This file named an ax25_address for
+ * years and nothing else, so a program has always included <netax25/ax25.h>
+ * first and never noticed; putting a socket type in here made exactly that
+ * program fail, with "unknown type name 'socklen_t'" and a hint to locale_t,
+ * which is no answer anybody can act on (Thomas).
  *
- * Both backends resolve binds this way and must agree on the answer, so it is
- * here once rather than in either of them.
+ * The declaration lives in axconfig_int.h, which the library's own files
+ * include.  The rule it leaves behind: the types this header may name are the
+ * ones <netax25/ax25.h> defines, and nothing else - it has to keep working for
+ * a program that only wants the port table.
  */
-extern int ax25_config_bind_port(const struct sockaddr *, socklen_t, char *, size_t);
 
 /*
  * This function takes the port name and returns the default window size. On

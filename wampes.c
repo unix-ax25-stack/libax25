@@ -61,6 +61,7 @@
 #include "netax25/ax25.h"
 #include "netax25/axlib.h"
 #include "netax25/axconfig.h"
+#include "axconfig_int.h"		/* ax25_config_bind_port() */
 
 #include "netax25/wampes_client.h"
 

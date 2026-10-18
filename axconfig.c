@@ -18,6 +18,8 @@
 #include <netax25/axlib.h>
 #include <netrose/rose.h>
 
+#include "axconfig_int.h"		/* ax25_config_bind_port() */
+
 #include "pathnames.h"
 #include "util.h"
 #include "axsock_real.h"

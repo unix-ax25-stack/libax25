@@ -1895,19 +1895,27 @@ Gegenstück zu `wampes_mon_read()`: lazy eine Verbindung auf
 Handshake `monitor\n`, dann der Rekord `[4B Länge][Name][NUL][Frame]`.
 Reißt ein Schreiben, wird der Descriptor geschlossen und `*fdp = -1`; die
 nächste Aufzeichnung beginnt von vorn, statt in einen Knoten zu schreiben,
-der nicht mehr liest.  Im Shim landet **`sendto()`** auf einem
-`SOCK_PACKET`-fd im `s->raw`-Zweig von `agwpe_sendto()`: der
-Interface-Name kommt aus `sa_data` (wie beim `bind()`), sonst aus dem
-gebundenen `s->bound`.  Ohne WAMPES-Knoten gibt es kein `sockets/packet`
-und der Rekord paßt in kein AGWPE-Kommando — dann ehrlich `EOPNOTSUPP`
-statt eines Schreibens ins Leere.
+der nicht mehr liest.  Im Shim landet **`sendto()`, `send()` und
+`write()`** auf einem `SOCK_PACKET`-fd in *einer* Funktion:
+`axsock_raw_write_locked()` (`agwpe_sock.c`) — dem `s->raw`-Zweig von
+`agwpe_sendto()`, `agwpe_send()` und `agwpe_write()`.  Das Interface
+kommt für `sendto()` aus `sa_data` (wie beim `bind()`), für
+`send()`/`write()` — die keine Adresse haben — aus dem gebundenen
+`s->bound`.  Benennt keiner von beiden etwas, sagt die Funktion
+`EDESTADDRREQ`, was auch der Kernel auf ein `write()` ohne Ziel sagt.
+Ohne WAMPES-Knoten gibt es kein `sockets/packet` und der Rekord paßt in
+kein AGWPE-Kommando — dann ehrlich `EOPNOTSUPP` statt eines Schreibens
+ins Leere.
 
-`send()`/`write()` sind **noch nicht** dort: sie laufen weiter in
-`axsock_send_data()` (den Paar-Pfad).  Das ist die verbleibende Hälfte von
-§11.9.  Ein Programm, das roh sendet, benutzt ohnehin `sendto()` mit dem
-Gerätenamen — wie der Kernel, der ein `write()` auf einem unadressierten
-`SOCK_PACKET`-fd mit `ENOTCONN` quittiert; der Test (`rawsend.py`) nimmt
-genau diesen Ruf.
+**Was fehlt: die AGWPE-Hälfte.**  Ein `SOCK_PACKET`-fd gegen einen
+AGWPE-Server könnte denselben Weg tragen: der Befehl für einen ganzen
+Rahmen steht im Kopf (`AGWPE_CMD_RAW`, `'K'` in `netax25/agwpe.h`), und
+diesen Baum läßt `'k'` (Roh-Monitor) schon empfangen.  Was den Sendeweg
+noch hält, ist, daß hier noch nie einer **herausging**: seine Form ist
+eine Frage der Drahtkompatibilität — welche Portnummer ein Socket
+hineinschreibt, der selbst keine hat, und was der Server hinter `'K'`
+erwartet — und eine Drahtfrage will an einem Server geprüft, nicht
+geraten werden.  Der Helper ist die eine Stelle, an der sie hinzukommt.
 
 **Belegt (Laufzeit, macOS).**  `packete2e.py` (Pty-Port, Knoten mit `-d`,
 ein Client auf `sockets/packet`) fährt beide Richtungen: ein Rekord auf
@@ -1916,9 +1924,16 @@ KISS-Rahmen auf der Leitung kommt als Rekord auf `sockets/packet` an, ein
 Rekord mit unbekanntem Port wird still verworfen (die Verbindung und der
 Knoten bleiben), und `sockets/packet` liegt auf **0600** mit der Gruppe des
 Verzeichnisses.  Mit `--shim` läuft zusätzlich `rawsend.py` mit der
-Bibliothek (`DYLD_INSERT_LIBRARIES`): sein `sendto()` auf dem
-`SOCK_PACKET`-fd erreicht den `s->raw`-Zweig und derselbe Rahmen steht auf
-der Leitung.  Die Werkzeuge liegen in `wampes-import/testtools/`
+Bibliothek (`DYLD_INSERT_LIBRARIES`) — **dreimal**, in den drei Arten,
+einen Rahmen loszuwerden (`--weg sendto|send|write`; für die beiden ohne
+Adresse bindet `rawsend.py` den Socket vorher selbst an das Gerät, was
+im Shim `s->bound` trägt):
+
+    5 shim:    sendto auf SOCK_PACKET auf der Leitung gesehen (rawsend rc=0)
+    5 shim:    send   auf SOCK_PACKET auf der Leitung gesehen (rawsend rc=0)
+    5 shim:    write  auf SOCK_PACKET auf der Leitung gesehen (rawsend rc=0)
+
+alle drei aus `axsock_raw_write_locked()`.  Die Werkzeuge liegen in
 (`packetinject.py`, `packetread.py`, `rawsend.py`, `packete2e.py`).
 
 **Siehe auch:** `wampes.git/doc/PERMISSIONS.md`, `INSTALL-PATHS.md` (die

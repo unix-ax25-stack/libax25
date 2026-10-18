@@ -3678,6 +3678,77 @@ int agwpe_connect(int fd, const struct sockaddr *addr, socklen_t len,
 	return 1;
 }
 
+/* THE RAW WAY OUT, and it is the same way for send(), write() and sendto():
+ * a WHOLE FRAME for a device, as a SOCK_PACKET monitor writes it.  It reaches
+ * the node's packet socket as the record the monitor socket writes -
+ * [length][interface][NUL][frame] - and the node sends the frame exactly as it
+ * stands (wampes.c, and remote_net.c on the other end).
+ *
+ * THE INTERFACE comes from sa_data when the caller named an address, and from
+ * what bind() took otherwise.  That second half is what write() and send()
+ * live on: they carry no address at all, so for them the bound device is the
+ * only one there is - and a raw socket that bound nowhere has nowhere to put a
+ * frame (EDESTADDRREQ), which is the same answer sendto() gives for it.
+ *
+ * THE AGWPE HALF IS NOT HERE, and this function is the one place where that
+ * shows.  The wire does have a command for a whole frame - AGWPE_CMD_RAW, 'K'
+ * in netax25/agwpe.h - so a monitor socket against an AGWPE server can be
+ * made to carry frames the same way, and that is a known-open half (Thomas:
+ * "fuer wampes hatten wir diese neue Funktionalitaet fuer PF_PACKET gebaut
+ * und festgestellt dass das feature fuer AGWPE ebenfalls umgesetzt werden
+ * kann").  What has kept it here is that this tree has never SENT such a
+ * frame: its shape is a wire compatibility question - which port number a
+ * socket that has no port puts into the header, and what the server on the
+ * other end expects behind 'K' - and a wire question wants a server to be
+ * asked, not a guess to be typed.  Until then EOPNOTSUPP says where the frame
+ * would have had to go, which beats a write into a pair that nobody reads.
+ *
+ * A ZERO LENGTH frame is not a frame: it writes nothing and says nothing,
+ * which is how a packet socket behaves.
+ *
+ * CALLED WITH axsock_lock HELD and returns with it held; the result is the
+ * frame length or -1 with errno.  s is the socket the fd belongs to, so the
+ * caller has already looked it up.
+ */
+static ssize_t axsock_raw_write_locked(struct axsock_sock *s,
+				       const void *buf, size_t len,
+				       const struct sockaddr *to,
+				       socklen_t tolen)
+{
+	const struct sockaddr *sa0 = (const struct sockaddr *)to;
+	char iface[sizeof(s->bound)];
+	int have = 0;
+
+	if (len == 0)
+		return 0;
+
+	if (!wampes_enabled()) {
+		errno = EOPNOTSUPP;
+		return -1;
+	}
+
+	if (to != NULL && tolen >= sizeof(*sa0) &&
+	    (sa0->sa_family == AF_PACKET || sa0->sa_family == AF_INET)) {
+		memcpy(iface, sa0->sa_data, sizeof(iface) - 1);
+		iface[sizeof(iface) - 1] = '\0';
+		have = iface[0] != '\0';
+	}
+	if (!have && s->bound[0] != '\0') {
+		memcpy(iface, s->bound, sizeof(iface));
+		have = 1;
+	}
+	if (!have) {
+		errno = EDESTADDRREQ;
+		return -1;
+	}
+	if (axsock_debug)
+		fprintf(stderr, "axsock: raw write fd=%d iface='%s' len=%zu\n",
+			s->fd, iface, len);
+	if (wampes_raw_send(&s->packfd, iface, buf, len) != 0)
+		return -1;
+	return (ssize_t)len;
+}
+
 int agwpe_send(int fd, const void *buf, size_t len, ssize_t *ret)
 {
 	struct axsock_sock *s;
@@ -3687,6 +3758,14 @@ int agwpe_send(int fd, const void *buf, size_t len, ssize_t *ret)
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
 		return 0;
+	}
+	/* A RAW MONITOR HAS NO AGWPE DATA PATH: send() here carries a whole
+	 * frame, not a callsign string and a pid, and it goes to the device
+	 * bind() named.  Everything else is the AGWPE 'V' way. */
+	if (s->raw) {
+		*ret = axsock_raw_write_locked(s, buf, len, NULL, 0);
+		pthread_mutex_unlock(&axsock_lock);
+		return 1;
 	}
 	*ret = axsock_send_data(s, buf, len);
 	pthread_mutex_unlock(&axsock_lock);
@@ -3707,59 +3786,17 @@ int agwpe_sendto(int fd, const void *buf, size_t len,
 		return 0;
 	}
 
-	/* A SOCK_PACKET monitor putting a frame on the air.  It reaches the
-	 * node's packet socket as the record its monitor socket writes -
-	 * [length][interface][NUL][frame] - and the node sends the frame
-	 * exactly as it stands (wampes.c, and remote_net.c on the other end).
-	 *
-	 * The interface is the one sa_data names, as bind() took the device
-	 * from there; a sendto() that names none falls back to what bind()
-	 * said, and one that named neither has nowhere to put a frame.  The
-	 * address is only ever a device here - a callsign would be the
-	 * DGRAM's business, and this socket is not that.
+	/* THE RAW WAY OUT, and it is the same one for send(), write() and
+	 * sendto() - axsock_raw_write_locked() above says what it is, and
+	 * what its AGWPE half still owes.
 	 */
-	if (s->raw && len > 0) {
-		const struct sockaddr *sa0 = (const struct sockaddr *)to;
-		char iface[sizeof(s->bound)];
-		int have = 0;
-
-		/* No WAMPES node, no packet socket: AGWPE has no command
-		 * that takes a whole frame - its 'V' builds the header from
-		 * a callsign string and a pid - so there is nowhere to put
-		 * this one.  Saying so beats a write into the pair that
-		 * nobody reads. */
-		if (!wampes_enabled()) {
-			errno = EOPNOTSUPP;
+	if (s->raw) {
+		r = axsock_raw_write_locked(s, buf, len, to, tolen);
+		if (r < 0) {
 			pthread_mutex_unlock(&axsock_lock);
 			*ret = -1;
 			return 1;
 		}
-
-		if (to != NULL && tolen >= sizeof(*sa0) &&
-		    (sa0->sa_family == AF_PACKET || sa0->sa_family == AF_INET)) {
-			memcpy(iface, sa0->sa_data, sizeof(iface) - 1);
-			iface[sizeof(iface) - 1] = '\0';
-			have = iface[0] != '\0';
-		}
-		if (!have && s->bound[0] != '\0') {
-			memcpy(iface, s->bound, sizeof(iface));
-			have = 1;
-		}
-		if (!have) {
-			errno = EDESTADDRREQ;
-			pthread_mutex_unlock(&axsock_lock);
-			*ret = -1;
-			return 1;
-		}
-		if (axsock_debug)
-			fprintf(stderr, "axsock: raw sendto fd=%d iface='%s' len=%zu\n",
-				fd, iface, len);
-		if (wampes_raw_send(&s->packfd, iface, buf, len) != 0) {
-			pthread_mutex_unlock(&axsock_lock);
-			*ret = -1;
-			return 1;
-		}
-		r = (ssize_t)len;
 	} else if (s->type == SOCK_DGRAM && axsock_is_ax25(to, tolen) &&
 	    len <= INT_MAX) {
 		const struct sockaddr_ax25 *sa =
@@ -3853,6 +3890,15 @@ int agwpe_write(int fd, const void *buf, size_t len, ssize_t *ret)
 	if (s == NULL) {
 		pthread_mutex_unlock(&axsock_lock);
 		return 0;
+	}
+	/* A RAW MONITOR HAS NO AGWPE DATA PATH, same as send() above: a
+	 * write() here carries a whole frame, and it goes to the device
+	 * bind() named.  Before the connect below, which a monitor socket
+	 * has no business making. */
+	if (s->raw) {
+		*ret = axsock_raw_write_locked(s, buf, len, NULL, 0);
+		pthread_mutex_unlock(&axsock_lock);
+		return 1;
 	}
 	if (!axsock_up)
 		(void)axsock_ensure_locked();

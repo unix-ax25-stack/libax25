@@ -120,6 +120,13 @@ struct axsock_sock {
 					 * raw AX.25 frame from the upstreams */
 	char			bound[16];	/* raw monitor: SOCK_PACKET bind
 					   device name, '' = all ports */
+	int			packfd;	/* raw monitor sending: the node's
+					 * packet socket, opened on the first
+					 * frame and kept until the socket
+					 * goes (-1: none yet).  Sending is
+					 * the other half of watching, and it
+					 * is the node's own socket that
+					 * carries it - see wampes_raw_send() */
 	int			registered;	/* call registered with the server */
 	unsigned char		*pend;	/* inbound bytes the peer end would
 					 * not take yet, in order */
@@ -1423,6 +1430,7 @@ static struct axsock_sock *axsock_alloc_sock_locked(int type)
 	s->peer = fds[1];
 	s->type = type;
 	s->pid = AGWPE_PID_AX25;
+	s->packfd = -1;
 
 	s->next = axsock_list;
 	axsock_list = s;
@@ -3683,7 +3691,60 @@ int agwpe_sendto(int fd, const void *buf, size_t len,
 		return 0;
 	}
 
-	if (s->type == SOCK_DGRAM && axsock_is_ax25(to, tolen) &&
+	/* A SOCK_PACKET monitor putting a frame on the air.  It reaches the
+	 * node's packet socket as the record its monitor socket writes -
+	 * [length][interface][NUL][frame] - and the node sends the frame
+	 * exactly as it stands (wampes.c, and remote_net.c on the other end).
+	 *
+	 * The interface is the one sa_data names, as bind() took the device
+	 * from there; a sendto() that names none falls back to what bind()
+	 * said, and one that named neither has nowhere to put a frame.  The
+	 * address is only ever a device here - a callsign would be the
+	 * DGRAM's business, and this socket is not that.
+	 */
+	if (s->raw && len > 0) {
+		const struct sockaddr *sa0 = (const struct sockaddr *)to;
+		char iface[sizeof(s->bound)];
+		int have = 0;
+
+		/* No WAMPES node, no packet socket: AGWPE has no command
+		 * that takes a whole frame - its 'V' builds the header from
+		 * a callsign string and a pid - so there is nowhere to put
+		 * this one.  Saying so beats a write into the pair that
+		 * nobody reads. */
+		if (!wampes_enabled()) {
+			errno = EOPNOTSUPP;
+			pthread_mutex_unlock(&axsock_lock);
+			*ret = -1;
+			return 1;
+		}
+
+		if (to != NULL && tolen >= sizeof(*sa0) &&
+		    (sa0->sa_family == AF_PACKET || sa0->sa_family == AF_INET)) {
+			memcpy(iface, sa0->sa_data, sizeof(iface) - 1);
+			iface[sizeof(iface) - 1] = '\0';
+			have = iface[0] != '\0';
+		}
+		if (!have && s->bound[0] != '\0') {
+			memcpy(iface, s->bound, sizeof(iface));
+			have = 1;
+		}
+		if (!have) {
+			errno = EDESTADDRREQ;
+			pthread_mutex_unlock(&axsock_lock);
+			*ret = -1;
+			return 1;
+		}
+		if (axsock_debug)
+			fprintf(stderr, "axsock: raw sendto fd=%d iface='%s' len=%zu\n",
+				fd, iface, len);
+		if (wampes_raw_send(&s->packfd, iface, buf, len) != 0) {
+			pthread_mutex_unlock(&axsock_lock);
+			*ret = -1;
+			return 1;
+		}
+		r = (ssize_t)len;
+	} else if (s->type == SOCK_DGRAM && axsock_is_ax25(to, tolen) &&
 	    len <= INT_MAX) {
 		const struct sockaddr_ax25 *sa =
 			(const struct sockaddr_ax25 *)to;
@@ -4144,6 +4205,14 @@ int agwpe_close(int fd, int *ret)
 		axsock_nuisub--;
 
 	if (s->raw) {
+		/* The node's packet socket went with this one; it was opened
+		 * for sending and nobody else holds it. */
+		if (s->packfd >= 0) {
+			int pfd = s->packfd;
+
+			s->packfd = -1;
+			real_close(pfd);
+		}
 		if (--axsock_nraw == 0 && axsock_up && axsock_agwpe != NULL)
 			agwpe_client_raw_toggle(axsock_agwpe);
 	}

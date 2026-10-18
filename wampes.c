@@ -2484,15 +2484,18 @@ static const char *wampes_mon_node_for_addr(const char *addr)
 	return NULL;
 }
 
-/* The service socket is "<nodedir>/sockets/ax25" and the monitor is its
- * sibling.  Only a path with that leaf has one: a node reached over TCP has
- * no monitor to open, because the record is not spoken there and this is not
- * the place to invent it. */
-static int wampes_mon_path(const char *addr, char *out, size_t outlen)
+/* The service socket is "<nodedir>/sockets/ax25", and the monitor and the
+ * packet socket are its siblings.  Only a path with that leaf has any of
+ * them: a node reached over TCP has no socket to open, because the record is
+ * not spoken there and this is not the place to invent it.  The leaf replaces
+ * the service socket's own, which is what makes them siblings and not paths
+ * of their own to configure. */
+static int wampes_sibling_path(const char *addr, const char *leaf,
+			       char *out, size_t outlen)
 {
-	static const char leaf[] = "monitor";
 	const char *slash;
 	size_t dir;
+	size_t leaflen = strlen(leaf) + 1;	/* the NUL counts */
 
 	if (addr == NULL || addr[0] != '/')
 		return 0;
@@ -2500,11 +2503,21 @@ static int wampes_mon_path(const char *addr, char *out, size_t outlen)
 	if (slash == NULL || strcmp(slash + 1, "ax25") != 0)
 		return 0;
 	dir = (size_t) (slash - addr);
-	if (dir + 1 + sizeof(leaf) > outlen)
+	if (dir + 1 + leaflen > outlen)
 		return 0;
 	memcpy(out, addr, dir + 1);
-	memcpy(out + dir + 1, leaf, sizeof(leaf));
+	memcpy(out + dir + 1, leaf, leaflen);
 	return 1;
+}
+
+static int wampes_mon_path(const char *addr, char *out, size_t outlen)
+{
+	return wampes_sibling_path(addr, "monitor", out, outlen);
+}
+
+static int wampes_packet_path(const char *addr, char *out, size_t outlen)
+{
+	return wampes_sibling_path(addr, "packet", out, outlen);
 }
 
 static void wampes_mon_register(int fd, const char *node)
@@ -2740,4 +2753,82 @@ ssize_t wampes_mon_read(int fd, void *buf, size_t buflen,
 		*asize = (socklen_t) sizeof(*sa);
 	}
 	return (ssize_t) (framelen + 1);
+}
+
+/* The other direction, on the sibling socket: one frame to the node, out
+ * onto the air.  The record is the one wampes_mon_read() takes apart, sent
+ * back the same way - [4 byte big-endian frame length][interface name][NUL]
+ * [frame] - because the node's packet socket reads exactly what its monitor
+ * socket writes (remote_net.c: packet_byte()).
+ *
+ * The frame is a whole AX.25 frame, header and all, as it would leave the
+ * port; the node takes the addresses off the front, requires UI, and puts
+ * the rest out through ax_send_ui() unchanged.  So this is the originator's
+ * path, not a digipeater's: nothing is rewritten on the way.
+ *
+ * The connection is made on the first frame and kept - one per caller, and
+ * the caller closes it with close(), as it does a monitor descriptor.  A
+ * write that fails leaves *fdp at -1, so the next frame starts a fresh
+ * connection rather than pushing bytes at a node that is not reading: the
+ * node goes down and comes back up, and its sockets with it, without this
+ * side hearing about it any other way.
+ *
+ * The handshake is the word "monitor", the same one the monitor socket
+ * takes - the node answers both sockets from one table, and the difference
+ * is the socket, not the word (see remote_net.c).  One line, and then the
+ * stream is binary in both directions.
+ */
+int wampes_raw_send(int *fdp, const char *iface, const void *frame, size_t len)
+{
+	char path[sizeof(((struct sockaddr_un *) 0)->sun_path)];
+	unsigned char hdr[4];
+	int fd;
+
+	if (fdp == NULL || iface == NULL || frame == NULL || len == 0 ||
+	    len > WAMPES_MON_FRAME_MAX || strlen(iface) > WAMPES_MON_NAME_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (*fdp < 0) {
+		const char *addr = wampes_address(NULL);
+
+		if (addr == NULL || !wampes_packet_path(addr, path,
+							sizeof(path))) {
+			errno = EPROTONOSUPPORT;
+			return -1;
+		}
+		if ((fd = wampes_dial(path)) < 0)
+			return -1;	/* ours, and it would not connect */
+		if (write_all(fd, "monitor\n", 8) != 0) {
+			int save = errno;
+
+			close(fd);
+			errno = save;
+			return -1;
+		}
+		*fdp = fd;
+	}
+	fd = *fdp;
+
+	hdr[0] = (unsigned char) (len >> 24);
+	hdr[1] = (unsigned char) (len >> 16);
+	hdr[2] = (unsigned char) (len >> 8);
+	hdr[3] = (unsigned char) len;
+	if (write_all(fd, hdr, sizeof(hdr)) != 0 ||
+	    write_all(fd, iface, strlen(iface) + 1) != 0 ||
+	    write_all(fd, frame, len) != 0) {
+		int save = errno;
+
+		/* A record is written whole or not at all: half of one leaves
+		 * the node reading the next length out of this frame's
+		 * payload, for good.  write_all() already refused to send the
+		 * rest, so the only thing left is to take the connection
+		 * away. */
+		close(fd);
+		*fdp = -1;
+		errno = save;
+		return -1;
+	}
+	return 0;
 }

@@ -91,4 +91,22 @@ ssize_t wampes_mon_read(int fd, void *buf, size_t buflen,
  * read back for a later socket that happens to land on the same number. */
 int wampes_mon_close(int fd);
 
+/*
+ * One frame to the node, out onto the air, over the packet socket - the
+ * sibling of the monitor socket that reads the same record it writes:
+ *
+ *	[4 byte big-endian frame length][interface name][NUL][frame]
+ *
+ * The frame is a whole AX.25 frame as it would leave the port; the node
+ * requires UI and sends it unchanged (remote_net.c).  The connection is made
+ * on the first call and kept; the caller closes it with close() when it is
+ * done with the descriptor it holds, as it does a monitor one.  Returns 0,
+ * or -1 with errno set; after a failed write the descriptor the caller
+ * holds is closed and *fdp is -1, so the next frame starts afresh.
+ *
+ * *fdp starts at -1; iface names the node's own interface ("hf1"), not an
+ * axports entry; len is the frame, at most AXMON_FRAME_MAX bytes.
+ */
+int wampes_raw_send(int *fdp, const char *iface, const void *frame, size_t len);
+
 #endif

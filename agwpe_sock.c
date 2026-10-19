@@ -37,6 +37,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <stddef.h>
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -797,6 +798,8 @@ static int axsock_call_base_equal(const char *a, const char *b);
 
 static int agwpe_local_upstream(const char *base);
 static int axsock_port_of_entry(const char *entry);
+static size_t axsock_dev_copy(char *dst, size_t dstlen,
+			      const struct sockaddr *sa, socklen_t salen);
 
 /*
  * Is the AGWPE server this shim talks to on this machine?
@@ -1980,6 +1983,10 @@ static void axsock_dispatch(agwpe_client_t *c, const struct agwpe_s *hdr,
 			if (n != (ssize_t)(AXMON_HDR_LEN + len))
 				continue;	/* monitor fell behind: drop */
 			s->port = hdr->port;
+			/* The socket has a port now, which is what the raw
+			 * write needs to answer "send it back out" for a
+			 * socket that was never bound to a device. */
+			s->port_known = 1;
 		}
 		/*
 		 * Only the monitors are fed from here.  A datagram socket
@@ -2925,19 +2932,25 @@ static int agwpe_local_upstream(const char *base)
  * is decided by a cable, and a port meant for the local stack was handed to
  * netd and sent out of the AGWPE upstream instead.
  *
- * So the rest comes from the configuration.  The name is compared the way the
- * rest of the code compares it: an optional "agwpe-" marker and a ":N"
- * channel suffix come off first, since the prefix only ever said which
- * upstream of several was meant, and the suffix which of its channels.  The
- * virtual loopback upstream is ours by construction wherever it is named,
- * because axsock_port_for() sends it there and the two answers have to agree.
+ * So the rest comes from the configuration, and from one line of it: an axports
+ * entry that carries the "agwpe-" marker is a port the sysop declared to be
+ * served by an AGWPE server - that is what axports already documents the
+ * prefix as, and axports is where every port is declared, in both worlds.
+ * What used to decide was the upstream table of another program (this file,
+ * when it happens to be installed) or the port table of a server that had to
+ * be reachable; either could turn a declared port into something else behind
+ * the sysop's back and hand a declared AGWPE port to the node - frames on the
+ * wrong medium, and nothing at the sending end saying so.
  *
- * The local ax25netd_agwpe.conf decides the ordinary case; the server's own port table
- * is asked only for a name the file does not have, which is the machine whose
- * server is elsewhere.  A name neither knows is not ours, and the descriptor
- * goes back to bind() to be refused in the kernel's words - the port is
- * either mistyped or meant for a stack that has no such port, and both are
- * better said than guessed at.
+ * The marker says only that.  The caller still has to find the upstream,
+ * because a port number has to come from somewhere; when it cannot, that is
+ * said where a bind can be refused properly - axsock_port_unserved() prints
+ * "no backend serves the port 'x' ... no AGWPE upstream or server port",
+ * which is the truth about a marked entry whose upstream is listed nowhere.
+ * What "not ours" did was hand the descriptor on to bind() to be refused in
+ * the kernel's words - the wrong stack's words for a port that was declared,
+ * and nothing in them telling the operator that the upstream is what is
+ * missing.
  */
 static int agwpe_owns_port(const char *name)
 {
@@ -2957,21 +2970,17 @@ static int agwpe_owns_port(const char *name)
 	n[len] = '\0';
 	base = axsock_strip_prefix(n);
 
+	/* THE MARKER DECIDES, and nothing else here (see above). */
+	if (base != n)
+		return 1;
+
+	/* The virtual loopback upstream is ours by construction wherever it
+	 * is named, because axsock_port_for() sends it there and the two
+	 * answers have to agree. */
 	if (strcasecmp(base, "loop") == 0)
 		return 1;
-	if (agwpe_local_upstream(base) >= 0)
-		return 1;
 
-	if (axsock_gnports < 0 && axsock_ports_fetch() != 0) {
-		if (axsock_debug)
-			fprintf(stderr, "axsock: no AGWPE port table at %s:%d "
-				"and no upstream '%s' in %s, so port '%s' is "
-				"not ours\n", axsock_server_name(), axsock_port, base,
-				CONF_AGWPE_FILE, name);
-		return 0;
-	}
-
-	return axsock_gport_channel(base, 0) >= 0;
+	return 0;
 }
 
 int agwpe_forget(int fd)
@@ -3453,9 +3462,7 @@ int agwpe_bind(int fd, const struct sockaddr *addr, socklen_t len,
 			*ret = -1;
 			return 1;
 		}
-		memcpy(s->bound, sa0->sa_data,
-		       sizeof(s->bound) - 1);
-		s->bound[sizeof(s->bound) - 1] = '\0';
+		(void) axsock_dev_copy(s->bound, sizeof(s->bound), sa0, len);
 		if (axsock_debug)
 			fprintf(stderr, "axsock: bind fd=%d raw dev='%s'\n",
 				fd, s->bound);
@@ -3690,18 +3697,30 @@ int agwpe_connect(int fd, const struct sockaddr *addr, socklen_t len,
  * only one there is - and a raw socket that bound nowhere has nowhere to put a
  * frame (EDESTADDRREQ), which is the same answer sendto() gives for it.
  *
- * THE AGWPE HALF IS NOT HERE, and this function is the one place where that
- * shows.  The wire does have a command for a whole frame - AGWPE_CMD_RAW, 'K'
- * in netax25/agwpe.h - so a monitor socket against an AGWPE server can be
- * made to carry frames the same way, and that is a known-open half (Thomas:
- * "fuer wampes hatten wir diese neue Funktionalitaet fuer PF_PACKET gebaut
- * und festgestellt dass das feature fuer AGWPE ebenfalls umgesetzt werden
- * kann").  What has kept it here is that this tree has never SENT such a
- * frame: its shape is a wire compatibility question - which port number a
- * socket that has no port puts into the header, and what the server on the
- * other end expects behind 'K' - and a wire question wants a server to be
- * asked, not a guess to be typed.  Until then EOPNOTSUPP says where the frame
- * would have had to go, which beats a write into a pair that nobody reads.
+ * THE AGWPE HALF is the same frame over the link, as the 'K' frame it is
+ * there: a header that names the port, and a data area that starts with the
+ * KISS data byte - 0x00, what the kernel's KISS layer writes in that place,
+ * and what direwolf skips over again before it reads the frame (direwolf
+ * server.c, case 'K': ax25_from_frame(cmd.data+1, data_len-1)) - followed by
+ * the frame as it stands.  The byte is the same on the way in: direwolf
+ * prefixes the frames it sends with the channel in it (channel << 4), which
+ * for channel 0 is the same 0x00.  Nothing of the port lives in it; the port
+ * is in the header, and direwolf ignores the byte entirely in favour of that
+ * (its own comment calls the redundancy a bug fix).
+ *
+ * THE PORT is the one the device names - the same test axsock_raw_match()
+ * makes for the frames coming in, asked the other way round: a port whose
+ * axports name, or whose entry's device, is the device bind() took.  A
+ * socket that named no device sends back out the port its own frames arrived
+ * on, which is the port the receive path kept for it; one that named neither
+ * has nowhere to put a frame (EDESTADDRREQ), the same answer the wampes half
+ * gives it.  A device no port of this server answers to is EADDRNOTAVAIL,
+ * which is what it means: the name is fine, it just is not one of them.
+ *
+ * THE LINK IS NOT OPTIONAL HERE, unlike everywhere else in this file.  A
+ * listener and a monitor ask for less and get less, and that is why the lazy
+ * connect sits where it sits - but a frame has nowhere to go without a
+ * connection, so this is the send that makes one.
  *
  * A ZERO LENGTH frame is not a frame: it writes nothing and says nothing,
  * which is how a packet socket behaves.
@@ -3710,6 +3729,65 @@ int agwpe_connect(int fd, const struct sockaddr *addr, socklen_t len,
  * frame length or -1 with errno.  s is the socket the fd belongs to, so the
  * caller has already looked it up.
  */
+/* The port a device is on, asked the way axsock_raw_match() asks it for the
+ * frames coming in: the port whose axports name is the device, or whose
+ * entry's device (the "dev=" field, ax25_config_get_dev()) is.  Answers -1
+ * when no port of this server is that device, which is the ordinary result
+ * of a name that belongs to a node port rather than a fault.  */
+/* The device name out of the sa_data of an AF_PACKET/AF_INET bind or
+ * sendto address, NUL terminated.  sa_data holds up to fourteen
+ * characters, and a name that is exactly that long - "agwpe-direwolf",
+ * fourteen bytes, for instance - carries no terminator at all.  So the
+ * length the caller gave decides where the name ends: copying a fixed
+ * fifteen bytes reads one byte past such a name, and that byte is not
+ * padding but whatever followed the address in the caller's memory.  The
+ * result was a device name that was on no port of anybody, and the send
+ * that named the port of every axports entry was refused with
+ * EADDRNOTAVAIL.  Answers 0 when the address carries no name.
+ */
+static size_t axsock_dev_copy(char *dst, size_t dstlen,
+			      const struct sockaddr *sa, socklen_t salen)
+{
+	size_t off = offsetof(struct sockaddr, sa_data);
+	size_t n;
+
+	if (salen <= off)
+		return 0;
+	n = (size_t)salen - off;
+	if (n > dstlen - 1)
+		n = dstlen - 1;
+	n = strnlen(sa->sa_data, n);
+	memcpy(dst, sa->sa_data, n);
+	dst[n] = '\0';
+	return n;
+}
+
+static int axsock_raw_port(const char *dev)
+{
+	char *name;
+
+	ax25_config_ports_ensure();
+	for (name = ax25_config_get_next(NULL); name != NULL;
+	     name = ax25_config_get_next(name)) {
+		const char *d;
+
+		if (strcasecmp(name, dev) == 0)
+			return axsock_port_of_entry(name);
+		d = ax25_config_get_dev(name);
+		if (d != NULL && strcasecmp(d, dev) == 0)
+			return axsock_port_of_entry(name);
+	}
+
+	/* "loop" has a number without an axports entry, the way
+	 * axsock_port_name() hands the number its name back - a file with
+	 * no loop line is usable, and a frame that crossed a WAMPES node
+	 * arrives on this port. */
+	if (strcasecmp(dev, "loop") == 0)
+		return AGWPE_PORT_LOOP;
+
+	return -1;
+}
+
 static ssize_t axsock_raw_write_locked(struct axsock_sock *s,
 				       const void *buf, size_t len,
 				       const struct sockaddr *to,
@@ -3718,35 +3796,114 @@ static ssize_t axsock_raw_write_locked(struct axsock_sock *s,
 	const struct sockaddr *sa0 = (const struct sockaddr *)to;
 	char iface[sizeof(s->bound)];
 	int have = 0;
+	int rc;
 
 	if (len == 0)
 		return 0;
 
-	if (!wampes_enabled()) {
-		errno = EOPNOTSUPP;
-		return -1;
-	}
-
 	if (to != NULL && tolen >= sizeof(*sa0) &&
-	    (sa0->sa_family == AF_PACKET || sa0->sa_family == AF_INET)) {
-		memcpy(iface, sa0->sa_data, sizeof(iface) - 1);
-		iface[sizeof(iface) - 1] = '\0';
-		have = iface[0] != '\0';
-	}
+	    (sa0->sa_family == AF_PACKET || sa0->sa_family == AF_INET))
+		have = axsock_dev_copy(iface, sizeof(iface), sa0, tolen) > 0;
 	if (!have && s->bound[0] != '\0') {
 		memcpy(iface, s->bound, sizeof(iface));
 		have = 1;
 	}
-	if (!have) {
-		errno = EDESTADDRREQ;
-		return -1;
+
+	if (wampes_enabled()) {
+		/* The node's packet socket: the record the monitor socket
+		 * writes - [length][interface][NUL][frame] - written back
+		 * the same way, and the node sends the frame exactly as it
+		 * stands (wampes.c, and remote_net.c on the other end).  A
+		 * device is not optional here: the node looks the interface
+		 * up by name, and there is no such lookup as "whatever the
+		 * node has one of". */
+		if (!have) {
+			errno = EDESTADDRREQ;
+			return -1;
+		}
+		if (axsock_debug)
+			fprintf(stderr, "axsock: raw write fd=%d iface='%s' len=%zu\n",
+				s->fd, iface, len);
+		if (wampes_raw_send(&s->packfd, iface, buf, len) != 0)
+			return -1;
+		return (ssize_t)len;
 	}
-	if (axsock_debug)
-		fprintf(stderr, "axsock: raw write fd=%d iface='%s' len=%zu\n",
-			s->fd, iface, len);
-	if (wampes_raw_send(&s->packfd, iface, buf, len) != 0)
-		return -1;
-	return (ssize_t)len;
+
+	{
+		unsigned char kbuf[1 + AXMON_FRAME_MAX];
+		unsigned char port;
+		agwpe_client_t *cl;
+		struct agwpe_s hdr;
+
+		if (have) {
+			int p = axsock_raw_port(iface);
+
+			if (p < 0) {
+				errno = EADDRNOTAVAIL;
+				return -1;
+			}
+			port = (unsigned char)p;
+			/* The same fact the receive path keeps when frames
+			 * arrive on this socket: the port it is on, under
+			 * the name its sa_data reports.
+			 *
+			 * Learned here as well because send() and write()
+			 * carry no address at all.  For a socket bind() gave
+			 * a device this changes nothing - s->bound answers
+			 * every time and the port is resolved from it again;
+			 * it is for a socket that was never bound, which has
+			 * nothing else to go on after one sendto() named a
+			 * device.  A monitor that was never bound has the
+			 * other half of it: dispatch() keeps overwriting
+			 * this with the port of the last frame it heard, so
+			 * an addressless send goes out on that port - for a
+			 * frame that crossed a WAMPES node, the loop port.
+			 * That is the only fact such a socket has, and it is
+			 * written down rather than hidden: the other answer
+			 * is refusing a send on a socket that has been told
+			 * a port twice. */
+			s->port = port;
+			s->port_known = 1;
+		} else if (s->port_known) {
+			port = s->port;
+		} else {
+			errno = EDESTADDRREQ;
+			return -1;
+		}
+
+		if (len + 1 > sizeof(kbuf)) {
+			errno = EMSGSIZE;
+			return -1;
+		}
+		kbuf[0] = 0x00;	/* the KISS data byte; the port is in the header */
+		memcpy(kbuf + 1, buf, len);
+		agwpe_header_init(&hdr, port, AGWPE_CMD_RAW, 0, NULL, NULL,
+				  (uint32_t)(len + 1));
+
+		if (!axsock_up && axsock_ensure_locked() != 0) {
+			errno = ENOTCONN;
+			return -1;
+		}
+		cl = axsock_client_acquire();
+		if (cl == NULL) {
+			errno = ENOTCONN;
+			return -1;
+		}
+		if (axsock_debug)
+			fprintf(stderr, "axsock: raw 'K' fd=%d port=%u len=%zu\n",
+				s->fd, port, len);
+		/* The link is written without the socket lock, the way
+		 * axsock_send_data() does it - and nothing of s is touched
+		 * between the unlock and the relock, because another thread
+		 * may have closed the socket meanwhile. */
+		pthread_mutex_unlock(&axsock_lock);
+		rc = agwpe_client_send_frame(cl, &hdr, kbuf);
+		pthread_mutex_lock(&axsock_lock);
+		axsock_client_release();
+		if (rc != 0)
+			return -1;
+		return (ssize_t)len;
+	}
 }
 
 int agwpe_send(int fd, const void *buf, size_t len, ssize_t *ret)

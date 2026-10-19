@@ -86,11 +86,27 @@ it disappears.
 
 Decided while planning this, so that the next reading does not reopen it:
 
-* **`ax25netd_agwpe.conf` becomes the register, the way `wampes.conf` already is.**  A
-  port belongs to AGWPE when its name is in that file.  The `agwpe-` prefix
-  stays a naming convention — it is decoration today too, stripped at one
-  place before the name is matched against the upstream, and it never decided
-  anything.
+* **`axports` is the register, and the `agwpe-` marker decides — nothing else.**  A
+  port belongs to AGWPE when its axports entry carries the marker, which is
+  what axports already documents the prefix as, and axports is where every
+  port is declared: with or without a node behind this library, with or
+  without `ax25netd` anywhere near the machine, with or without a server that
+  answers.  What used to decide here was the upstream table of another program
+  (`ax25netd_agwpe.conf`, when it happens to be installed) or the port table of
+  a server that had to be reachable — and either could turn a declared port
+  into something else behind the sysop's back, handing a declared AGWPE port
+  to the node.  Frames on the wrong medium, and nothing at the sending end
+  saying so.  A file belonging to a program the sysop does not run must not
+  decide what AGWPE is.
+
+  Done in `agwpe_owns_port()`: one test on the name, no round trip at bind
+  time, no other program's file.  The marker says only "this port is AGWPE";
+  the upstream still has to be found, because a port number has to come from
+  somewhere, and that failure is stated where a bind can be refused properly —
+  `axsock_port_unserved()` prints "no backend serves the port 'x' … no AGWPE
+  upstream or server port", which is the truth about a marked entry whose
+  upstream is listed nowhere.  `ax25netd_agwpe.conf` drops to what it is: the
+  table of upstreams, read for numbers and nothing else.
 * **`AXSOCK_BACKEND` goes.**  It exists to override a per-process choice that
   is sometimes wrong; once the files decide per port there is nothing left to
   override but "force everything to X", which is a test switch.

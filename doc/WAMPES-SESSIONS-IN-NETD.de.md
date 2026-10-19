@@ -1903,19 +1903,55 @@ kommt für `sendto()` aus `sa_data` (wie beim `bind()`), für
 `send()`/`write()` — die keine Adresse haben — aus dem gebundenen
 `s->bound`.  Benennt keiner von beiden etwas, sagt die Funktion
 `EDESTADDRREQ`, was auch der Kernel auf ein `write()` ohne Ziel sagt.
-Ohne WAMPES-Knoten gibt es kein `sockets/packet` und der Rekord paßt in
-kein AGWPE-Kommando — dann ehrlich `EOPNOTSUPP` statt eines Schreibens
-ins Leere.
+Ohne WAMPES-Knoten gibt es kein `sockets/packet` — dann geht derselbe
+Rahmen als AGWPE-`'K'` hinaus (unten).
 
-**Was fehlt: die AGWPE-Hälfte.**  Ein `SOCK_PACKET`-fd gegen einen
-AGWPE-Server könnte denselben Weg tragen: der Befehl für einen ganzen
-Rahmen steht im Kopf (`AGWPE_CMD_RAW`, `'K'` in `netax25/agwpe.h`), und
-diesen Baum läßt `'k'` (Roh-Monitor) schon empfangen.  Was den Sendeweg
-noch hält, ist, daß hier noch nie einer **herausging**: seine Form ist
-eine Frage der Drahtkompatibilität — welche Portnummer ein Socket
-hineinschreibt, der selbst keine hat, und was der Server hinter `'K'`
-erwartet — und eine Drahtfrage will an einem Server geprüft, nicht
-geraten werden.  Der Helper ist die eine Stelle, an der sie hinzukommt.
+**Die AGWPE-Hälfte ist gebaut** (2026-10-19).  Derselbe Helper trägt sie:
+`AXSOCK_BACKEND=agwpe` (und jede Maschine ohne Knoten) schickt dasselbe
+Schreiben als `'K'` an den Server — Kopf mit der **Portnummer**, Datenbereich
+`[0x00][ganzer Rahmen]`.  Das Leading-Byte ist das KISS-Datenbyte, das
+direwolf beim Empfang wieder überspringt (`server.c`, `case 'K'`:
+`ax25_from_frame(cmd.data+1, data_len-1)`); direwolf stellt beim Senden
+selbst `Kanal << 4` davor, Kanal 0 also dasselbe `0x00`.  Der Port steht im
+Kopf und nicht im Byte — direwolf ignoriert das Byte gerade deshalb, weil es
+keine Information trägt (sein eigener Kommentar nennt die Redundanz einen
+Bug-Fix).
+
+Die Portnummer ist **invers zu `axsock_raw_match()`** aufgelöst: das Gerät,
+das `bind()` oder `sa_data` nennt, gegen den axports-Eintragsnamen bzw.
+dessen `dev=` (`axsock_raw_port()`).  Ein Socket ohne Gerät sendet auf dem
+Port zurück, auf dem er Frames empfangen hat (gelernt im Dispatch,
+`s->port`/`s->port_known`).  Ohne beides `EDESTADDRREQ`; ein Gerät, das kein
+Eintrag trägt, `EADDRNOTAVAIL` — dieselben Zahlen wie der WAMPES-Zweig.  Der
+Link wird in diesem Zweig zum ersten Mal **nicht** lazy aufgebaut: ein
+Rahmen hat ohne Verbindung nirgendswo hinzugehen, also läuft hier
+`axsock_ensure_locked()`.
+
+**Der Marker entscheidet.**  `agwpe_owns_port()` fragt nur noch, ob der
+axports-Eintrag `agwpe-` trägt (oder `loop` heißt) — keine Datei eines
+anderen Programms, keine Netzrunde beim `bind()`; `ax25netd_agwpe.conf` ist
+nur noch die Upstream-Tabelle für die Nummer.  Ein Markierter, dessen
+Upstream nirgends steht, wird beim `bind()` ehrlich abgelehnt
+(`axsock_port_unserved()`: „no backend serves the port 'x' … no AGWPE
+upstream or server port") statt still an den Knoten zu fallen.
+
+**Belegt (Laufzeit, macOS).**  `agwpe_k.py` stellt einen Fake-AGWPE-Server
+hin (nimmt Verbindungen an, antwortet auf `'G'` mit der Porttabelle so wie
+`ax25netd`) und fährt `rawsend.py` dreimal gegen `AXSOCK_HOST`/`AXSOCK_PORT`:
+
+    sendto: 'K' Port=0 30 Byte, erstes Byte 00, Rahmen unveraendert
+    send:   'K' Port=0 28 Byte, erstes Byte 00, Rahmen unveraendert
+    write:  'K' Port=0 29 Byte, erstes Byte 00, Rahmen unveraendert
+    abgelehnt: EADDRNOTAVAIL -> rawsend: sendto(gibtsnicht): Can't assign requested address
+    abgelehnt: EDESTADDRREQ -> rawsend: sendto(): Destination address required
+
+Dabei fiel ein Fehler auf, den die WAMPES-Probe nie zeigen konnte:
+`agwpe-direwolf` ist **genau 14 Zeichen** — so lang wie `sa_data`, ohne
+Platz für das NUL.  Ein festes 15-Byte-`memcpy` las ein Byte zu viel, am
+Namen stand ein Byte, das niemand hingeschrieben hat, und der Sendeweg
+lehnte jeden Namen dieser Länge ab.  `axsock_dev_copy()` folgt jetzt der
+Länge der Adresse (`strnlen`) — an beiden Stellen, `bind()` und Senden, denn
+`s->bound` hatte denselben Fehler.
 
 **Belegt (Laufzeit, macOS).**  `packete2e.py` (Pty-Port, Knoten mit `-d`,
 ein Client auf `sockets/packet`) fährt beide Richtungen: ein Rekord auf

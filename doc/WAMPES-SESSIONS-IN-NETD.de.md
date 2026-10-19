@@ -1600,6 +1600,13 @@ beantwortet also „steht dieser Name in `axports`", nicht „ist das ein
 Kernel-Port" — und antwortete damit auf jedem Rechner mit **ja** für jeden
 Port, auch die Userspace-Ports.
 
+*(Nachtrag 2026-10-19: Dieses `get_dev()`-Verhalten war selbst ein Fehler, den
+`24e3aba` beim Umbau von `ax25_config_init_port()` eingeführt hatte.  Der
+Getter ist in §11.18 wieder strikt — die Aussage „für jede `axports`-Zeile ein
+Device" beschreibt den damaligen, nicht mehr den heutigen Stand.  Die Korrektur
+hier, `axmon` fragt `ax25_config_port_is_kernel()`, bleibt richtig und
+unberührt.)*
+
 **Was daraus folgte.**  `kernel_owner` war immer wahr, und daran hängt mehr
 als der Kernel-Zweig: `shim_owner = named && !kernel_owner && …` wurde damit
 falsch, also fiel der **Shim**-Zweig aus.  Übrig blieben nur der
@@ -1917,6 +1924,80 @@ der Leitung.  Die Werkzeuge liegen in `wampes-import/testtools/`
 **Siehe auch:** `wampes.git/doc/PERMISSIONS.md`, `INSTALL-PATHS.md` (die
 Rechte-Leiter), `AX25-WITHOUT-KERNEL-SYSOP.{de.,}md` (der Sysop-Abschnitt),
 `LINUX-AX25-SOCKETS.de.md` §8 (Dateirechte statt `CAP_NET_RAW`).
+
+### 11.18 `ax25_config_get_dev()` wieder strikt: Device nur für Kernel-Ports (2026-10-19)
+
+**Der Befund (db0fhn).**  Kernel-AX.25 ist dort nicht geladen (§11.13: das
+einzige konfigurierte Kernel-Interface wäre `bpq0`).  Trotzdem bekam jedes
+Werkzeug, das einen Port auf sein Interface abbildet, für **jeden**
+`axports`-Eintrag ein Device: `ax25_config_get_dev("bpq0")` lieferte den String
+`bpq0`, obwohl `ifconfig bpq0` „no such device" sagt.  Ein Gerätesucher wie
+`rmsfinddev` (rmsgw#16, `rmschanstat`) hielt den verwaisten Eintrag damit für
+einen bedienbaren Port.  Dieselbe Wurzel hatte der in §11.13 beschriebene
+`listen`-Fehler.
+
+**Die Ursache.**  Vor `24e3aba` hielt `ax25_config_init_port()` einen Port,
+dessen Rufzeichen auf kein *up*-Interface paßt, gar nicht erst in der Tabelle
+(`found = 0` → `return FALSE`); der Getter konnte so nie einen Userspace-Port
+sehen.  `24e3aba` („axsock: name every bind, and every raw frame, by its own
+port") kehrte das um: der Eintrag bleibt, `dev = name`, `Kernel = FALSE`.  Das
+ist richtig für die Namens- und Bind-Pfade, die den Namen als Schlüssel
+brauchen (Rückwärtssuche, `ax25_port_info()`, Monitor-Matching) — aber
+`ax25_config_get_dev()` las genau dieses `Device` und beantwortete damit „steht
+der Name in `axports`" statt „ist das ein Kernel-Port".  Der Commit kannte die
+Falle und nannte sie im Log („the device name is the trap"), ließ den Getter
+aber unangepaßt.
+
+**Die Korrektur.**  `ax25_config_get_dev()` gibt das Device nur noch heraus,
+wenn der Port ein Kernel-Port ist, sonst `NULL`:
+
+```c
+if (AX25_KERNEL_IFACES && !p->Kernel)
+        return NULL;
+return p->Device;
+```
+
+`AX25_KERNEL_IFACES` ist 1 auf Linux (`#ifdef __linux__`), 0 sonst.  Die
+Unterscheidung ist nötig, weil nur Linux die Kernel-Interfaces gegen die
+Rufzeichen halten kann: dort ist `p->Kernel` das Urteil aus dem Laden
+(Rufzeichen == AX.25-Adresse eines *up*-Interfaces).  Wo keine solche Liste zu
+haben ist, steht der Name wie eh und je als Device — das Verhalten, das ein
+Wirt ohne heimischen Kernel-AX.25-Stack immer hatte.  `p->Device` bleibt für
+alle anderen Leser (`ax25_port_info()`, Rückwärtssuche, Monitor) der Name; nur
+der Getter für das Interface rückt wieder gerade.  Die Tabelle hält den
+Eintrag weiter, damit die Userspace-Backends ihn anhand des Namens finden
+können.
+
+**Was das für die Userspace-Ports heißt.**  Ein WAMPES- oder AGWPE-Port *ist*
+kein Interface, und `ax25_config_get_dev()` sagt das jetzt auch.  Auffindbar
+bleiben sie über `ax25_port_info()`, das genau dafür da ist und die
+**Verfügbarkeit** beantwortet statt eines Devices: Kernel lokal, WAMPES aus
+`wampes.conf` (lokal, **ohne** laufenden ax25netd), AGWPE über ax25netd, der den
+Zustand der Upstreams kennt.  `ax25netctl` gibt das als Tabelle aus; für jene
+Ports ist ein *Geräte*suche der falsche Aufruf.  Nachgezogen in `ax25-apps`
+(`ax25netctl`): der vorgezogene netd-Query setzt kein `rc=1` mehr, und ein
+Kernel- oder WAMPES-Name kommt ohne ax25netd sauber mit `rc=0` zurück.
+
+**Belegt (Laufzeit, Linux/amd64).**  Echte Kernel-Interfaces ließen sich in der
+Sandbox nicht erzeugen (`modprobe`/`unshare` gesperrt), daher ein
+`LD_PRELOAD`-Harnisch mit gefälschtem `/proc/net/dev` (`fake0`/Ruf `TE1ST`/up,
+`fakedown`/Ruf `TE3ST`/down).  Gegen die alte `/lib/libax25.so.0` und gegen den
+Fix:
+
+```
+alte Lib:   bpq0 -> fake0, radio0 -> radio0, loop -> loop, wampes -> wampes, foo -> foo
+mit Fix:    bpq0 -> fake0, radio0/loop/wampes/foo -> (kein Device)
+```
+
+Die alte Lib gab jeden `axports`-Eintrag als Device aus — die Regression
+sichtbar.  `ax25_port_info()` ist unverändert und bleibt der Weg für die
+Auffindbarkeit: `wampes` → `wampes` (auch bei totem ax25netd), `radio0`/`loop`
+→ `agwpe`, `bpq0` → `none`.
+
+**Geändert:** `axconfig.c` (`AX25_KERNEL_IFACES`, der Getter, der Kommentar in
+`ax25_config_init_port()`), `netax25/axconfig.h` (der Vertrag des Getters),
+`axmon.c` (nur der Kommentar; die Prüfung bleibt
+`ax25_config_port_is_kernel()`).  Siehe auch §11.13.
 
 ## 12 Callsign-Eingabe: nicht raten, sondern sterben (2026-10-15)
 

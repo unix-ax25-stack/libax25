@@ -260,16 +260,15 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	 * its, and a node's when the name before the colon is a configured
 	 * node (the hook wampes.c installs).  Everything else is ax25netd's.
 	 *
-	 * ax25_config_port_is_kernel() and NOT "the entry names a device".
-	 * Those look like the same question and are not: a port that is
-	 * nobody's kernel port still has a device recorded, and it is its own
-	 * name - ax25_config_init_port() sets dev = name for exactly the
-	 * entry that names no interface.  So ax25_config_get_dev() answers
-	 * "is this name in axports at all", and asking it here answered yes
-	 * for every port on the machine, including the userspace ones.
-	 * "listen -p loop" then took the kernel branch, found no interface
-	 * by that name, and gave the whole answer back as a failure before
-	 * either of the sources that do serve the port was asked.
+	 * ax25_config_port_is_kernel() and not a test on the device name.
+	 * The two now agree - ax25_config_get_dev() answers NULL for a
+	 * userspace port - but the verdict the load recorded is the question
+	 * bind() asks, and it does not have to be rederived from a device
+	 * that, on the commonest axports line ("bpq0  TE1ST-1 ..." with bpq0
+	 * up), is the same string as the port name.  Reading "the entry names
+	 * a device" as "the name is in axports" once took the kernel branch
+	 * for every port, and "listen -p loop" failed before either source
+	 * that serves it was asked.
 	 */
 	named = (port != NULL && port[0] != '\0');
 	kernel_owner = named && ax25_config_port_is_kernel(port);

@@ -183,6 +183,13 @@ extern char *ax25_config_get_addr(char *);
 /*
  * This function maps the port name onto the device name of the port. On error a
  * NULL is returned.
+ *
+ * A port has a device only when the kernel answers for it, i.e. its callsign is
+ * the AX.25 address of an interface that is up.  A port of a userspace backend
+ * - a node or an AGWPE server - names no interface, so NULL is returned for it,
+ * which is the same answer the table gave when a port without an interface was
+ * not held at all.  On a host with no kernel AX.25 stack to compare against the
+ * configured name stands as the device.
  */
 extern char *ax25_config_get_dev(char *);
 

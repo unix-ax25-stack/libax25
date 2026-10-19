@@ -67,6 +67,21 @@ static int ax25_ports_count;
 static time_t ax25_ports_mtime;
 static off_t ax25_ports_size;
 
+/* Whether the load can compare a callsign against the kernel's interfaces.
+ *
+ * Linux can, through /proc/net/dev: a callsign that matches none of the
+ * interfaces that are up is not the kernel's, and a port whose call is not
+ * the kernel's has no device to name.  Where no such list can be had there
+ * is nothing to hold the callsign against, so a configured port keeps its
+ * name as the device - the answer a host without a native kernel AX.25
+ * stack has always given.  ax25_config_get_dev() reads this.
+ */
+#ifdef __linux__
+#define AX25_KERNEL_IFACES	1
+#else
+#define AX25_KERNEL_IFACES	0
+#endif
+
 /* No lock for the readers, and taking one in the getters would not have
  * helped: a walk is a sequence of calls, not one.  This one only keeps two
  * reloads from interleaving their builds, which the retire list already
@@ -314,6 +329,20 @@ char *ax25_config_get_dev(char *name)
 	AX_Port *p = ax25_port_ptr(name);
 
 	if (p == NULL)
+		return NULL;
+
+	/*
+	 * A device belongs to a port the kernel answers for, and that is the
+	 * only kind of port that has one.  On a host that can enumerate the
+	 * kernel's interfaces a userspace port has no device at all, so a
+	 * caller asking "is this an interface" gets NULL - the answer the
+	 * old libax25 gave by dropping such an entry from the table outright.
+	 * A port is the kernel's only when its callsign is the AX.25 address
+	 * of an interface that is up, which is the verdict the load recorded
+	 * in p->Kernel.  Where no interface list can be had the name stands,
+	 * as it always has there.
+	 */
+	if (AX25_KERNEL_IFACES && !p->Kernel)
 		return NULL;
 
 	return p->Device;
@@ -714,8 +743,11 @@ static int ax25_config_init_port(int fd, int lineno, char *line, const char **if
 		}
 	}
 	if (dev == NULL) {
-		/* Not a kernel port.  The name is the best device there is,
-		 * and it is what the backends and the monitor match on. */
+		/* Not a kernel port.  The name is stored as the device for
+		 * the reverse lookup and for ax25_port_info(), but
+		 * ax25_config_get_dev() does not hand it out: a caller that
+		 * asks for a port's interface gets NULL for this one, the
+		 * same answer the old table gave by not holding the entry. */
 		dev = name;
 		if (axsock_debug && ifcalls != NULL)
 			fprintf(stderr, "axconfig: port '%s' (call '%s') is not "

@@ -572,6 +572,79 @@ int ax25_config_kernel_ports(void)
 }
 
 /*
+ * Whether an AX.25 interface carries this callsign and is down, and if so
+ * which one.
+ *
+ * The port list only keeps interfaces that are up, so a bind refused for a
+ * port whose interface exists and carries the callsign but is not up was
+ * told that no interface carries that callsign at all - a different mistake,
+ * and the one an operator cannot fix by reading the message.  Answered only
+ * where that message is about to be printed, so nothing else pays for the
+ * walk.
+ *
+ * Returns 1 and the interface name in dev when such an interface is down, 0
+ * when none carries the callsign (or one that does is up, which is not this
+ * case).  The callsign is compared the same way the port list does it.
+ */
+int ax25_config_call_if_down(const char *call, char *dev, size_t devlen)
+{
+	FILE *fp;
+	char buffer[256], *s;
+	int fd, rc = 0;
+
+	if (call == NULL || dev == NULL || devlen == 0)
+		return 0;
+	*dev = '\0';
+
+	if ((fd = socket(PF_FILE, SOCK_DGRAM, 0)) < 0)
+		return 0;
+	if ((fp = fopen("/proc/net/dev", "r")) == NULL) {
+		close(fd);
+		return 0;
+	}
+
+	/* Two header lines, then one interface per line. */
+	(void) fgets(buffer, sizeof(buffer), fp);
+	(void) fgets(buffer, sizeof(buffer), fp);
+
+	while (fgets(buffer, sizeof(buffer), fp)) {
+		struct ifreq ifr;
+
+		if ((s = strchr(buffer, ':')) != NULL)
+			*s = '\0';
+		s = buffer;
+		while (isspace(*s & 0xff))
+			++s;
+		if (*s == '\0' || strlen(s) >= IFNAMSIZ)
+			continue;
+
+		memset(&ifr, 0, sizeof(ifr));
+		strcpy(ifr.ifr_name, s);
+
+		if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0)
+			continue;
+		if (ifr.ifr_hwaddr.sa_family != ARPHRD_AX25)
+			continue;
+		if (strcmp(call, ax25_ntoa((void *) ifr.ifr_hwaddr.sa_data)) != 0)
+			continue;
+
+		/* The one carrying the callsign.  Up, and it is not this
+		 * case - down, and it is. */
+		if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0)
+			break;
+		if (!(ifr.ifr_flags & IFF_UP)) {
+			snprintf(dev, devlen, "%s", ifr.ifr_name);
+			rc = 1;
+		}
+		break;
+	}
+
+	fclose(fp);
+	close(fd);
+	return rc;
+}
+
+/*
  * Which port a bind address names, as the name in axports.
  *
  * This used to be wampes.c's port_of_bind(), and having a second copy of it

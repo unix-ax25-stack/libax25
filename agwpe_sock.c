@@ -3291,10 +3291,25 @@ static void axsock_port_unserved(const struct sockaddr *addr, socklen_t len)
 		 * each of those was a lookup that ran, so each can be stated. */
 		{
 			char *paddr = ax25_config_get_addr(port);
-			fprintf(stderr,
-				"axsock: no backend serves the port '%s' (callsign %s): no AX.25 "
-				"interface carries that callsign, no wampes.conf node, and no AGWPE "
-				"upstream or server port.\n", port, paddr ? paddr : "?");
+			char ifdown[32];
+
+			/* "no interface carries that callsign" is wrong, and
+			 * points at the wrong fix, when the interface exists
+			 * and carries it and is only down - the port list
+			 * keeps interfaces that are up, so that is the one
+			 * shape this message used to misdescribe. */
+			if (paddr != NULL &&
+			    ax25_config_call_if_down(paddr, ifdown, sizeof(ifdown)))
+				fprintf(stderr,
+					"axsock: no backend serves the port '%s' (callsign %s): the "
+					"AX.25 interface %s carries that callsign but is down, no "
+					"wampes.conf node, and no AGWPE upstream or server port.\n",
+					port, paddr, ifdown);
+			else
+				fprintf(stderr,
+					"axsock: no backend serves the port '%s' (callsign %s): no AX.25 "
+					"interface carries that callsign, no wampes.conf node, and no AGWPE "
+					"upstream or server port.\n", port, paddr ? paddr : "?");
 		}
 		return;
 	}

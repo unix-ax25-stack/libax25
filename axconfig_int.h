@@ -52,4 +52,13 @@
  */
 extern int ax25_config_bind_port(const struct sockaddr *, socklen_t, char *, size_t);
 
+/*
+ * Whether an AX.25 interface carries this callsign and is down, 1 and the
+ * interface name in dev when it is, 0 when none does.  The port list keeps
+ * only interfaces that are up, so a refused bind needs to be able to say
+ * that the callsign is there and the interface is not, rather than that no
+ * interface carries it.
+ */
+extern int ax25_config_call_if_down(const char *call, char *dev, size_t devlen);
+
 #endif	/* _AXCONFIG_INT_H */

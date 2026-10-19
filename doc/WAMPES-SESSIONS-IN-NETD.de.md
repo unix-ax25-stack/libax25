@@ -2040,8 +2040,22 @@ ein Device.  Ohne den Nachtrag verlor auch der userspace-Port seinen Namen, soba
 gar kein Interface oben war — genau die Zeilen, in denen sich beide Spalten
 unterscheiden.
 
+**Zuordnung der Fehlermeldung (2026-10-19).**  Ist ein konfigurierter
+Kernel-Port nicht bedient, sagt `axsock` bisher, „no AX.25 interface carries
+that callsign" — und das ist falsch, wenn die Schnittstelle den Ruf trägt und
+nur down ist: `bpq0` trägt `TE1ST`, ist aber down, und `beacon -s bpq0 test`
+wies trotzdem auf ein fehlendes Rufzeichen.  Die Portliste sammelt nur
+*up*-Interfaces, der Fall war ihr unsichtbar.  `ax25_config_call_if_down()`
+(deklariert in `axconfig_int.h`, nicht im öffentlichen Header, und nur im
+Fehlerpfad aufgerufen) prüft deshalb nach, ob eine AX.25-Schnittstelle den Ruf
+trägt und down ist; wenn ja, heißt es „the AX.25 interface bpq0 carries that
+callsign but is down", und trägt ihn keine Schnittstelle, bleibt die alte
+Aussage.
+
 **Geändert:** `axconfig.c` (`AX25_KERNEL_IFACES` und der Laufzeitmerker
-`ax25_kernel_iflist`, der Getter, der Kommentar in `ax25_config_init_port()`),
+`ax25_kernel_iflist`, der Getter, `ax25_config_call_if_down()`, der Kommentar in
+`ax25_config_init_port()`), `axconfig_int.h` (die interne Funktion),
+`agwpe_sock.c` (die Meldung bei einem unbedienten Port),
 `netax25/axconfig.h` (der Vertrag des Getters), `axmon.c` (nur der Kommentar; die
 Prüfung bleibt `ax25_config_port_is_kernel()`).  Siehe auch §11.13.
 

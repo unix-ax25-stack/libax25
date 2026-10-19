@@ -588,13 +588,20 @@ int ax25_config_kernel_ports(void)
  */
 int ax25_config_call_if_down(const char *call, char *dev, size_t devlen)
 {
-	FILE *fp;
-	char buffer[256], *s;
-	int fd, rc = 0;
-
 	if (call == NULL || dev == NULL || devlen == 0)
 		return 0;
 	*dev = '\0';
+
+#if !AX25_KERNEL_IFACES
+	/* The walk below reads /proc/net/dev and asks ARPHRD_AX25, and
+	 * neither exists where no interface list can be had: nothing can be
+	 * held against the callsign, so none is known to be down - the same
+	 * answer such a host gives everywhere else (AX25_KERNEL_IFACES). */
+	return 0;
+#else
+	FILE *fp;
+	char buffer[256], *s;
+	int fd, rc = 0;
 
 	if ((fd = socket(PF_FILE, SOCK_DGRAM, 0)) < 0)
 		return 0;
@@ -642,6 +649,7 @@ int ax25_config_call_if_down(const char *call, char *dev, size_t devlen)
 	fclose(fp);
 	close(fd);
 	return rc;
+#endif
 }
 
 /*

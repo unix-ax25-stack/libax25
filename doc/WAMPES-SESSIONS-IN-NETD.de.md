@@ -1978,11 +1978,34 @@ Ports ist ein *Geräte*suche der falsche Aufruf.  Nachgezogen in `ax25-apps`
 (`ax25netctl`): der vorgezogene netd-Query setzt kein `rc=1` mehr, und ein
 Kernel- oder WAMPES-Name kommt ohne ax25netd sauber mit `rc=0` zurück.
 
-**Belegt (Laufzeit, Linux/amd64).**  Echte Kernel-Interfaces ließen sich in der
-Sandbox nicht erzeugen (`modprobe`/`unshare` gesperrt), daher ein
-`LD_PRELOAD`-Harnisch mit gefälschtem `/proc/net/dev` (`fake0`/Ruf `TE1ST`/up,
-`fakedown`/Ruf `TE3ST`/down).  Gegen die alte `/lib/libax25.so.0` und gegen den
-Fix:
+**Nachtrag (2026-10-19): eine leere Liste ist keine Liste.**  Der erste Fix
+prüfte nur `AX25_KERNEL_IFACES` (Compile-Time).  Auf einem Linux-Wirt, auf dem
+*kein* AX.25-Interface up ist, ist die Liste der Kernel-Interfaces aber leer
+(`calllist == NULL`) — und der Getter gab dann ebenfalls `NULL`, obwohl gerade
+dort nichts gegen das Rufzeichen zu halten ist.  Ein reiner WAMPES-/AGWPE-Wirt
+(die übliche Gestalt eines ax25netd-Hosts) verlor damit `wampes`, `radio0` und
+`loop` an gerätesuchende Werkzeuge, während die alte lib an dieser Stelle den
+Namen stehen ließ.  Der Lauf merkt sich deshalb, ob er überhaupt eine Liste
+bekommen hat, und der Getter läßt den Namen stehen, wenn er keine bekam:
+
+```c
+if (AX25_KERNEL_IFACES && ax25_kernel_iflist && !p->Kernel)
+        return NULL;
+return p->Device;
+```
+
+`ax25_kernel_iflist` ist `calllist != NULL` und wird vor dem Aufbau der
+Einträge gesetzt.  Das `Kernel`-Flag bleibt dabei `FALSE`: ein Userspace-Backend
+bedient den Port weiter, nur der Kernel nimmt ihm die Bindung nicht weg.  Sobald
+irgendein AX.25-Interface up ist, ist die Liste nicht leer und das Verhalten ist
+strikt wie oben beschrieben; wo gar keine Liste zu haben ist (Nicht-Linux),
+bleibt es beim Namen wie bisher.
+
+**Belegt (Laufzeit, Linux/amd64).**  Zunächst in der Sandbox, wo echte
+Kernel-Interfaces nicht zu erzeugen waren (`modprobe`/`unshare` gesperrt), mit
+einem `LD_PRELOAD`-Harnisch und gefälschtem `/proc/net/dev` (`fake0`/Ruf
+`TE1ST`/up, `fakedown`/Ruf `TE3ST`/down), gegen die alte `/lib/libax25.so.0`
+und gegen den Fix:
 
 ```
 alte Lib:   bpq0 -> fake0, radio0 -> radio0, loop -> loop, wampes -> wampes, foo -> foo
@@ -1994,10 +2017,33 @@ sichtbar.  `ax25_port_info()` ist unverändert und bleibt der Weg für die
 Auffindbarkeit: `wampes` → `wampes` (auch bei totem ax25netd), `radio0`/`loop`
 → `agwpe`, `bpq0` → `none`.
 
-**Geändert:** `axconfig.c` (`AX25_KERNEL_IFACES`, der Getter, der Kommentar in
-`ax25_config_init_port()`), `netax25/axconfig.h` (der Vertrag des Getters),
-`axmon.c` (nur der Kommentar; die Prüfung bleibt
-`ax25_config_port_is_kernel()`).  Siehe auch §11.13.
+**Belegt (Laufzeit, db0fhn, echtes Kernel-AX.25).**  Auf db0fhn mit `rmmod`/
+`modprobe` von `bpqether`/`ax25`, `ifconfig bpq0` und `axparms --setcall`,
+`axfinddev` für die vier Ports gegen den Fix und gegen die installierte lib vor
+dem Nachtrag (`bpq0` in `axports` ist `TE1ST`; `--` heißt: kein Device, `rc=1`):
+
+```
+Zustand                          Fix: bpq0 wampes radio0 loop     lib ohne Nachtrag
+kein Modul                            bpq0 wampes radio0 loop        --   --   --   --
+modprobe ax25                         bpq0 wampes radio0 loop        --   --   --   --
+modprobe bpqether, bpq0 down          bpq0 wampes radio0 loop        --   --   --   --
+bpq0 up (Ruf noch leer)               --   --   --   --              --   --   --   --
+bpq0 up, setcall te1st                bpq0 --   --   --              bpq0 --   --   --
+bpq0 down                             bpq0 wampes radio0 loop        --   --   --   --
+bpq0 down, setcall te1st-1            bpq0 wampes radio0 loop        --   --   --   --
+bpq0 up (Ruf te1st-1, passt nicht)    --   --   --   --              --   --   --   --
+```
+
+Der Fix spiegelt damit die alte lib: solange kein Kernel-Interface up ist, steht
+in jeder Zeile der Name; sobald eines up ist, bleibt nur der passende Kernel-Port
+ein Device.  Ohne den Nachtrag verlor auch der userspace-Port seinen Namen, sobald
+gar kein Interface oben war — genau die Zeilen, in denen sich beide Spalten
+unterscheiden.
+
+**Geändert:** `axconfig.c` (`AX25_KERNEL_IFACES` und der Laufzeitmerker
+`ax25_kernel_iflist`, der Getter, der Kommentar in `ax25_config_init_port()`),
+`netax25/axconfig.h` (der Vertrag des Getters), `axmon.c` (nur der Kommentar; die
+Prüfung bleibt `ax25_config_port_is_kernel()`).  Siehe auch §11.13.
 
 ## 12 Callsign-Eingabe: nicht raten, sondern sterben (2026-10-15)
 

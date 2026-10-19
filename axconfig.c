@@ -71,16 +71,25 @@ static off_t ax25_ports_size;
  *
  * Linux can, through /proc/net/dev: a callsign that matches none of the
  * interfaces that are up is not the kernel's, and a port whose call is not
- * the kernel's has no device to name.  Where no such list can be had there
- * is nothing to hold the callsign against, so a configured port keeps its
- * name as the device - the answer a host without a native kernel AX.25
- * stack has always given.  ax25_config_get_dev() reads this.
+ * the kernel's has no device to name.  Where no such list can be had - the
+ * other platforms, and a Linux host on which no AX.25 interface is up, so
+ * the list comes out empty - there is nothing to hold the callsign against,
+ * so a configured port keeps its name as the device, the answer such a host
+ * has always given.  ax25_config_get_dev() reads this.
  */
 #ifdef __linux__
 #define AX25_KERNEL_IFACES	1
 #else
 #define AX25_KERNEL_IFACES	0
 #endif
+
+/* Whether the last load actually got that list.  An empty one is not a list:
+ * with no interface up there is nothing to tell a kernel port from a
+ * userspace one, so the name must stand as it does where none can be had -
+ * otherwise a WAMPES or AGWPE port would lose its name on every host whose
+ * kernel AX.25 interfaces happen to be down, which is the usual shape of a
+ * machine that serves its ports through ax25netd. */
+static int ax25_kernel_iflist;
 
 /* No lock for the readers, and taking one in the getters would not have
  * helped: a walk is a sequence of calls, not one.  This one only keeps two
@@ -342,7 +351,7 @@ char *ax25_config_get_dev(char *name)
 	 * in p->Kernel.  Where no interface list can be had the name stands,
 	 * as it always has there.
 	 */
-	if (AX25_KERNEL_IFACES && !p->Kernel)
+	if (AX25_KERNEL_IFACES && ax25_kernel_iflist && !p->Kernel)
 		return NULL;
 
 	return p->Device;
@@ -907,6 +916,10 @@ static int ax25_config_reload(void)
 		fprintf(stderr, "axconfig: unable to open axports file %s (%s)\n", CONF_AXPORTS_FILE, strerror(errno));
 		goto cleanup;
 	}
+
+	/* Recorded before the entries are built, so every port of this load
+	 * is judged against the same list - the one just read. */
+	ax25_kernel_iflist = (calllist != NULL);
 
 	while (fp && fgets(buffer, 255, fp)) {
 		if ((s = strchr(buffer, '\n')))

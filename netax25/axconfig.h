@@ -119,7 +119,7 @@ extern int ax25_config_load_ports(void);
  * holding a bind.  Returns the number of entries in the table, like
  * ax25_config_load_ports() does.
  */
-extern int ax25_config_ports_ensure(void);
+
 
 /*
  * The axports file that ax25_config_load_ports() reads.

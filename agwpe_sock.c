@@ -2980,6 +2980,17 @@ static int agwpe_owns_port(const char *name)
 	if (strcasecmp(base, "loop") == 0)
 		return 1;
 
+	/* Fall back to the backend hook / port info: an AGWPE port may be
+	 * declared in axports without the 'agwpe-' marker and still be served
+	 * by an ax25netd upstream. */
+	{
+		struct ax25_port_info info;
+
+		if (ax25_port_info(name, &info) == 0 &&
+		    info.backend == AX25_PORT_AGWPE)
+			return 1;
+	}
+
 	return 0;
 }
 

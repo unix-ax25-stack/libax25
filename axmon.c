@@ -39,6 +39,7 @@
 #include "netax25/axmon.h"
 #include "netax25/ax25.h"
 #include "netax25/axconfig.h"
+#include "axconfig_int.h"
 #include "netax25/agwpe_config.h"
 #include "agwpe_sock.h"
 #include "wampes.h"

@@ -42,6 +42,12 @@
 #include <stddef.h>
 
 /*
+ * Ensure the port table is current (reload if axports changed).
+ * Internal to libax25.
+ */
+extern int ax25_config_ports_ensure(void);
+
+/*
  * Set by a backend that resolves a "base:suffix" port name itself, so that
  * such a name may be used without an axports entry of its own.  Left null,
  * an unknown name stays unknown - see ax25_port_ptr().

@@ -43,22 +43,6 @@ extern "C" {
  * this part of the library. It returns the number of active ports, or 0
  * on failure.
  */
-/* Set by a backend that resolves a "base:suffix" port name itself, so that
- * such a name may be used without an axports entry of its own.  Left null,
- * an unknown name stays unknown - see ax25_port_ptr().
- */
-extern int (*ax25_config_lazy_hook)(const char *name, const char *base);
-
-/*
- * A "base:suffix" name that ax25_port_ptr() has just resolved through the
- * lazy hook is remembered against the base entry's callsign, so a later
- * bind() carrying that callsign can find out which suffix was meant.
- * ax25_config_lazy_take() hands the oldest remembered name back and
- * removes it; the backend uses it in place of the port name it would
- * reverse-engineer from the callsign.  Remember returns 0 on success.
- */
-extern int ax25_config_lazy_remember(const char *call, const char *name);
-extern int ax25_config_lazy_take(const char *call, char *name, size_t namelen);
 
 /*
  * What a port name is, asked of the whole library rather than guessed by the
@@ -111,19 +95,7 @@ struct ax25_port_info {
 	char node[32];
 };
 
-/* Set by wampes.c: nonzero when the name is a port of a configured node,
- * writing the node's name into node[].
- */
-extern int (*ax25_config_port_wampes_hook)(const char *name, char *node,
-					    size_t nodelen);
 
-/* Set by agwpe_sock.c: nonzero when the name is a channel of one of the
- * server's upstreams, writing the flat port, the channel and the upstream
- * name of the server's own list.
- */
-extern int (*ax25_config_port_agwpe_hook)(const char *name, int *port,
-					   int *channel, char *upstream,
-					   size_t uplen);
 
 extern int ax25_port_info(const char *name, struct ax25_port_info *info);
 
@@ -192,6 +164,13 @@ extern char *ax25_config_get_addr(char *);
  * configured name stands as the device.
  */
 extern char *ax25_config_get_dev(char *);
+
+/*
+ * Get the configured device name as it appears in axports, regardless of
+ * whether the port is served by the kernel, a WAMPES node, or an AGWPE
+ * server. Returns NULL if the port is not known.
+ */
+extern char *ax25_config_get_conf_dev(char *);
 
 /*
  * This function maps the callsign onto the port name. The callsign should be

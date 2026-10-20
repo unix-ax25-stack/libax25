@@ -235,7 +235,7 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	AXSOCK_NEED_REAL();
 
 	if (port != NULL && port[0] != '\0' &&
-	    ax25_config_get_dev((char *)port) == NULL &&
+	    ax25_config_get_conf_dev((char *)port) == NULL &&
 	    !axmon_port_is_known(port)) {
 		/* A name that is in no axports entry at all.  A name that has
 		 * no device but is in the file is fine - that is what a

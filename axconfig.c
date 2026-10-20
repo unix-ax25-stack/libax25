@@ -747,6 +747,21 @@ char *ax25_config_get_desc(char *name)
 	return p->Description;
 }
 
+/*
+ * Get the configured device name as it appears in axports, regardless of
+ * whether the port is served by the kernel, a WAMPES node, or an AGWPE
+ * server. Returns NULL if the port is not known.
+ */
+char *ax25_config_get_conf_dev(char *name)
+{
+	AX_Port *p = ax25_port_ptr(name);
+
+	if (p == NULL)
+		return NULL;
+
+	return p->Device;
+}
+
 static int ax25_config_init_port(int fd, int lineno, char *line, const char **ifcalls, const char **ifdevs)
 {
 	AX_Port *p;

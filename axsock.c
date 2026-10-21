@@ -598,9 +598,10 @@ int AXSOCK_ENTRY(getsockopt)(int fd, int level, int optname,
 	int ret;
 
 	AXSOCK_NEED_REAL();
-	(void)optname;
 
-	if (agwpe_getsockopt(fd, level, optval, optlen, &ret))
+	if (wampes_getsockopt(fd, level, optname, optval, optlen, &ret))
+		return ret;
+	if (agwpe_getsockopt(fd, level, optname, optval, optlen, &ret))
 		return ret;
 	return real_getsockopt(fd, level, optname, optval, optlen);
 }

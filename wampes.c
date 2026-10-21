@@ -2121,6 +2121,40 @@ int wampes_setsockopt(int fd, int level, int optname, int *ret)
 	return 1;
 }
 
+/*
+ * getsockopt(SOL_AX25) for WAMPES sockets.
+ *
+ * Channel parameters belong to the node's interface configuration,
+ * so we cannot return meaningful values.  Mirror the AGWPE behaviour:
+ * return zeroed values with success for options we don't refuse,
+ * ENOPROTOOPT for refused ones.  This keeps the two backends consistent.
+ */
+int wampes_getsockopt(int fd, int level, int optname, void *optval,
+		      socklen_t *optlen, int *ret)
+{
+	struct wampes_sock *s;
+
+	if (level != SOL_AX25 || optval == NULL || optlen == NULL)
+		return 0;
+	pthread_mutex_lock(&wampes_lock);
+	s = sock_take_locked(fd);
+	if (s == NULL) {
+		pthread_mutex_unlock(&wampes_lock);
+		return 0;
+	}
+	sock_unref(s);
+	pthread_mutex_unlock(&wampes_lock);
+
+	if (axsock_opt_refuse(optname)) {
+		errno = ENOPROTOOPT;
+		*ret = -1;
+		return 1;
+	}
+	memset(optval, 0, *optlen);
+	*ret = 0;
+	return 1;
+}
+
 /*---------------------------------------------------------------------------*/
 
 /* SIOCAX25CTLCON - what axctl(8) and axkill(8) send.

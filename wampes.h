@@ -43,6 +43,8 @@ int wampes_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen,
 int wampes_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen,
 		       int *ret);
 int wampes_setsockopt(int fd, int level, int optname, int *ret);
+int wampes_getsockopt(int fd, int level, int optname, void *optval,
+		      socklen_t *optlen, int *ret);
 int wampes_ioctl(int fd, unsigned long request, void *arg, int *ret);
 
 ssize_t wampes_sendto(int fd, const void *buf, size_t len, int flags,

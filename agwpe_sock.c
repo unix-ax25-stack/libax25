@@ -4858,8 +4858,8 @@ int agwpe_setsockopt(int fd, int level, int optname, int *ret)
 	return 1;
 }
 
-int agwpe_getsockopt(int fd, int level, void *optval, socklen_t *optlen,
-			    int *ret)
+int agwpe_getsockopt(int fd, int level, int optname, void *optval,
+		     socklen_t *optlen, int *ret)
 {
 	struct axsock_sock *s;
 
@@ -4869,13 +4869,16 @@ int agwpe_getsockopt(int fd, int level, void *optval, socklen_t *optlen,
 	if (s == NULL)
 		return 0;
 
-	if (level == SOL_AX25 && optval != NULL && optlen != NULL) {
-		memset(optval, 0, *optlen);
-		*ret = 0;
+	if (level != SOL_AX25 || optval == NULL || optlen == NULL)
+		return 0;
+
+	if (axsock_opt_refuse(optname)) {
+		errno = ENOPROTOOPT;
+		*ret = -1;
 		return 1;
 	}
-	errno = ENOPROTOOPT;
-	*ret = -1;
+	memset(optval, 0, *optlen);
+	*ret = 0;
 	return 1;
 }
 

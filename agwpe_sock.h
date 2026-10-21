@@ -65,7 +65,8 @@ int agwpe_close(int fd, int *ret);
 int agwpe_connect(int fd, const struct sockaddr *addr, socklen_t len, int *ret);
 int agwpe_getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret);
 int agwpe_getsockname(int fd, struct sockaddr *addr, socklen_t *addrlen, int *ret);
-int agwpe_getsockopt(int fd, int level, void *optval, socklen_t *optlen, int *ret);
+int agwpe_getsockopt(int fd, int level, int optname, void *optval,
+		     socklen_t *optlen, int *ret);
 int agwpe_ioctl(int fd, unsigned long request, void *arg, int *ret);
 int agwpe_listen(int fd, int *ret);
 int agwpe_recv(int fd, void *buf, size_t len, ssize_t *ret);

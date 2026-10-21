@@ -300,6 +300,16 @@ extern int agwpe_client_send_unproto_via(agwpe_client_t *c,
 					 const unsigned char *data, int len);
 
 /*
+ * Send a raw AX.25 frame via AGWPE 'K' command.
+ * The frame must be a complete AX.25 frame without flags, FCS, or bit stuffing.
+ * It includes: Address field (origin, destination, optional digipeaters),
+ * Control field, PID, and Information field.
+ * port: the TNC port (0x00 = port 1, 0x10 = port 2, etc.)
+ */
+extern int agwpe_client_send_raw(agwpe_client_t *c, unsigned char port,
+				 const unsigned char *frame, int len);
+
+/*
  * Establish a connection.  pid is used only when the C-call is not
  * appropriate, e.g. AGWPE_PID_NETROM or AGWPE_PID_ROSE.
  */

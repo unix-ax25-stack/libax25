@@ -713,6 +713,19 @@ int agwpe_client_send_unproto_via(agwpe_client_t *c, unsigned char port,
 	return ret;
 }
 
+/*
+ * Send a raw AX.25 frame via AGWPE 'K' command.
+ * frame: complete AX.25 frame without flags, FCS, or bit stuffing.
+ * Includes: Address field (origin, destination, optional digipeaters),
+ * Control field, PID, Information field.
+ * port: the TNC port (0x00 = port 1, 0x10 = port 2, etc.)
+ */
+int agwpe_client_send_raw(agwpe_client_t *c, unsigned char port,
+			  const unsigned char *frame, int len)
+{
+	return agwpe_send_cmd(c, port, AGWPE_CMD_RAW, 0, NULL, NULL, frame, len);
+}
+
 int agwpe_client_connect(agwpe_client_t *c, unsigned char port,
 			 unsigned char pid, const char *from, const char *to)
 {

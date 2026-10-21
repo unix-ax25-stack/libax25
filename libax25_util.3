@@ -1,0 +1,194 @@
+.\" libax25_util.3 - libax25 Utility Functions
+.\" 
+.\" This manpage documents the utility functions provided by libax25.
+.\" 
+.\" Copyright (C) 1997-1999 Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat
+.\" and Alan Cox.
+.\" Copyright (C) 2024-2026 Thomas Osterried <dl9sau@darc.de>
+.\" 
+.TH LIBAX25_UTIL 3 "2024-10-20" "libax25" "libax25 Programmer's Manual"
+.SH NAME
+.BR libax25_util
+\- libax25 utility functions (axlib, procutils, ttyutils, daemon, ax25io, axcommon)
+.SH SYNOPSIS
+.nf
+.B #include <netax25/axlib.h>
+.B #include <netax25/procutils.h>
+.B #include <netax25/ttyutils.h>
+.B #include <netax25/daemon.h>
+.B #include <netax25/ax25io.h>
+.B #include <netax25/axcommon.h>
+.fi
+.SH DESCRIPTION
+This manpage documents the utility functions provided by libax25 that are
+not part of the kernel AX.25 API, configuration interface, monitor
+interface, or backend connectors.  These are general-purpose helper
+functions used throughout the AX.25 suite.
+.SH "AXLIB.H - ADDRESS MANIPULATION AND UTILITIES"
+The axlib.h header provides core address manipulation functions and
+utility functions.
+.SH "Address Conversion"
+.TP
+.BI "int ax25_aton_entry(const char *" cp ", char *" axp ");"
+Convert an ASCII callsign (e.g. "DB0ABC-1") to network format (shifted
+AX.25 address).  Stores 7 bytes in \fIaxp\fR.  Returns 0 on success, -1
+on error.
+.TP
+.BI "void ax25_aton_entry_or_exit(const char *" cp ", char *" axp ");"
+Like \fBax25_aton_entry()\fR but exits on error.
+.TP
+.BI "int ax25_aton(const char *" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Parse an ASCII address string with optional digipeaters and SSIDs.
+Format: \fIcallsign\fR [\fIVia\fR \fIcallsign\fR...].  Fills a
+\fBfull_sockaddr_ax25\fR structure.  Returns length or -1.
+.TP
+.BI "void ax25_aton_or_exit(const char *" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Like \fBax25_aton()\fR but exits on error.
+.TP
+.BI "int ax25_aton_arglist(const char **" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Parse a NULL-terminated array of strings as an address with digipeaters.
+.TP
+.BI "void ax25_aton_arglist_or_exit(const char **" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Like \fBax25_aton_arglist()\fR but exits on error.
+.TP
+.BI "char *ax25_ntoa(const ax25_address *" axp ");"
+Convert a network-format AX.25 address to ASCII string (e.g. "DB0ABC-1").
+Returns pointer to static buffer (overwritten on subsequent calls).
+.TP
+.BI "char *rose_ntoa(const rose_address *" axp ");"
+Convert a Rose address to ASCII.
+.TP
+.BI "int ax25_cmp(const ax25_address *" ax1 ", const ax25_address *" ax2 ");"
+Compare two AX.25 addresses.  Returns 0 if identical, 1 if different,
+2 if only SSIDs differ.
+.TP
+.BI "int rose_cmp(const rose_address *" r1 ", const rose_address *" r2 ");"
+Compare two Rose addresses.
+.TP
+.BI "int ax25_validate(const char *" axp ");"
+Validate an ASCII callsign.  Returns \fBTRUE\fR (1) if valid, \fBFALSE\fR (0)
+if not.
+.TP
+.BI "char *strupr(char *" s ");"
+Convert string to uppercase (in-place).  Returns \fIs\fR.
+.TP
+.BI "char *strlwr(char *" s ");"
+Convert string to lowercase (in-place).  Returns \fIs\fR.
+.TP
+.BI "extern char libax25_version[];"
+String containing the libax25 version.
+.TP
+.BI "extern ax25_address null_ax25_address;"
+Null (zeroed) AX.25 address constant.
+.SH "PROCUTILS.H - PROCESS AND FILE UTILITIES"
+.TP
+.BI "int daemon_start(int foreground);"
+Fork and daemonize.  If \fIforeground\fR is true, stay in foreground
+(suitable for systemd Type=simple).  Returns 1 in parent, 0 in child,
+-1 on error.
+.TP
+.BI "int pidfile_write(const char *" path ");"
+Write current PID to file.  Returns 0 on success, -1 on error.
+.TP
+.BI "int pidfile_remove(const char *" path ");"
+Remove PID file.
+.TP
+.BI "char *read_line(FILE *" fp ", char *" buf ", size_t buflen ");"
+Read a line from file, stripping trailing newline.  Returns \fIbuf\fR
+or NULL on EOF/error.
+.TP
+.BI "char *skip_space(const char *" s ");"
+Skip leading whitespace.  Returns pointer to first non-space.
+.TP
+.BI "char *skip_nonspace(const char *" s ");"
+Skip leading non-whitespace.
+.TP
+.BI "char *next_token(char **" s ");"
+Extract next whitespace-separated token from string (modifies string).
+Returns token or NULL.
+.TP
+.BI "int str_to_addr(const char *" s ", ax25_address *" addr ");"
+Parse ASCII callsign to network format.
+.TP
+.BI "char *addr_to_str(const ax25_address *" addr ", char *" buf ", size_t len ");"
+Format network address to ASCII string in \fIbuf\fR.
+.SH "TTYUTILS.H - SERIAL PORT UTILITIES"
+.TP
+.BI "int tty_open(const char *" device ", int baud ");"
+Open serial device at given baud rate.  Returns fd or -1.
+.TP
+.BI "int tty_close(int fd);"
+Close serial port.
+.TP
+.BI "int tty_set_speed(int fd, int baud);"
+Change baud rate.
+.TP
+.BI "int tty_set_dtr(int fd, int on);"
+.TP
+.BI "int tty_set_rts(int fd, int on);"
+Control DTR/RTS lines.
+.TP
+.BI "int tty_get_cts(int fd);"
+.TP
+.BI "int tty_get_dsr(int fd);"
+.TP
+.BI "int tty_get_dcd(int fd);"
+.TP
+.BI "int tty_get_ri(int fd);"
+Read modem status lines.
+.TP
+.BI "int tty_wait_dcd(int fd, int timeout_ms);"
+Wait for DCD to go high (carrier detect).
+.TP
+.BI "int tty_wait_cts(int fd, int timeout_ms);"
+Wait for CTS.
+.TP
+.BI "int tty_drain(int fd);"
+Wait for output buffer to drain.
+.TP
+.BI "int tty_flush(int fd);"
+Flush input/output buffers.
+.SH "DAEMON.H - DAEMON UTILITIES"
+.TP
+.BI "int daemon_start(int foreground);"
+Fork and daemonize (see procutils.h for details).
+.TP
+.BI "void daemon_stop(void);"
+Clean up daemon state on exit.
+.SH "AX25IO.H - AX.25 FRAME I/O"
+.TP
+.BI "ssize_t ax25io_read(int fd, void *" buf ", size_t len, int flags ");"
+Read an AX.25 frame from a socket (handles KISS framing if needed).
+.TP
+.BI "ssize_t ax25io_write(int fd, const void *" buf ", size_t len, int flags ");"
+Write an AX.25 frame to a socket.
+.TP
+.BI "int ax25io_frame_type(const unsigned char *" buf ", size_t len ");"
+Determine frame type from buffer.
+.SH "AXCOMMON.H - COMMON DEFINITIONS"
+.TP
+.BI "extern char *ax25_config_file(const char *" filename ");"
+Resolve configuration file path (searches standard locations).
+.TP
+.BI "int ax25_validate_call(const char *" call ");"
+Validate callsign format.
+.TP
+.BI "int ax25_validate_digi(const char *" digi ");"
+Validate digipeater path.
+.SH "SEE ALSO"
+.BR libax25_config "(3), " libax25_monitor "(3), " libax25_backends "(3)"
+.PP
+.BR ax25 "(4), " netrom "(4), " rose "(4), " axports "(5)"
+.SH AUTHORS
+Original libax25 by Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat,
+and Alan Cox.
+Utility functions by Thomas Osterried <dl9sau@darc.de> and others.
+.SH COPYRIGHT
+This library is free software; you can redistribute it and/or modify it
+under the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation; either version 2.1 of the License, or (at
+your option) any later version.
+
+.\" Local Variables:
+.\" mode: nroff
+.\" End:

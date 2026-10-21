@@ -1,198 +1,217 @@
-.TH INET 3  "2008-Feb-04" "Linux" "Linux Programmer's Manual"
+.\" ax25.3 - AX.25 Kernel Header and Address Manipulation
+.\" 
+.\" This manpage documents the kernel AX.25 socket interface constants,
+.\" structures, and address manipulation functions.
+.\" 
+.\" Copyright (C) 1997-1999 Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat
+.\" and Alan Cox.
+.\" Copyright (C) 2024-2026 Thomas Osterried <dl9sau@darc.de>
+.\" 
+.TH AX25 3 "2024-10-20" "libax25" "Linux Programmer's Manual"
 .SH NAME
-.B ax25_aton, ax25_aton_entry, ax25_aton_arglist,
-.B ax25_ntoa, ax25_cmp, ax25_validate
-\- AX25 Address manipulation routines
+.BR ax25_aton ", " ax25_aton_entry ", " ax25_aton_arglist ", " ax25_ntoa ", " ax25_cmp ", " ax25_validate
+\- AX.25 Address manipulation routines
+.PP
+.BR ax25 ", " netrom ", " rose ", " axports
+\- AX.25 kernel interface and configuration
 .SH SYNOPSIS
 .nf
 .B #include <netax25/ax25.h>
+.B #include <netax25/axlib.h>
 .PP
 .BI "int ax25_aton(const char *" cp ", struct full_sockaddr_ax25 *" fsap ");"
-.PP
-.BI "int ax25_aton_arglist(const char **" cp ", struct full_sockaddr_ax25 *" fsap ");"
-.PP
 .BI "int ax25_aton_entry(const char *" cp ", char *" axp ");"
-.PP
+.BI "int ax25_aton_arglist(const char **" cp ", struct full_sockaddr_ax25 *" fsap ");"
 .BI "char *ax25_ntoa(ax25_address *" axp ");"
-.PP
 .BI "int ax25_cmp(ax25_address *" ax1 ", ax25_address *" ax2 ");"
-.PP
 .BI "int ax25_validate(char *" axp ");"
 .fi
-
 .SH DESCRIPTION
-.BR ax25_aton ()
-takes the ASCII string
-.I cp
-that is in the format
-.I callsign
-.RI [[ V | VIA ] callsign "...]"
-and stores it in
-.I fsap
-in network format.
+This manual page describes the kernel AX.25 socket interface as provided
+by the Linux kernel and the address manipulation routines provided by
+libax25.
 .PP
-.BR ax25_aton_entry ()
-takes the ASCII string of a callsign
-.I cp
-and stores it in network format in
-.I axp.
+The kernel AX.25 interface is accessed via AF_AX25 sockets.  The
+configuration of ports is described in \fBaxports\fR(5) and managed via
+the libax25 configuration API documented in \fBlibax25_config\fR(3).
+.SH "KERNEL AX.25 SOCKET INTERFACE"
 .PP
-The
-.BR ax25_aton_arglist ()
-takes a NULL terminated array of strings
-.I cp
-and stores it in
-.I fsap
-in network format.
+The AF_AX25 address family provides the standard Linux kernel AX.25
+network stack.  Sockets are created with:
+.nf
+.BI "int s = socket(AF_AX25, SOCK_SEQPACKET, 0);"
+.fi
 .PP
-The
-.BR ax25_ntoa ()
-takes a network format address
-.I axp
-and returns the ASCII representation.
-The string is returned in a statically allocated buffer, which
-subsequent calls will overwrite.
+The address structure is \fBstruct sockaddr_ax25\fR:
+.nf
+.ft C
+struct sockaddr_ax25 {
+    sa_family_t sax25_family;      /* AF_AX25 */
+    ax25_address sax25_call;       /* callsign */
+    int          sax25_ndigis;     /* number of digipeaters */
+    ax25_address sax25_digi[8];    /* digipeater addresses */
+};
+.ft R
+.fi
 .PP
-The
-.BR ax25_cmp ()
-function compares the two ax25 addresses,
-.I ax1
-and
-.IR ax2 ,
-that are in network format and determines whether they are identical,
-differ only by their SSIDs or are different.
-.PP
-The
-.BR ax25_validate ()
-function checks to see if the address
-.I axp
-in network format is a correctly formatted address.
-.SH "RETURN VALUE"
-The
-.BR ax25_aton () and
-.BR ax25_aton_arglist ()
-functions return -1 if an error occurs otherwise the length of
-the returned structure.
-.PP
-The
-.BR ax25_aton_entry ()
-function returns -1 if an error occurs otherwise zero.
-.PP
-The
-.BR ax25_cmp ()
-function returns 0 if the two addresses are identical, 1 if they are
-different or 2 is only the SSIDs are different.
-.PP
-The
-.BR ax25_validate ()
-function returns TRUE if the callsign is valid or FALSE if it is not.
-.SH "SEE ALSO"
-.BR ax25 "(4), " netrom "(4), " rose "(4)"
-
-.SH "AX.25 CONFIGURATION INTERFACE"
-The following functions provide access to the AX.25 port configuration
-as defined in
-.IR axports (5).
-They are declared in
-.IR <netax25/axconfig.h> .
-
-.SS "Library Initialization"
+The \fBax25_address\fR type is a 7-byte array representing an AX.25
+callsign in shifted format (each byte is the APRS/AX.25 shifted ASCII
+character).
+.SH "SOCKET OPTIONS (SOL_AX25)"
+The following options are available at level \fBSOL_AX25\fR (257):
 .TP
-.BI "int ax25_config_load_ports(void)"
-Reads the
-.I axports
-file and builds the internal port table.  Must be called before
-using any other configuration function.  Returns the number of
-active ports, or 0 on failure.
-
-.SS "Port Enumeration and Lookup"
+.BR AX25_WINDOW
+Window size (default 2)
 .TP
-.BI "char *ax25_config_get_next(char *" name ")"
-Enumerates all configured ports.  Pass NULL to get the first port name,
-subsequent calls with the last returned name return the next port.
-Returns NULL at end of list or on error.
-
+.BR AX25_T1
+T1 timeout in 100ms units (default 10)
 .TP
-.BI "char *ax25_config_get_name(char *" device ")"
-Maps a device name (kernel interface) to the corresponding port name
-from
-.IR axports .
-Returns NULL on error.
-
+.BR AX25_T2
+T2 timeout in 100ms units (default 30)
 .TP
-.BI "char *ax25_config_get_addr(char *" name ")"
-Returns the callsign (in ASCII) configured for the given port name.
-Returns NULL if the port is not known.
-
+.BR AX25_T3
+T3 timeout in 100ms units (default 300)
 .TP
-.BI "char *ax25_config_get_dev(char *" name ")"
-Returns the kernel network device name for the given port.
-Only returns a device for ports served by the kernel AX.25 stack
-(i.e. ports whose callsign matches an interface that is up).
-Returns NULL for userspace ports (WAMPES, AGWPE) or on error.
-
+.BR AX25_N2
+Maximum retries (default 10)
 .TP
-.BI "char *ax25_config_get_conf_dev(char *" name ")"
-Returns the device name as configured in
-.IR axports ,
-regardless of whether the port is served by the kernel, a WAMPES
-node, or an AGWPE server.  Returns NULL if the port is not known.
-
+.BR AX25_BACKOFF
+Backoff algorithm (0=linear, 1=exponential)
 .TP
-.BI "char *ax25_config_get_port(ax25_address *" callsign ")"
-Maps a callsign to the port name that owns it.  A null AX.25
-address returns
-.Q *
-meaning all ports.  Returns NULL on error.
-
-.SS "Port Parameters"
+.BR AX25_EXTSEQ
+Extended sequence numbers (0=standard, 1=extended)
 .TP
-.BI "int ax25_config_get_window(char *" name ")"
-Returns the default window size for the port.  Returns 0 on error.
-
+.BR AX25_PIDINCL
+Include PID in received frames (0=no, 1=yes)
 .TP
-.BI "int ax25_config_get_paclen(char *" name ")"
-Returns the maximum packet length for the port.  Returns 0 on error.
-
+.BR AX25_IDLE
+Idle timeout in seconds
 .TP
-.BI "int ax25_config_get_baud(char *" name ")"
-Returns the baud rate for the port.  Returns 0 on error.
-
+.BR AX25_PACLEN
+Maximum packet length
 .TP
-.BI "char *ax25_config_get_desc(char *" name ")"
-Returns the description string for the port.  Returns NULL on error.
-
-.SS "Backend and Kernel Information"
+.BR AX25_IPMAXQUEUE
+Maximum IP queue length
 .TP
-.BI "int ax25_config_port_is_kernel(const char *" name ")"
-Returns non-zero if the named port is served by the kernel AX.25
-stack (i.e. its callsign matches an interface that is up).
-
+.BR AX25_IAMDIGI
+Act as digipeater (0=no, 1=yes)
 .TP
-.BI "int ax25_config_kernel_ports(void)"
-Returns the number of ports that are served by the kernel AX.25 stack.
-
+.BR AX25_KILL
+Kill connection (value is port index)
+.SH "IOCTL COMMANDS"
+The following ioctls are available on AF_AX25 sockets:
 .TP
-.BI "int ax25_port_info(const char *" name ", struct ax25_port_info *" info ")"
-Fills the
-.I info
-structure with all available information about the port:
-backend (kernel, WAMPES, AGWPE), callsign, device, description,
-window, paclen, baud, and backend-specific fields (WAMPES node name,
-AGWPE flat port, channel, upstream).
+.B SIOCAX25GETUID
+Get UID associated with socket
+.TP
+.B SIOCAX25ADDUID
+Add UID to socket
+.TP
+.B SIOCAX25DELUID
+Delete UID from socket
+.TP
+.B SIOCAX25NOUID
+Remove all UIDs from socket
+.TP
+.B SIOCAX25BPQADDR
+Set BPQ Ethernet address
+.TP
+.B SIOCAX25GETPARMS
+Get link parameters
+.TP
+.B SIOCAX25SETPARMS
+Set link parameters
+.TP
+.B SIOCAX25OPTRT
+Optimize routing
+.TP
+.B SIOCAX25CTLCON
+Control connection (connect/disconnect)
+.TP
+.B SIOCAX25GETINFO
+Get connection info
+.TP
+.B SIOCAX25ADDFWD
+Add forward
+.TP
+.B SIOCAX25DELFWD
+Delete forward
+.SH "ADDRESS MANIPULATION (axlib.h)"
+The functions in \fB<netax25/axlib.h>\fR provide address manipulation:
+.TP
+.BI "int ax25_aton_entry(const char *" cp ", char *" axp ");"
+Convert ASCII callsign (e.g. "DB0ABC-1") to 7-byte network format.
 Returns 0 on success, -1 on error.
-
 .TP
-.BI "int ax25_port_number(const char *" name ")"
-Returns the flat AGWPE port number for the given port, or -1 with
-errno set to EADDRNOTAVAIL if the port is not an AGWPE port.
-
-.SS "File Access"
+.BI "void ax25_aton_entry_or_exit(const char *" cp ", char *" axp ");"
+Like \fBax25_aton_entry()\fR but exits on error.
 .TP
-.BI "const char *ax25_config_ports_file(void)"
-Returns the path to the
-.I axports
-file used by the library.
-
+.BI "int ax25_aton(const char *" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Parse address string with optional digipeaters.  Format:
+\fIcallsign\fR [\fIVia\fR \fIcallsign\fR...].
+.TP
+.BI "void ax25_aton_or_exit(const char *" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Like \fBax25_aton()\fR but exits on error.
+.TP
+.BI "int ax25_aton_arglist(const char **" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Parse NULL-terminated array of strings as address with digipeaters.
+.TP
+.BI "void ax25_aton_arglist_or_exit(const char **" cp ", struct full_sockaddr_ax25 *" fsap ");"
+Like \fBax25_aton_arglist()\fR but exits on error.
+.TP
+.BI "char *ax25_ntoa(ax25_address *" axp ");"
+Convert network-format address to ASCII (e.g. "DB0ABC-1").  Returns
+pointer to static buffer (overwritten on subsequent calls).
+.TP
+.BI "int ax25_cmp(ax25_address *" ax1 ", ax25_address *" ax2 ");"
+Compare two addresses.  Returns 0 if identical, 1 if different,
+2 if only SSIDs differ.
+.TP
+.BI "int ax25_validate(char *" axp ");"
+Validate ASCII callsign.  Returns \fBTRUE\fR (1) if valid, \fBFALSE\fR (0)
+if not.
+.TP
+.BI "char *ax25_ntoa(ax25_address *" axp ");"
+Convert network address to ASCII.  Static buffer, not thread-safe.
+.TP
+.BI "int ax25_cmp(ax25_address *" ax1 ", ax25_address *" ax2 ");"
+Compare addresses.  Returns 0=identical, 1=different, 2=SSID-only diff.
+.TP
+.BI "int ax25_validate(char *" axp ");"
+Validate callsign format.  Returns TRUE (1) or FALSE (0).
+.SH "RETURN VALUES"
+.BR ax25_aton () and \fBax25_aton_arglist()\fR return -1 on error,
+otherwise length of structure.
+.PP
+.BR ax25_aton_entry () returns -1 on error, 0 on success.
+.PP
+.BR ax25_cmp () returns 0 (identical), 1 (different), 2 (SSID only).
+.PP
+.BR ax25_validate () returns TRUE (1) or FALSE (0).
+.SH "FILES"
+.TP
+.I /etc/ax25/axports
+AX.25 port configuration
+.TP
+.I /proc/net/ax25
+Kernel AX.25 status
+.TP
+.I /proc/net/ax25_calls
+Kernel AX.25 callsign table
 .SH "SEE ALSO"
-.BR ax25 "(4), " netrom "(4), " rose "(4), " axports "(5)"
+.BR libax25_config "(3), " libax25_monitor "(3), " libax25_backends "(3), " libax25_util "(3)"
+.PP
+.BR netrom "(4), " rose "(4), " axports "(5), " nrports "(5), " rsports "(5)"
+.SH AUTHORS
+Original libax25 by Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat,
+and Alan Cox.
+Extended by Thomas Osterried <dl9sau@darc.de> (WAMPES/AGWPE support).
+.SH COPYRIGHT
+This library is free software; you can redistribute it and/or modify it
+under the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation; either version 2.1 of the License, or (at
+your option) any later version.
+
+.\" Local Variables:
+.\" mode: nroff
+.\" End:

@@ -1,0 +1,284 @@
+.\" libax25_backends.3 - libax25 Backend Connector Interfaces
+.\" 
+.\" This manpage documents the backend connector interfaces provided by
+.\" libax25 for WAMPES nodes and AGWPE servers (ax25netd/direwolf).
+.\" 
+.\" Copyright (C) 2024-2026 Thomas Osterried <dl9sau@darc.de>
+.\" 
+.TH LIBAX25_BACKENDS 3 "2024-10-20" "libax25" "libax25 Programmer's Manual"
+.SH NAME
+.BR agwpe_client.h ", " wampes_client.h
+\- libax25 Backend Connector Interfaces (AGWPE, WAMPES)
+.SH SYNOPSIS
+.nf
+.B #include <netax25/agwpe.h>
+.B #include <netax25/agwpe_client.h>
+.B #include <netax25/wampes.h>
+.B #include <netax25/wampes_client.h>
+.fi
+.SH DESCRIPTION
+libax25 provides a backend abstraction for AX.25 transport.  On a system
+with AX.25 support, three backends can coexist:
+.IP \(bu 2
+Kernel AX.25 stack (Linux kernel AX.25 subsystem)
+.IP \(bu 2
+WAMPES node (WAMPES protocol daemon)
+.IP \(bu 2
+AGWPE server (ax25netd, direwolf, or compatible)
+.PP
+The kernel backend is accessed via standard AF_AX25 sockets.  The WAMPES
+and AGWPE backends are accessed through libax25's shim layer, which
+interposes on socket() calls and routes connections through the
+appropriate backend based on the port configuration.
+.PP
+This manpage documents the public interfaces of the two userspace
+backends: AGWPE and WAMPES.  These headers are primarily intended for
+daemons that implement the backend protocols (ax25netd, WAMPES node),
+but some functions are also useful for applications that need to
+interact directly with the backend protocols.
+.SH "AGWPE CLIENT INTERFACE (agwpe_client.h)"
+The AGWPE client interface provides a C API to connect to an AGWPE
+server (ax25netd or direwolf) over TCP or Unix domain socket.  It
+handles the AGWPE frame protocol (KISS-like framing with port/channel
+encoding).
+.SH "AGWPE Client API"
+.TP
+.BI "agwpe_client_t *agwpe_client_new(const struct agwpe_client_cb *" cb ", void *" opaque ");"
+Allocate a new AGWPE client object.  \fIcb\fR is a callback structure
+for received frames; \fIopaque\fR is passed back to callbacks.
+.TP
+.BI "void agwpe_client_free(agwpe_client_t *" c ");"
+Free a client object.
+.TP
+.BI "int agwpe_client_connect_host(agwpe_client_t *" c ", const char *" host ", int tcp_port ");"
+Connect to AGWPE server via TCP.
+.TP
+.BI "int agwpe_client_connect_unix(agwpe_client_t *" c ", const char *" path ");"
+Connect via Unix domain socket.
+.TP
+.BI "void agwpe_client_close(agwpe_client_t *" c ");"
+Close the connection.
+.TP
+.BI "int agwpe_client_fd(const agwpe_client_t *" c ");"
+Return the file descriptor for use with select()/poll().
+.TP
+.BI "int agwpe_client_connected(const agwpe_client_t *" c ");"
+Return non-zero if connected.
+.TP
+.BI "int agwpe_client_err(const agwpe_client_t *" c ");"
+Return last error code.
+.TP
+.BI "void *agwpe_client_opaque(const agwpe_client_t *" c ");"
+Return the opaque pointer passed to agwpe_client_new().
+.PP
+.SH "Frame Transmission"
+.TP
+.BI "int agwpe_client_send_frame(agwpe_client_t *" c ", const struct agwpe_s *" hdr ", const unsigned char *" data ");"
+Send a raw AGWPE frame (header + data).  Returns 0 on success, -1 on
+error.  The socket is non-blocking; returns \fBEAGAIN\fR if not writable.
+.PP
+Higher-level helpers build the header:
+.TP
+.BI "int agwpe_send_cmd(agwpe_client_t *" c ", unsigned char port ", unsigned char datakind ", unsigned char pid ", const char *" from ", const char *" to ", const unsigned char *" data ", uint32_t dlen ");"
+Low-level command sender.
+.TP
+.BI "int agwpe_client_login(agwpe_client_t *" c ", const char *" user ", const char *" pass ");"
+Login to server.
+.TP
+.BI "int agwpe_client_register(agwpe_client_t *" c ", unsigned char port ", const char *" call ");"
+Register a callsign on a port.
+.TP
+.BI "int agwpe_client_unregister(agwpe_client_t *" c ", unsigned char port ", const char *" call ");"
+Unregister a callsign.
+.TP
+.BI "int agwpe_client_listen(agwpe_client_t *" c ", unsigned char port ", const char *" call ");"
+Register a listening callsign on the virtual loop port.
+.TP
+.BI "int agwpe_client_get_version(agwpe_client_t *" c ");"
+.TP
+.BI "int agwpe_client_get_ports(agwpe_client_t *" c ");"
+.TP
+.BI "int agwpe_client_get_capab(agwpe_client_t *" c ", unsigned char port ");"
+.TP
+.BI "int agwpe_client_get_heard(agwpe_client_t *" c ", unsigned char port ");"
+.TP
+.BI "int agwpe_client_monitor(agwpe_client_t *" c ");"
+Toggle raw frame monitor ('K' frames).
+.TP
+.BI "int agwpe_client_raw_toggle(agwpe_client_t *" c ");"
+.TP
+.BI "int agwpe_client_mon_mask(agwpe_client_t *" c ", unsigned char mask ");"
+.TP
+.BI "int agwpe_client_uisub(agwpe_client_t *" c ");"
+Subscribe to UI frames for registered callsigns.
+.TP
+.BI "int agwpe_client_send_unproto(agwpe_client_t *" c ", unsigned char port ", unsigned char pid ", const char *" from ", const char *" to ", const unsigned char *" data ", int len ");"
+Send unproto (UI) frame.
+.TP
+.BI "int agwpe_client_send_unproto_via(agwpe_client_t *" c ", unsigned char port ", unsigned char pid ", const char *" from ", const char *" to ", const char *const digis[] ", int ndigis ", const unsigned char *" data ", int len ");"
+Send UI frame via digipeater path.
+.TP
+.BI "int agwpe_client_connect(agwpe_client_t *" c ", unsigned char port ", unsigned char pid ", const char *" from ", const char *" to ");"
+Establish connected-mode session.
+.TP
+.BI "int agwpe_client_connect_via(agwpe_client_t *" c ", unsigned char port ", unsigned char pid ", const char *" from ", const char *" to ", const char *const digis[] ", int ndigis ");"
+Connect via digipeater path.
+.TP
+.BI "int agwpe_client_send_data(agwpe_client_t *" c ", unsigned char port ", unsigned char pid ", const char *" from ", const char *" to ", const unsigned char *" data ", int len ");"
+Send data on established connection.
+.TP
+.BI "int agwpe_client_disconnect(agwpe_client_t *" c ", unsigned char port ", const char *" from ", const char *" to ");"
+Disconnect session.
+.TP
+.BI "int agwpe_client_kill_id(agwpe_client_t *" c ", uint32_t id ");"
+Kill session by ID (ax25netd extension).
+.TP
+.BI "int agwpe_client_outstanding_port(agwpe_client_t *" c ", unsigned char port ");"
+.TP
+.BI "int agwpe_client_outstanding_conn(agwpe_client_t *" c ", unsigned char port ", const char *" from ", const char *" to ");"
+.TP
+.BI "int agwpe_client_recv(agwpe_client_t *" c ");"
+Process pending incoming frames (dispatch callbacks).
+.TP
+.BI "int agwpe_client_pump(agwpe_client_t *" c ", int timeout_ms ");"
+Wait for data and process.
+.SH "AGWPE Frame Header (agwpe.h)"
+The AGWPE frame header (\fBstruct agwpe_s\fR) is defined in
+\fB<netax25/agwpe.h>\fR.  Key fields:
+.nf
+.ft C
+struct agwpe_s {
+    uint8_t  port;        /* port number (0-255) */
+    uint8_t  datakind;    /* 'K' raw, 'M' monitor, 'C' connect, etc. */
+    uint8_t  pid;         /* protocol identifier */
+    char     from[10];    /* source callsign (ASCII) */
+    char     to[10];      /* destination callsign */
+    uint32_t data_len;    /* length of data area (host byte order) */
+};
+.ft R
+.fi
+.PP
+Common datakind values:
+\fB'K'\fR (raw AX.25 frame), \fB'M'\fR (monitor frame), \fB'C'\fR
+(connect request), \fB'D'\fR (disconnect), \fB'Y'\fR (connected data),
+\fB'X'\fR (unproto/UI frame), \fB'V'\fR (unproto via digis),
+\fB'R'\fR (register callsign), \fB'L'\fR (listen), \fB'G'\fR (port info).
+.SH "WAMPES CLIENT INTERFACE (wampes_client.h)"
+The WAMPES client interface provides a C API to connect to a WAMPES
+node over a Unix domain socket.  The protocol is line-based text
+commands over a Unix stream socket.
+.SH "WAMPES Client API"
+.TP
+.BI "int wampes_client_new(const struct wampes_client_cb *" cb ", void *" opaque ");"
+Allocate a new WAMPES client object.
+.TP
+.BI "void wampes_client_free(void *" c ");"
+.TP
+.BI "int wampes_client_connect_unix(void *" c ", const char *" path ");"
+Connect to WAMPES node via Unix socket.
+.TP
+.BI "int wampes_client_fd(const void *" c ");"
+Get file descriptor.
+.TP
+.BI "int wampes_client_connected(const void *" c ");"
+Check if connected.
+.TP
+.BI "int wampes_client_err(const void *" c ");"
+.TP
+.BI "void *wampes_client_opaque(const void *" c ");"
+.TP
+.BI "int wampes_client_send_frame(void *" c ", const struct wampes_s *" hdr ", const unsigned char *" data ");"
+Send a raw WAMPES frame.
+.SH "WAMPES Protocol Commands"
+The WAMPES node accepts text commands over the service socket:
+.TP
+.B \fBbinary\fR
+Disable line-ending conversion (for programs).
+.TP
+.B \fBascii\fR
+Enable line-ending conversion (for humans).
+.TP
+.B \fBhandover\fR
+Request descriptor handover for next connect (enables SOCK_SEQPACKET
+semantics on the returned socket).
+.TP
+.B \fBconnect <iface>:<dest> [via <digi>,...] [< <src>] [--pid 0xNN]\fR
+Initiate AX.25 connection.  Returns file descriptor on success.
+.TP
+.B \fBlisten [ui] [pid=<n>] <call>\fR
+Claim a callsign for incoming connections or UI frames.
+.TP
+.B \fBdatagram [<iface>:] [--pid 0xNN] [--silent]\fR
+Send/receive UI frames on an interface.
+.TP
+.B \fBsessions\fR
+List active sessions.
+.TP
+.B \fBclose <id>\fR
+Kill session by ID.
+.TP
+.B \fBheard\fR
+Request heard list.
+.TP
+.B \fBmonitor [iface=...] [output]\fR
+Enable raw frame monitor for an interface (WAMPES packet port).
+.TP
+.B \fBraw\fR
+Enable raw AX.25 frame monitor.
+.TP
+.B \fBversion\fR
+Get node version.
+.TP
+.B \fBports\fR
+List node's interfaces.
+.TP
+.B \fBcapab <port>\fR
+Get port capabilities.
+.SH "PORT NAME SYNTAX"
+WAMPES ports use the syntax \fB<node>:<iface>\fR where:
+.IP \(bu 2
+\fI<node>\fR is the node name from wampes.conf (e.g. "wampes")
+.IP \(bu 2
+\fI<iface>\fR is the interface name from the node's port configuration
+.PP
+Examples: \fBwampes:hf\fR, \fBwampes:xnet\fR, \fBwampes:vhf\fR.
+The base node name (before the colon) must exist in wampes.conf.
+.SH "BACKEND SELECTION"
+The libax25 shim automatically selects the backend based on the port
+configuration in axports:
+.IP \(bu 2
+Kernel port \-> AF_AX25 socket to kernel stack
+.IP \(bu 2
+WAMPES port (wampes:<iface>) \-> WAMPES node
+.IP \(bu 2
+AGWPE port (axports entry with agwpe- prefix) \-> AGWPE server
+.PP
+Applications using standard AF_AX25 sockets do not need to know which
+backend is used; the shim handles routing transparently.
+.SH "FILES"
+.TP
+.I /etc/ax25/axports
+Port configuration (defines which backend serves each port)
+.TP
+.I /etc/ax25/wampes.conf
+WAMPES node configuration
+.TP
+.I /etc/ax25/ax25netd_agwpe.conf
+AGWPE upstream configuration (ax25netd)
+.SH "SEE ALSO"
+.BR libax25_config "(3), " libax25_monitor "(3), " libax25_util "(3)"
+.PP
+.BR ax25netd "(8), " wampes "(8), " direwolf "(8)"
+.SH AUTHORS
+Original libax25 by Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat,
+and Alan Cox.
+Backend abstraction by Thomas Osterried <dl9sau@darc.de>.
+.SH COPYRIGHT
+This library is free software; you can redistribute it and/or modify it
+under the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation; either version 2.1 of the License, or (at
+your option) any later version.
+
+.\" Local Variables:
+.\" mode: nroff
+.\" End:

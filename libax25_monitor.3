@@ -1,0 +1,224 @@
+.\" libax25_monitor.3 - AX.25 Monitor Interface
+.\" 
+.\" This manpage documents the monitor interface for raw AX.25 frame capture
+.\" as provided by libax25.
+.\" 
+.\" Copyright (C) 1997-1999 Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat
+.\" and Alan Cox.
+.\" Copyright (C) 2024-2026 Thomas Osterried <dl9sau@darc.de>
+.\" 
+.TH LIBAX25_MONITOR 3 "2024-10-20" "libax25" "libax25 Programmer's Manual"
+.SH NAME
+.BR axmon_open ", " axmon_open_mask ", " axmon_read ", " axmon_poll ", " axmon_close ", " axmon_retire ", " axmon_source_name
+\- Open and read raw AX.25 monitor streams
+.PP
+.BR axmon_open ", " axmon_open_mask
+\- Open monitor for all sources
+.PP
+.BR axmon_read
+\- Read a frame from a monitor source
+.PP
+.BR axmon_poll
+\- Wait for frames on monitor sources
+.PP
+.BR axmon_close ", " axmon_retire
+\- Close monitor sources
+.PP
+.BR axmon_source_name
+\- Get human-readable source name
+.PP
+.B struct mheard_struct
+\- Mheard record format
+.SH SYNOPSIS
+.nf
+.B #include <netax25/axmon.h>
+.B #include <netax25/mheard.h>
+.PP
+.BI "int axmon_open(int protocol, const char *" port ", struct axmon *" mon ");"
+.BI "int axmon_open_mask(int protocol, const char *" port ", unsigned char mask, struct axmon *" mon ");"
+.PP
+.BI "ssize_t axmon_read(int fd, int framed, void *" buf ", size_t buflen, struct sockaddr *" sa ", socklen_t *" asize ");"
+.PP
+.BI "int axmon_poll(struct axmon *" mon ", int timeout, unsigned *" ready ");"
+.PP
+.BI "int axmon_close(struct axmon *" mon ");"
+.BI "int axmon_retire(struct axmon *" mon ", int idx ");"
+.PP
+.BI "const char *axmon_source_name(const struct axmon *" mon ", int idx ");"
+.fi
+.SH DESCRIPTION
+The libax25 monitor interface provides a unified way to capture raw AX.25
+frames from all available sources on the system.  A system can have up to
+three sources of raw AX.25 frames:
+.IP \(bu 2
+Kernel AX.25 stack \- via PF_PACKET/SOCK_PACKET socket
+.IP \(bu 2
+WAMPES node \- via node's own monitor socket
+.IP \(bu 2
+AGWPE server (ax25netd/direwolf) \- via AGWPE 'K' raw frame records
+.PP
+The monitor interface automatically detects which sources are available
+and opens the appropriate sockets/streams.  It presents a unified read
+interface via \fBaxmon_read()\fR regardless of the underlying source.
+.PP
+The \fBaxmon\fR structure manages multiple file descriptors (one per
+source) and tracks framing mode for each.
+.SH "MHEARD RECORD FORMAT"
+The \fBstruct mheard_struct\fR (defined in \fB<netax25/mheard.h>\fR)
+documents the on-disk format of the mheard.dat file, shared by
+\fBmheardd\fR, \fMax25netd\fR, and \fBmheard\fR.
+.nf
+.ft C
+struct mheard_struct {
+    ax25_address from_call;      /* source callsign */
+    ax25_address to_call;        /* destination callsign */
+    char         portname[20];   /* port name (may include iface suffix) */
+    unsigned int count;          /* total frames heard */
+    unsigned int sframes;        /* supervisory frames */
+    unsigned int uframes;        /* unnumbered frames */
+    unsigned int iframes;        /* information frames */
+    unsigned int ndigis;         /* number of digipeaters */
+    ax25_address digis[8];       /* digipeater path */
+    time_t       first_heard;    /* first heard timestamp */
+    time_t       last_heard;     /* last heard timestamp */
+    unsigned int type;           /* frame type (MHEARD_TYPE_*) */
+    unsigned int mode;           /* mode flags (MHEARD_MODE_*) */
+    char         spare[128];     /* reserved for future use */
+};
+.ft R
+.fi
+.PP
+The \fBtype\fR field uses \fBMHEARD_TYPE_*\fR constants:
+MHEARD_TYPE_SABM (0), MHEARD_TYPE_SABME (1), MHEARD_TYPE_DISC (2),
+MHEARD_TYPE_UA (3), MHEARD_TYPE_DM (4), MHEARD_TYPE_RR (5),
+MHEARD_TYPE_RNR (6), MHEARD_TYPE_REJ (7), MHEARD_TYPE_FRMR (8),
+MHEARD_TYPE_I (9), MHEARD_TYPE_UI (10), MHEARD_TYPE_UNKNOWN (11).
+.PP
+The \fBmode\fR field uses \fBMHEARD_MODE_*\fR bit flags:
+MHEARD_MODE_TEXT (0x0001), MHEARD_MODE_ARP (0x0002),
+MHEARD_MODE_IP_DG (0x0004), MHEARD_MODE_IP_VC (0x0008),
+MHEARD_MODE_NETROM (0x0010), MHEARD_MODE_ROSE (0x0020),
+MHEARD_MODE_FLEXNET (0x0040), MHEARD_MODE_TEXNET (0x0080),
+MHEARD_MODE_PSATPB (0x0100), MHEARD_MODE_PSATFT (0x0200),
+MHEARD_MODE_SEGMENT (0x4000), MHEARD_MODE_UNKNOWN (0x8000).
+.SH "MONITOR API"
+.TP
+.BI "int axmon_open(int protocol, const char *" port ", struct axmon *" mon ");"
+.TP
+.BI "int axmon_open_mask(int protocol, const char *" port ", unsigned char mask, struct axmon *" mon ");"
+Open monitor sources for raw AX.25 frames.  \fIprotocol\fR is the Ethernet
+protocol type in network byte order (\fBETH_P_AX25\fR for AX.25 frames only,
+\fBETH_P_ALL\fR for all frames including TX).
+.PP
+If \fIport\fR is NULL or empty, all available sources are opened.  If a
+port name is given, only the source that owns that port is opened.
+.PP
+\fBaxmon_open_mask()\fR additionally takes a \fImask\fR of \fBAXMON_MASK_*\fR
+flags to select which payload types to receive from the AGWPE monitor:
+\fBAXMON_MASK_ALL\fR, \fBAXMON_MASK_NONE\fR (headers only).
+.PP
+On success, \fImon\fR is filled with file descriptors (\fImon->fd[]\fR),
+framing types (\fImon->framed[]\fR), and source kinds (\fImon->kind[]\fR).
+Returns 0 on success, -1 on error with errno set.
+.TP
+.BI "ssize_t axmon_read(int fd, int framed, void *" buf ", size_t buflen, struct sockaddr *" sa ", socklen_t *" asize ");"
+Read a frame from a monitor file descriptor.  \fIframed\fR is the framing
+type as returned in \fImon->framed[]\fR (0 = kernel/PF_PACKET, 1 = AGWPE
+monitor, \fBAXMON_FRAMED_WAMPES\fR = WAMPES node).  The frame data is
+written to \fIbuf\fR, source address to \fIsa\fR.  Returns frame length,
+0 on EOF, -1 on error.
+.PP
+The caller must pass the correct \fIframed\fR value for the descriptor.
+For kernel sockets use 0; for AGWPE monitor use 1; for WAMPES use
+\fBAXMON_FRAMED_WAMPES\fR.
+.TP
+.BI "int axmon_poll(struct axmon *" mon ", int timeout, unsigned *" ready ");"
+Wait for frames on any open monitor source.  \fItimeout\fR is in
+milliseconds (-1 = infinite).  On success, \fIready\fR is a bitmask of
+indices into \fImon->fd[]\fR that have data ready.  Returns number of
+ready sources, -1 on error (errno set).
+.TP
+.BI "int axmon_close(struct axmon *" mon ");"
+Close all monitor file descriptors and free resources.
+.TP
+.BI "int axmon_retire(struct axmon *" mon ", int idx ");"
+Close a single monitor source (index \fIidx\fR) and return number of
+remaining sources.  Useful when one source fails but others should continue.
+.TP
+.BI "const char *axmon_source_name(const struct axmon *" mon ", int idx ");"
+Return a human-readable name for the source at index \fIidx\fR:
+"AX.25 packet socket", "AX.25 monitor" (AGWPE), or "WAMPES monitor".
+.SH "FRAMING MODES"
+The \fIframed\fR parameter distinguishes how frames are encoded on the wire:
+.IP \(bu 2
+0 \- Kernel PF_PACKET socket (one frame per read, no length prefix)
+.IP \(bu 2
+1 \- AGWPE monitor stream (length-prefixed frames)
+.IP \(bu 2
+\fBAXMON_FRAMED_WAMPES\fR \- WAMPES monitor (KISS-style framed records)
+.PP
+Pass the value from \fImon->framed[idx]\fR to \fBaxmon_read()\fR.
+.SH "SOURCE KINDS"
+The \fImon->kind[idx]\fR field indicates the source type:
+.IP \(bu 2
+\fBAXMON_KERNEL\fR \- Kernel AX.25 packet socket
+.IP \(bu 2
+\fBAXMON_MONITOR\fR \- AGWPE monitor (ax25netd/direwolf)
+.IP \(bu 2
+\fBAXMON_WAMPES\fR \- WAMPES node monitor
+.SH "MHEARD RECORD FORMAT"
+The \fBstruct mheard_struct\fR (see SYNOPSIS) defines the on-disk format
+of \fBmheard.dat\fR.  It is shared by \fBmheardd\fR (kernel monitor),
+\fMax25netd\fR (AGWPE monitor), and \fBmheard\fR (display tool).  Both
+\fBmheardd\fR and \fMax25netd\fR write to the same file using \fBflock\fR
+locking.
+.PP
+The \fBportname\fR field may contain a port name with interface suffix
+(e.g. "wampes:xnet") if the monitor reports an interface-specific name.
+.SH "EXAMPLE"
+.nf
+.ft C
+struct axmon mon;
+if (axmon_open(htons(ETH_P_AX25), NULL, &mon) < 0) {
+    perror("axmon_open");
+    exit(1);
+}
+while (1) {
+    unsigned ready;
+    if (axmon_poll(&mon, -1, &ready) < 0) break;
+    for (int i = 0; i < mon.nfd && ready; i++) {
+        if (ready & (1u << i)) {
+            struct sockaddr sa;
+            socklen_t asize = sizeof(sa);
+            char buf[2048];
+            ssize_t n = axmon_read(mon.fd[i], mon.framed[i],
+                                   buf, sizeof(buf), &sa, &asize);
+            if (n <= 0) continue;
+            // process frame in buf[0..n-1], source in sa
+        }
+    }
+}
+axmon_close(&mon);
+.ft R
+.fi
+.SH "FILES"
+.TP
+.I /var/ax25/mheard/mheard.dat
+Heard station log (shared by mheardd, ax25netd, mheard)
+.SH "SEE ALSO"
+.BR mheard "(1), " mheardd "(8), " ax25netd "(8), " listen "(1), " net2kiss "(8)"
+.PP
+.BR libax25_config "(3), " libax25_backends "(3), " libax25_util "(3)"
+.SH AUTHORS
+Original libax25 by Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat,
+and Alan Cox.
+Monitor interface by Thomas Osterried <dl9sau@darc.de>.
+.SH COPYRIGHT
+This library is free software; you can redistribute it and/or modify it
+under the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation; either version 2.1 of the License, or (at
+your option) any later version.
+
+.\" Local Variables:
+.\" mode: nroff
+.\" End:

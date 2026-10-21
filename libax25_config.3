@@ -1,0 +1,325 @@
+.\" libax25_config.3 - AX.25 Configuration Interface
+.\" 
+.\" This manpage documents the configuration interface for AX.25, NET/ROM, and Rose
+.\" port configuration as provided by libax25.
+.\" 
+.\" Copyright (C) 1997-1999 Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat
+.\" and Alan Cox.
+.\" Copyright (C) 2024-2026 Thomas Osterried <dl9sau@darc.de>
+.\" 
+.TH LIBAX25_CONFIG 3 "2024-10-20" "libax25" "libax25 Programmer's Manual"
+.SH NAME
+.BR ax25_config_load_ports ", " nr_config_load_ports ", " rs_config_load_ports
+\- Load AX.25/NET/ROM/Rose port configuration
+.PP
+.BR ax25_config_get_next ", " nr_config_get_next ", " rs_config_get_next
+\- Enumerate configured ports
+.PP
+.BR ax25_config_get_name ", " nr_config_get_name ", " rs_config_get_name
+\- Map device name to port name
+.PP
+.BR ax25_config_get_addr ", " nr_config_get_addr ", " rs_config_get_addr
+\- Get callsign for port
+.PP
+.BR ax25_config_get_dev ", " nr_config_get_dev ", " rs_config_get_dev
+\- Get kernel device name
+.PP
+.BR ax25_config_get_conf_dev
+\- Get configured device name (AX.25 only)
+.PP
+.BR ax25_config_get_port ", " nr_config_get_port ", " rs_config_get_port
+\- Map callsign to port name
+.PP
+.BR nr_config_get_alias
+\- Get NET/ROM port alias
+.PP
+.BR ax25_config_get_window ", " nr_config_get_window ", " rs_config_get_window
+\- Get window size
+.PP
+.BR ax25_config_get_paclen ", " nr_config_get_paclen ", " rs_config_get_paclen
+\- Get maximum packet length
+.PP
+.BR ax25_config_get_baud
+\- Get baud rate (AX.25 only)
+.PP
+.BR ax25_config_get_desc ", " nr_config_get_desc ", " rs_config_get_desc
+\- Get port description
+.PP
+.BR ax25_config_port_is_kernel ", " ax25_config_kernel_ports ", " ax25_port_info
+\- Backend and kernel information (AX.25 only)
+.PP
+.BR ax25_port_number
+\- Get AGWPE port number (AX.25 only)
+.PP
+.BR ax25_config_ports_file ", " nr_config_ports_file ", " rs_config_ports_file
+\- Get configuration file path
+.SH SYNOPSIS
+.nf
+.B #include <netax25/axconfig.h>
+.B #include <netax25/nrconfig.h>
+.B #include <netax25/rsconfig.h>
+.PP
+.BI "int ax25_config_load_ports(void);"
+.BI "int nr_config_load_ports(void);"
+.BI "int rs_config_load_ports(void);"
+.PP
+.BI "char *ax25_config_get_next(char *" name ");"
+.BI "char *nr_config_get_next(char *" name ");"
+.BI "char *rs_config_get_next(char *" name ");"
+.PP
+.BI "char *ax25_config_get_name(char *" device ");"
+.BI "char *nr_config_get_name(char *" device ");"
+.BI "char *rs_config_get_name(char *" device ");"
+.PP
+.BI "char *ax25_config_get_addr(char *" name ");"
+.BI "char *nr_config_get_addr(char *" name ");"
+.BI "char *rs_config_get_addr(char *" name ");"
+.PP
+.BI "char *ax25_config_get_dev(char *" name ");"
+.BI "char *nr_config_get_dev(char *" name ");"
+.BI "char *rs_config_get_dev(char *" name ");"
+.PP
+.BI "char *ax25_config_get_conf_dev(char *" name ");"
+.PP
+.BI "char *ax25_config_get_port(ax25_address *" callsign ");"
+.BI "char *nr_config_get_port(ax25_address *" callsign ");"
+.BI "char *rs_config_get_port(rose_address *" address ");"
+.PP
+.BI "char *nr_config_get_alias(char *" name ");"
+.PP
+.BI "int ax25_config_get_window(char *" name ");"
+.BI "int nr_config_get_window(char *" name ");"
+.BI "int rs_config_get_window(char *" name ");"
+.PP
+.BI "int ax25_config_get_paclen(char *" name ");"
+.BI "int nr_config_get_paclen(char *" name ");"
+.BI "int rs_config_get_paclen(char *" name ");"
+.PP
+.BI "int ax25_config_get_baud(char *" name ");"
+.PP
+.BI "char *ax25_config_get_desc(char *" name ");"
+.BI "char *nr_config_get_desc(char *" name ");"
+.BI "char *rs_config_get_desc(char *" name ");"
+.PP
+.BI "int ax25_config_port_is_kernel(const char *" name ");"
+.BI "int ax25_config_kernel_ports(void);"
+.BI "int ax25_port_info(const char *" name ", struct ax25_port_info *" info ");"
+.PP
+.BI "int ax25_port_number(const char *" name ");"
+.PP
+.BI "const char *ax25_config_ports_file(void);"
+.BI "const char *nr_config_ports_file(void);"
+.BI "const char *rs_config_ports_file(void);"
+.fi
+.SH DESCRIPTION
+The libax25 library provides a unified configuration interface for AX.25,
+NET/ROM, and Rose protocols.  Each protocol has its own configuration file
+(axports, nrports, rsports) but the API is nearly identical across all three.
+.PP
+Each protocol family has its own set of functions with protocol-specific
+prefixes:
+.IP \(bu 2
+.BR ax25_config_* 
+for AX.25 (axports)
+.IP \(bu 2
+.BR nr_config_* 
+for NET/ROM (nrports)
+.IP \(bu 2
+.BR rs_config_* 
+for Rose (rsports)
+.PP
+All functions are declared in the respective headers:
+.IP \(bu 2
+.BR <netax25/axconfig.h> 
+for AX.25
+.IP \(bu 2
+.BR <netax25/nrconfig.h> 
+for NET/ROM
+.IP \(bu 2
+.BR <netax25/rsconfig.h> 
+for Rose
+.SH "LIBRARY INITIALIZATION"
+.TP
+.BI "int ax25_config_load_ports(void);"
+.TP
+.BI "int nr_config_load_ports(void);"
+.TP
+.BI "int rs_config_load_ports(void);"
+These functions must be called before using any other configuration function.
+They read the respective configuration file (axports, nrports, rsports) and
+build the internal port table.  Returns the number of active ports, or 0 on
+failure.
+.PP
+The port table is cached internally.  For AX.25, the cache can be refreshed
+by calling \fBax25_config_load_ports()\fR again, or automatically refreshed
+by \fBax25_config_ports_ensure()\fR (internal function) when the file changes.
+.SH "PORT ENUMERATION AND LOOKUP"
+.TP
+.BI "char *ax25_config_get_next(char *" name ");"
+.TP
+.BI "char *nr_config_get_next(char *" name ");"
+.TP
+.BI "char *rs_config_get_next(char *" name ");"
+Enumerate all configured ports.  Pass NULL to get the first port name in the
+list; subsequent calls with the last returned name return the next port.
+Returns NULL at end of list or on error.
+.PP
+The port names returned are the names as written in the configuration file
+(axports, nrports, rsports).
+.TP
+.BI "char *ax25_config_get_name(char *" device ");"
+.TP
+.BI "char *nr_config_get_name(char *" device ");"
+.TP
+.BI "char *rs_config_get_name(char *" device ");"
+Map a kernel network device name (interface name) to the corresponding port
+name from the configuration file.  Returns NULL on error or if no port uses
+that device.
+.TP
+.BI "char *ax25_config_get_addr(char *" name ");"
+.TP
+.BI "char *nr_config_get_addr(char *" name ");"
+.TP
+.BI "char *rs_config_get_addr(char *" name ");"
+Return the callsign (AX.25/NET/ROM) or address (Rose) configured for the
+given port name.  Returns NULL if the port is not known.
+.PP
+The returned callsign is in standard ASCII format (e.g. "DB0ABC-1").
+.TP
+.BI "char *ax25_config_get_dev(char *" name ");"
+.TP
+.BI "char *nr_config_get_dev(char *" name ");"
+.TP
+.BI "char *rs_config_get_dev(char *" name ");"
+Return the kernel network device name (interface name) for the given port.
+For AX.25, this only returns a device for ports served by the kernel AX.25
+stack (i.e. ports whose callsign matches an interface that is up).
+Returns NULL for userspace ports (WAMPES, AGWPE) or on error.
+.TP
+.BI "char *ax25_config_get_conf_dev(char *" name ");"
+(AX.25 only) Return the device name as configured in axports, regardless of
+whether the port is served by the kernel, a WAMPES node, or an AGWPE server.
+Returns NULL if the port is not known.  This differs from
+\fBax25_config_get_dev()\fR which only returns a device for kernel ports.
+.TP
+.BI "char *ax25_config_get_port(ax25_address *" callsign ");"
+.TP
+.BI "char *nr_config_get_port(ax25_address *" callsign ");"
+.TP
+.BI "char *rs_config_get_port(rose_address *" address ");"
+Map a callsign/address to the port name that owns it.  A null AX.25 address
+(zeroed) returns "\fB*\fR" meaning all ports.  Returns NULL on error.
+.PP
+The callsign/address must be in network format (shifted AX.25 format as
+returned by \fBgetpeername\fR/\fBgetsockname\fR).
+.TP
+.BI "char *nr_config_get_alias(char *" name ");"
+(NET/ROM only) Return the alias name for the given NET/ROM port.
+Returns NULL on error.
+.SH "PORT PARAMETERS"
+.TP
+.BI "int ax25_config_get_window(char *" name ");"
+.TP
+.BI "int nr_config_get_window(char *" name ");"
+.TP
+.BI "int rs_config_get_window(char *" name ");"
+Return the default window size for the port.  Returns 0 on error.
+.TP
+.BI "int ax25_config_get_paclen(char *" name ");"
+.TP
+.BI "int nr_config_get_paclen(char *" name ");"
+.TP
+.BI "int rs_config_get_paclen(char *" name ");"
+Return the maximum packet length (PACLEN) for the port.  Returns 0 on error.
+.TP
+.BI "int ax25_config_get_baud(char *" name ");"
+(AX.25 only) Return the baud rate for the port.  Returns 0 on error.
+.TP
+.BI "char *ax25_config_get_desc(char *" name ");"
+.TP
+.BI "char *nr_config_get_desc(char *" name ");"
+.TP
+.BI "char *rs_config_get_desc(char *" name ");"
+Return the description string for the port.  Returns NULL on error.
+.SH "BACKEND AND KERNEL INFORMATION (AX.25 ONLY)"
+The AX.25 configuration interface provides additional functions to query
+which backend serves a port, since AX.25 can be served by the kernel stack,
+a WAMPES node, or an AGWPE server (via ax25netd/direwolf).
+.TP
+.BI "int ax25_config_port_is_kernel(const char *" name ");"
+Returns non-zero if the named port is served by the kernel AX.25 stack
+(i.e. its callsign matches an interface that is up).  Returns 0 for
+userspace ports (WAMPES, AGWPE) or unknown ports.
+.TP
+.BI "int ax25_config_kernel_ports(void);"
+Returns the number of ports that are served by the kernel AX.25 stack.
+.TP
+.BI "int ax25_port_info(const char *" name ", struct ax25_port_info *" info ");"
+Fills the \fIinfo\fR structure with all available information about the port:
+backend (kernel, WAMPES, AGWPE), callsign, device, description, window,
+paclen, baud, and backend-specific fields (WAMPES node name, AGWPE flat
+port, channel, upstream).  Returns 0 on success, -1 on error.
+.PP
+The \fBax25_port_info\fR structure is defined in \fB<netax25/axconfig.h>\fR:
+.nf
+.ft C
+struct ax25_port_info {
+    enum ax25_port_backend backend;  /* AX25_PORT_NONE, KERNEL, WAMPES, AGWPE */
+    char call[16];      /* callsign */
+    char dev[64];       /* device, as written in axports */
+    char desc[80];      /* description */
+    int  baud, window, paclen;
+    int  port;          /* AGWPE flat port, or -1 */
+    int  channel;       /* AGWPE channel 0-15, or -1 */
+    char upstream[24];  /* AGWPE upstream name */
+    char node[32];      /* WAMPES node name */
+};
+.ft R
+.fi
+.TP
+.BI "int ax25_port_number(const char *" name ");"
+Returns the flat AGWPE port number for the given port, or -1 with errno set
+to \fBEADDRNOTAVAIL\fR if the port is not an AGWPE port.
+.SH "FILE ACCESS"
+.TP
+.BI "const char *ax25_config_ports_file(void);"
+.TP
+.BI "const char *nr_config_ports_file(void);"
+.TP
+.BI "const char *rs_config_ports_file(void);"
+Return the path to the configuration file used by the library.  A program
+that wants to report which file it read should use this rather than
+hardcoding the path, since the library may have been built with a different
+sysconfdir.
+.SH "RETURN VALUES"
+Most pointer-returning functions return NULL on error.
+Most integer-returning functions return 0 on error (or negative for
+\fBax25_port_number\fR with errno set).
+.SH "FILES"
+.TP
+.I /etc/ax25/axports
+AX.25 port configuration
+.TP
+.I /etc/ax25/nrports
+NET/ROM port configuration
+.TP
+.I /etc/ax25/rsports
+Rose port configuration
+.SH "SEE ALSO"
+.BR ax25 "(4), " netrom "(4), " rose "(4), " axports "(5), " nrports "(5), " rsports "(5)"
+.PP
+.BR libax25_monitor "(3), " libax25_backends "(3), " libax25_util "(3)"
+.SH AUTHORS
+Original libax25 by Jonathan Naylor, Tomi Manninen, Jean-Paul Roubelat,
+and Alan Cox.
+Extended by Thomas Osterried <dl9sau@darc.de> (WAMPES/AGWPE support,
+backend abstraction, port info structure).
+.SH COPYRIGHT
+This library is free software; you can redistribute it and/or modify it
+under the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation; either version 2.1 of the License, or (at
+your option) any later version.
+
+.\" Local Variables:
+.\" mode: nroff
+.\" End:

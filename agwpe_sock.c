@@ -167,6 +167,16 @@ struct axsock_sock {
 	struct axsock_sock	*pending;	/* queued inbound connections */
 	struct axsock_sock	*pend_next;	/* link within the pending list */
 	struct axsock_sock	*next;		/* global socket list */
+
+	/* Outbound queue for AGWPE flow control.
+	 * When the AGWPE server is slow (1200 baud link), the TCP send
+	 * buffer fills up. We queue outbound frames here instead of
+	 * blocking, so the peer reader can continue polling for inbound
+	 * frames and other sockets. The app gets EAGAIN when its
+	 * socketpair fills up, which is the correct backpressure signal. */
+	unsigned char		*pout;		/* outbound queue buffer */
+	size_t			plen_out;	/* bytes in outbound queue */
+	size_t			pcap_out;	/* capacity of outbound queue */
 };
 
 /*
@@ -1371,6 +1381,7 @@ static int axsock_raw_match(struct axsock_sock *s, unsigned char port)
 
 static struct axsock_sock *axsock_alloc_sock_locked(int type);
 static void axsock_peer_reader_teardown(struct axsock_sock *s);
+static void axsock_outbound_free_locked(struct axsock_sock *s);
 
 /*
  * Create the socketpair backed descriptor for a new virtual socket.
@@ -1613,6 +1624,7 @@ static void axsock_peer_discard_locked(struct axsock_sock *s)
 	s->pend = NULL;
 	s->plen = 0;
 	s->pcap = 0;
+	axsock_outbound_free_locked(s);
 }
 
 /* Detach the application's end from the router end.
@@ -1686,7 +1698,84 @@ static void axsock_peer_flush_locked(struct axsock_sock *s)
 		s->plen -= off;
 	}
 }
-
+ 
+/*
+ * Outbound queue for AGWPE flow control.
+ * Frames are queued here when the AGWPE server is slow and the TCP
+ * socket is not writable. The peer reader drains the queue when
+ * the socket becomes writable.
+ */
+ 
+static int axsock_outbound_queue_locked(struct axsock_sock *s,
+					const unsigned char *frame, size_t flen)
+{
+	if (s->plen_out + flen > AXSOCK_PEND_MAX)
+		return -1;
+ 
+	if (s->plen_out + flen > s->pcap_out) {
+		size_t ncap = s->pcap_out ? s->pcap_out * 2 : 4096;
+		unsigned char *nbuf = realloc(s->pout, ncap);
+		if (nbuf == NULL)
+			return -1;
+		s->pout = nbuf;
+		s->pcap_out = ncap;
+	}
+	memcpy(s->pout + s->plen_out, frame, flen);
+	s->plen_out += flen;
+	return 0;
+}
+ 
+/*
+ * Try to drain the outbound queue. Returns 0 if all sent,
+ * EAGAIN if socket not writable, -1 on error.
+ * Called with axsock_lock held; releases it around the send.
+ */
+static int axsock_outbound_drain_locked(struct axsock_sock *s)
+{
+	if (s->plen_out == 0)
+		return 0;
+ 
+	agwpe_client_t *cl = axsock_client_acquire();
+	if (cl == NULL)
+		return -1;
+ 
+	pthread_mutex_unlock(&axsock_lock);
+ 
+	while (s->plen_out > 0) {
+		struct agwpe_s *hdr = (struct agwpe_s *)s->pout;
+		uint32_t dlen = agwpe_netle2host(hdr->data_len);
+		size_t flen = AGWPE_HEADER_LEN + dlen;
+ 
+		if (agwpe_client_send_frame(cl, hdr, s->pout + AGWPE_HEADER_LEN) == 0) {
+			/* Frame sent successfully. */
+			if (flen < s->plen_out)
+				memmove(s->pout, s->pout + flen, s->plen_out - flen);
+			s->plen_out -= flen;
+			continue;
+		}
+		/* EAGAIN or error. */
+		if (agwpe_client_err(cl) == EAGAIN) {
+			axsock_client_release();
+			pthread_mutex_lock(&axsock_lock);
+			return EAGAIN;
+		}
+		/* Other error - drop the queue. */
+		break;
+	}
+ 
+	axsock_client_release();
+	pthread_mutex_lock(&axsock_lock);
+	return (s->plen_out == 0) ? 0 : -1;
+}
+ 
+static void axsock_outbound_free_locked(struct axsock_sock *s)
+{
+	free(s->pout);
+	s->pout = NULL;
+	s->plen_out = 0;
+	s->pcap_out = 0;
+}
+ 
 /*
  * The far end hung up, or the link to the server did.  Whatever already
  * arrived is still the application's to read - it was received before the
@@ -2631,22 +2720,44 @@ static ssize_t axsock_send_data(struct axsock_sock *s,
 		return -1;
 	}
 
-	/* Snapshot everything the send needs before the lock goes down;
-	 * another thread may close the socket and free s meanwhile.  */
 	port = s->port;
 	pid = s->pid;
 	memcpy(local, s->local, AGWPE_MAX_CALL);
 	memcpy(remote, s->remote, AGWPE_MAX_CALL);
 
 	pthread_mutex_unlock(&axsock_lock);
+
+	/* Build the AGWPE DATA frame and try to send it. */
+	struct agwpe_s hdr;
+	agwpe_header_init(&hdr, port, AGWPE_CMD_DATA, pid, local, remote, len);
 	rc = agwpe_client_send_data(cl, port, pid, local, remote,
 				    (const unsigned char *)buf, (int)len);
+
 	pthread_mutex_lock(&axsock_lock);
 	axsock_client_release();
 
 	if (rc != 0) {
-		errno = (agwpe_client_err(cl) != 0) ?
-			agwpe_client_err(cl) : EIO;
+		if (agwpe_client_err(cl) == EAGAIN) {
+			/* Queue the frame for later sending. */
+			size_t dlen = len;
+			size_t flen = AGWPE_HEADER_LEN + dlen;
+			unsigned char *frame = malloc(flen);
+			if (frame != NULL) {
+				struct agwpe_s *fh = (struct agwpe_s *)frame;
+				agwpe_header_init(fh, port, AGWPE_CMD_DATA, pid,
+						  local, remote, dlen);
+				memcpy(frame + AGWPE_HEADER_LEN, buf, dlen);
+				if (axsock_outbound_queue_locked(s, frame, flen) == 0) {
+					free(frame);
+					errno = EAGAIN;
+					return -1;
+				}
+				free(frame);
+			}
+			errno = EAGAIN;
+			return -1;
+		}
+		errno = (agwpe_client_err(cl) != 0) ? agwpe_client_err(cl) : EIO;
 		return -1;
 	}
 	return (ssize_t)len;
@@ -2699,8 +2810,53 @@ static int axsock_send_unproto(struct axsock_sock *s, const char *target,
 	axsock_client_release();
 
 	if (rc != 0) {
-		errno = (agwpe_client_err(cl) != 0) ?
-			agwpe_client_err(cl) : EIO;
+		if (agwpe_client_err(cl) == EAGAIN) {
+			/* Queue the frame for later sending. */
+			unsigned char *frame = NULL;
+			size_t flen = 0;
+			if (ndigis > 0) {
+				/* Build UNPROTO_VIA frame. */
+				size_t dlen = 1 + ndigis * AGWPE_MAX_CALL + len;
+				frame = malloc(AGWPE_HEADER_LEN + dlen);
+				if (frame != NULL) {
+					unsigned char *p = frame + AGWPE_HEADER_LEN;
+					*p++ = ndigis;
+					for (int i = 0; i < ndigis; i++) {
+						agwpe_call_pack((char *)p, digis[i]);
+						p += AGWPE_MAX_CALL;
+					}
+					if (len > 0)
+						memcpy(p, buf, len);
+					flen = AGWPE_HEADER_LEN + dlen;
+				}
+			} else {
+				/* Build UNPROTO frame. */
+				flen = AGWPE_HEADER_LEN + len;
+				frame = malloc(flen);
+				if (frame != NULL) {
+					memcpy(frame + AGWPE_HEADER_LEN, buf, len);
+				}
+			}
+			if (frame != NULL) {
+				struct agwpe_s *fh = (struct agwpe_s *)frame;
+				if (ndigis > 0)
+					agwpe_header_init(fh, port, AGWPE_CMD_UNPROTO_VIA, pid,
+							  local, target, flen - AGWPE_HEADER_LEN);
+				else
+					agwpe_header_init(fh, port, AGWPE_CMD_UNPROTO, pid,
+							  local, target, len);
+				memcpy(frame + AGWPE_HEADER_LEN, buf, len);
+				if (axsock_outbound_queue_locked(s, frame, flen) == 0) {
+					free(frame);
+					errno = EAGAIN;
+					return -1;
+				}
+				free(frame);
+			}
+			errno = EAGAIN;
+			return -1;
+		}
+		errno = (agwpe_client_err(cl) != 0) ? agwpe_client_err(cl) : EIO;
 		return -1;
 	}
 	return 0;
@@ -2763,9 +2919,11 @@ static void axsock_peer_reader_teardown(struct axsock_sock *s)
 /*
  * Reader thread for an accepted connection: forwards outbound data the
  * application writes into the socketpair as 'D' frames to ax25netd.
- * EOF/error on the router end means the connection is over (the child
- * closed its stdin/stdout copies, or a remote disconnect was signalled
- * by the reader thread closing s->peer) - tear the session down.
+ * Uses poll() to wait for both inbound readability (socketpair peer end)
+ * and outbound writability (AGWPE client socket), so that a slow AGWPE
+ * server never blocks inbound frame processing. Outbound frames are queued
+ * when the AGWPE socket is not writable and drained when it becomes so.
+ * EOF/error on the router end means the connection is over.
  */
 static void *axsock_peer_reader(void *arg)
 {
@@ -2778,60 +2936,102 @@ static void *axsock_peer_reader(void *arg)
 	pthread_sigmask(SIG_BLOCK, &set, NULL);
 
 	for (;;) {
-		fd_set rfds;
-		ssize_t n;
+		struct pollfd pfds[2];
+		int npfd = 0;
+		int rc;
 
-		/* The router end is non-blocking (the reader thread writes
-		 * inbound data into it), so wait for readability first.
-		 */
-		FD_ZERO(&rfds);
-		FD_SET(s->peer, &rfds);
-		if (select(s->peer + 1, &rfds, NULL, NULL, NULL) < 0) {
+		/* Wait for inbound data on the socketpair peer end. */
+		pfds[npfd].fd = s->peer;
+		pfds[npfd].events = POLLIN;
+		pfds[npfd].revents = 0;
+		npfd++;
+
+		/* Wait for outbound writability on the AGWPE client socket
+		 * if we have queued frames. */
+		pthread_mutex_lock(&axsock_lock);
+		if (s->plen_out > 0 && axsock_agwpe != NULL && agwpe_client_fd(axsock_agwpe) >= 0) {
+			pfds[npfd].fd = agwpe_client_fd(axsock_agwpe);
+			pfds[npfd].events = POLLOUT;
+			pfds[npfd].revents = 0;
+			npfd++;
+		}
+		pthread_mutex_unlock(&axsock_lock);
+
+		rc = poll(pfds, npfd, -1);
+		if (rc < 0) {
 			if (errno == EINTR)
 				continue;
 			break;
 		}
 
-		n = real_read(s->peer, buf, sizeof(buf));
-		if (axsock_debug)
-			fprintf(stderr, "axsock: peer read n=%zd errno=%d (%s)\n",
-				n, n < 0 ? errno : 0,
-				n < 0 ? strerror(errno) : "");
-		if (n <= 0)
-			break;
-
-		/* The outbound forward is a blocking TCP write to the AGWPE
-		 * server; take the client outside axsock_lock so a slow
-		 * server never stalls every other socket call (including
-		 * the dispatch path that writes inbound frames into this
-		 * same socketpair).
-		 */
-		pthread_mutex_lock(&axsock_lock);
-		if (s->state == AXSOCK_CONNECTED) {
-			unsigned char port = s->port, pid = s->pid;
-			char local[AGWPE_MAX_CALL], remote[AGWPE_MAX_CALL];
-			agwpe_client_t *cl = axsock_client_acquire();
-
-			if (cl != NULL) {
-				memcpy(local, s->local, AGWPE_MAX_CALL);
-				memcpy(remote, s->remote, AGWPE_MAX_CALL);
-				if (axsock_debug)
-					fprintf(stderr,
-						"axsock: peer forward %zd bytes to %.*s\n",
-						n, AGWPE_MAX_CALL, remote);
-				pthread_mutex_unlock(&axsock_lock);
-				(void)agwpe_client_send_data(cl, port, pid,
-							     local, remote,
-							     (const unsigned char *)buf,
-							     (int)n);
-				pthread_mutex_lock(&axsock_lock);
-				axsock_client_release();
+		/* Handle outbound writability first: drain queued frames. */
+		if (npfd == 2 && (pfds[1].revents & POLLOUT)) {
+			pthread_mutex_lock(&axsock_lock);
+			int dr = axsock_outbound_drain_locked(s);
+			pthread_mutex_unlock(&axsock_lock);
+			if (dr < 0 && dr != EAGAIN) {
+				/* Hard error - tear down. */
+				break;
 			}
 		}
-		pthread_mutex_unlock(&axsock_lock);
+
+		/* Handle inbound data from the application. */
+		if (pfds[0].revents & POLLIN) {
+			ssize_t n = real_read(s->peer, buf, sizeof(buf));
+			if (axsock_debug)
+				fprintf(stderr, "axsock: peer read n=%zd errno=%d (%s)\n",
+					n, n < 0 ? errno : 0,
+					n < 0 ? strerror(errno) : "");
+			if (n <= 0)
+				break;
+
+			pthread_mutex_lock(&axsock_lock);
+			if (s->state == AXSOCK_CONNECTED) {
+				unsigned char port = s->port, pid = s->pid;
+				char local[AGWPE_MAX_CALL], remote[AGWPE_MAX_CALL];
+				agwpe_client_t *cl = axsock_client_acquire();
+
+				if (cl != NULL) {
+					memcpy(local, s->local, AGWPE_MAX_CALL);
+					memcpy(remote, s->remote, AGWPE_MAX_CALL);
+					if (axsock_debug)
+						fprintf(stderr,
+							"axsock: peer forward %zd bytes to %.*s\n",
+							n, AGWPE_MAX_CALL, remote);
+					/* Build AGWPE DATA frame and try to send immediately. */
+					struct agwpe_s hdr;
+					agwpe_header_init(&hdr, port, AGWPE_CMD_DATA, pid,
+							  local, remote, n);
+					pthread_mutex_unlock(&axsock_lock);
+
+					int rc = agwpe_client_send_data(cl, port, pid,
+									local, remote,
+									(const unsigned char *)buf,
+									(int)n);
+					pthread_mutex_lock(&axsock_lock);
+					if (rc != 0 && agwpe_client_err(cl) == EAGAIN) {
+						/* Not writable - queue the frame. */
+						size_t dlen = n;
+						size_t flen = AGWPE_HEADER_LEN + dlen;
+						unsigned char *frame = malloc(flen);
+						if (frame != NULL) {
+							struct agwpe_s *fh = (struct agwpe_s *)frame;
+							agwpe_header_init(fh, port, AGWPE_CMD_DATA, pid,
+									  local, remote, dlen);
+							memcpy(frame + AGWPE_HEADER_LEN, buf, dlen);
+							axsock_outbound_queue_locked(s, frame, flen);
+							free(frame);
+						}
+					}
+					axsock_client_release();
+				}
+			}
+			pthread_mutex_unlock(&axsock_lock);
+		}
 	}
 
 	pthread_mutex_lock(&axsock_lock);
+	axsock_outbound_free_locked(s);
 	axsock_peer_reader_teardown(s);
 	pthread_mutex_unlock(&axsock_lock);
 

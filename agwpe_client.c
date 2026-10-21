@@ -264,8 +264,10 @@ static int agwpe_connect_wait(int fd, const struct sockaddr *sa, socklen_t len)
 		}
 	}
 
-	/* Back to blocking mode for the frame stream.  */
-	(void)fcntl(fd, F_SETFL, flags);
+	/* Stay in non-blocking mode for the frame stream so that
+	 * send() never blocks the peer reader or application threads.
+	 * Outbound flow control is handled via per-socket queues. */
+	(void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 	return 0;
 
 fail:
@@ -339,6 +341,9 @@ int agwpe_client_err(const agwpe_client_t *c)
 /*
  * Send a single frame (header + data area) to the server.
  * data may be NULL when hdr->data_len is zero.
+ * Returns 0 on success, -1 on error with c->err set.
+ * Returns -1 with c->err = EAGAIN if the socket is not writable
+ * (caller should queue the frame and retry later).
  */
 int agwpe_client_send_frame(agwpe_client_t *c, const struct agwpe_s *hdr,
 			    const unsigned char *data)
@@ -354,10 +359,9 @@ int agwpe_client_send_frame(agwpe_client_t *c, const struct agwpe_s *hdr,
 
 	/*
 	 * Send the whole frame under the write lock so concurrent
-	 * threads (the shim releases its table lock around sends) never
-	 * interleave header and data bytes of different frames.  The
-	 * lock is dropped only on return, so c->fd stays valid for the
-	 * duration even if another thread tears the client down.
+	 * threads never interleave header and data bytes of different
+	 * frames.  The socket is non-blocking; if it is not writable
+	 * we return EAGAIN and the caller must queue the frame.
 	 */
 	pthread_mutex_lock(&c->wlock);
 
@@ -368,18 +372,41 @@ int agwpe_client_send_frame(agwpe_client_t *c, const struct agwpe_s *hdr,
 
 	dlen = agwpe_netle2host(hdr->data_len);
 
+	/* Check writability with zero timeout before sending header. */
+	{
+		struct pollfd pfd;
+		pfd.fd = c->fd;
+		pfd.events = POLLOUT;
+		pfd.revents = 0;
+		if (poll(&pfd, 1, 0) <= 0) {
+			c->err = EAGAIN;
+			goto out;
+		}
+	}
+
 	n = send(c->fd, hdr, AGWPE_HEADER_LEN, MSG_NOSIGNAL);
 	if (n != AGWPE_HEADER_LEN) {
-		c->err = errno;
+		c->err = (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) ? EAGAIN : errno;
 		goto out;
 	}
 
 	if (dlen > 0 && data != NULL) {
 		size_t sent = 0;
 		while (sent < dlen) {
+			/* Check writability before each data chunk. */
+			{
+				struct pollfd pfd;
+				pfd.fd = c->fd;
+				pfd.events = POLLOUT;
+				pfd.revents = 0;
+				if (poll(&pfd, 1, 0) <= 0) {
+					c->err = EAGAIN;
+					goto out;
+				}
+			}
 			n = send(c->fd, data + sent, dlen - sent, MSG_NOSIGNAL);
 			if (n <= 0) {
-				c->err = errno;
+				c->err = (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) ? EAGAIN : errno;
 				goto out;
 			}
 			sent += n;

@@ -18,8 +18,6 @@
 .BI "int ax25_cmp(ax25_address *" ax1 ", ax25_address *" ax2 ");"
 .PP
 .BI "int ax25_validate(char *" axp ");"
-.PP
-.BI "char *ax25_config_file(const char *filename);"
 .fi
 
 .SH DESCRIPTION
@@ -90,3 +88,111 @@ The
 function returns TRUE if the callsign is valid or FALSE if it is not.
 .SH "SEE ALSO"
 .BR ax25 "(4), " netrom "(4), " rose "(4)"
+
+.SH "AX.25 CONFIGURATION INTERFACE"
+The following functions provide access to the AX.25 port configuration
+as defined in
+.IR axports (5).
+They are declared in
+.IR <netax25/axconfig.h> .
+
+.SS "Library Initialization"
+.TP
+.BI "int ax25_config_load_ports(void)"
+Reads the
+.I axports
+file and builds the internal port table.  Must be called before
+using any other configuration function.  Returns the number of
+active ports, or 0 on failure.
+
+.SS "Port Enumeration and Lookup"
+.TP
+.BI "char *ax25_config_get_next(char *" name ")"
+Enumerates all configured ports.  Pass NULL to get the first port name,
+subsequent calls with the last returned name return the next port.
+Returns NULL at end of list or on error.
+
+.TP
+.BI "char *ax25_config_get_name(char *" device ")"
+Maps a device name (kernel interface) to the corresponding port name
+from
+.IR axports .
+Returns NULL on error.
+
+.TP
+.BI "char *ax25_config_get_addr(char *" name ")"
+Returns the callsign (in ASCII) configured for the given port name.
+Returns NULL if the port is not known.
+
+.TP
+.BI "char *ax25_config_get_dev(char *" name ")"
+Returns the kernel network device name for the given port.
+Only returns a device for ports served by the kernel AX.25 stack
+(i.e. ports whose callsign matches an interface that is up).
+Returns NULL for userspace ports (WAMPES, AGWPE) or on error.
+
+.TP
+.BI "char *ax25_config_get_conf_dev(char *" name ")"
+Returns the device name as configured in
+.IR axports ,
+regardless of whether the port is served by the kernel, a WAMPES
+node, or an AGWPE server.  Returns NULL if the port is not known.
+
+.TP
+.BI "char *ax25_config_get_port(ax25_address *" callsign ")"
+Maps a callsign to the port name that owns it.  A null AX.25
+address returns
+.Q *
+meaning all ports.  Returns NULL on error.
+
+.SS "Port Parameters"
+.TP
+.BI "int ax25_config_get_window(char *" name ")"
+Returns the default window size for the port.  Returns 0 on error.
+
+.TP
+.BI "int ax25_config_get_paclen(char *" name ")"
+Returns the maximum packet length for the port.  Returns 0 on error.
+
+.TP
+.BI "int ax25_config_get_baud(char *" name ")"
+Returns the baud rate for the port.  Returns 0 on error.
+
+.TP
+.BI "char *ax25_config_get_desc(char *" name ")"
+Returns the description string for the port.  Returns NULL on error.
+
+.SS "Backend and Kernel Information"
+.TP
+.BI "int ax25_config_port_is_kernel(const char *" name ")"
+Returns non-zero if the named port is served by the kernel AX.25
+stack (i.e. its callsign matches an interface that is up).
+
+.TP
+.BI "int ax25_config_kernel_ports(void)"
+Returns the number of ports that are served by the kernel AX.25 stack.
+
+.TP
+.BI "int ax25_port_info(const char *" name ", struct ax25_port_info *" info ")"
+Fills the
+.I info
+structure with all available information about the port:
+backend (kernel, WAMPES, AGWPE), callsign, device, description,
+window, paclen, baud, and backend-specific fields (WAMPES node name,
+AGWPE flat port, channel, upstream).
+Returns 0 on success, -1 on error.
+
+.TP
+.BI "int ax25_port_number(const char *" name ")"
+Returns the flat AGWPE port number for the given port, or -1 with
+errno set to EADDRNOTAVAIL if the port is not an AGWPE port.
+
+.SS "File Access"
+.TP
+.BI "const char *ax25_config_ports_file(void)"
+Returns the path to the
+.I axports
+file used by the library.
+
+.SH "SEE ALSO"
+.BR ax25 "(4), " netrom "(4), " rose "(4), " axports "(5)"

@@ -89,7 +89,8 @@ libax25io_la_SOURCES = \
 libax25io_la_LIBADD = @Z_LIB@
 
 dist_man_MANS = ax25.3 rose.3 axports.5 rsports.5 nrports.5 wampes.conf.5 \
-		axsock.7
+		axsock.7 \
+		libax25_config.3 libax25_monitor.3 libax25_backends.3 libax25_util.3
 
 man_sed = sed -e 's|@@@AX25_SYSCONFDIR@@@|$(MAN_SC)|g' \
 	      -e 's|@@@AX25_LOCALSTATEDIR@@@|$(MAN_SD)|g' \
@@ -163,7 +164,8 @@ docfiles = README.compile README-hints-for-non-kernel-AX25-hosts.txt \
 
 EXTRA_DIST= glibc.patch $(etcsrcfiles) $(docfiles) axports.man rsports.man nrports.man \
 	    wampes.conf.man axsock.man libax25.spec axsock.c agwpe_sock.c \
-	    axsock_real.h agwpe_sock.h wampes.c wampes.h
+	    axsock_real.h agwpe_sock.h wampes.c wampes.h \
+	    libax25_config.3 libax25_monitor.3 libax25_backends.3 libax25_util.3
 
 AX25_SYSCONFDIR=@sysconfdir@/ax25/
 AX25_LOCALSTATEDIR=@localstatedir@/ax25/

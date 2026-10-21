@@ -165,16 +165,7 @@ ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
  */
 static int axmon_port_is_known(const char *name)
 {
-	char *entry;
-
-	for (entry = ax25_config_get_next(NULL); entry != NULL;
-	     entry = ax25_config_get_next(entry))
-		if (strcasecmp(entry, name) == 0)
-			return 1;
-
-	/* The loopback port is the one name that needs no axports line, the
-	 * same way axsock_port_of_entry() needs none to give it a number. */
-	return strcasecmp(name, AGWPE_LOOP_NAME) == 0;
+	return ax25_config_get_conf_dev((char *)name) != NULL;
 }
 
 /*

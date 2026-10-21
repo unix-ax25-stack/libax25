@@ -73,6 +73,7 @@
 #include "axsock_real.h"
 
 #define WAMPES_MAX_SOCK 64
+#define WAMPES_CLAIM_MSEC	10000
 
 /* For the monitor socket the node's record format names in axmon.c: the
  * caller passes the protocol in network byte order, and the two values that
@@ -1211,6 +1212,7 @@ int wampes_listen(int fd, int *ret)
 	char port[32];
 	int pid;
 	int sock;
+	int n;
 	struct wampes_sock *s;
 
 	pthread_mutex_lock(&wampes_lock);
@@ -1247,9 +1249,15 @@ int wampes_listen(int fd, int *ret)
 		return 1;
 	}
 	for (;;) {
-		if (read_line(sock, line, sizeof(line), NULL, 0) < 0) {
+		n = read_line(sock, line, sizeof(line), NULL, WAMPES_CLAIM_MSEC);
+		if (n < 0) {
 			close(sock);
-			errno = ECONNRESET;
+			if (n == WAMPES_INCOMPLETE)
+				errno = ETIMEDOUT;
+			else if (n == WAMPES_EOF)
+				errno = ECONNRESET;
+			else
+				errno = ECONNRESET;
 			sock_put(s);
 			return 1;
 		}
@@ -1717,6 +1725,7 @@ static void claim_ui(struct wampes_sock *s)
 	char port[32];
 	int pid;
 	int c;
+	int n;
 
 	/* The caller holds an in-flight reference, so s stays alive across
 	 * the node's answer below; the fields are settled under the lock and
@@ -1757,10 +1766,16 @@ static void claim_ui(struct wampes_sock *s)
 		return;
 	}
 	for (;;) {
-		if (read_line(c, line, sizeof(line), NULL, 0) < 0) {
+		n = read_line(c, line, sizeof(line), NULL, WAMPES_CLAIM_MSEC);
+		if (n < 0) {
 			close(c);
 			pthread_mutex_lock(&wampes_lock);
-			s->rxerr = ECONNRESET;
+			if (n == WAMPES_INCOMPLETE)
+				s->rxerr = ETIMEDOUT;
+			else if (n == WAMPES_EOF)
+				s->rxerr = ECONNRESET;
+			else
+				s->rxerr = ECONNRESET;
 			pthread_mutex_unlock(&wampes_lock);
 			return;
 		}

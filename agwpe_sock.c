@@ -4041,10 +4041,8 @@ static ssize_t axsock_raw_write_locked(struct axsock_sock *s,
 	}
 
 	{
-		unsigned char kbuf[1 + AXMON_FRAME_MAX];
 		unsigned char port;
 		agwpe_client_t *cl;
-		struct agwpe_s hdr;
 
 		if (have) {
 			int p = axsock_raw_port(iface);
@@ -4082,15 +4080,6 @@ static ssize_t axsock_raw_write_locked(struct axsock_sock *s,
 			return -1;
 		}
 
-		if (len + 1 > sizeof(kbuf)) {
-			errno = EMSGSIZE;
-			return -1;
-		}
-		kbuf[0] = 0x00;	/* the KISS data byte; the port is in the header */
-		memcpy(kbuf + 1, buf, len);
-		agwpe_header_init(&hdr, port, AGWPE_CMD_RAW, 0, NULL, NULL,
-				  (uint32_t)(len + 1));
-
 		if (!axsock_up && axsock_ensure_locked() != 0) {
 			errno = ENOTCONN;
 			return -1;
@@ -4108,7 +4097,7 @@ static ssize_t axsock_raw_write_locked(struct axsock_sock *s,
 		 * between the unlock and the relock, because another thread
 		 * may have closed the socket meanwhile. */
 		pthread_mutex_unlock(&axsock_lock);
-		rc = agwpe_client_send_frame(cl, &hdr, kbuf);
+		rc = agwpe_client_send_raw(cl, port, (const unsigned char *)buf, len);
 		pthread_mutex_lock(&axsock_lock);
 		axsock_client_release();
 		if (rc != 0)

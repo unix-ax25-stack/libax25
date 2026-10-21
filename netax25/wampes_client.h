@@ -77,4 +77,26 @@ int wampes_sessions(const char *node,
  */
 int wampes_close_session(const char *node, const char *handle);
 
+/*
+ * Connect to a WAMPES node service socket.
+ * If port is NULL, connects to the default node.
+ * Returns socket fd on success, -1 on error with errno set.
+ */
+int wampes_dial(const char *addr);
+
+/* Resolve the service socket address for a WAMPES port.
+ * Returns the socket path (static buffer), or NULL on error.
+ */
+const char *wampes_address(const char *port);
+
+/* Get the interface name for a WAMPES port.
+ * Returns the interface name (e.g. "hf1") or NULL if not found.
+ */
+const char *wampes_iface(const char *port);
+
+/* Close a WAMPES monitor or raw socket.
+ * Returns 0 on success, -1 on error.
+ */
+int wampes_close(int fd);
+
 #endif

@@ -438,7 +438,7 @@ static void wampes_init(void)
  * anyway.
  */
 
-static const char *wampes_iface(const char *port)
+const char *wampes_iface(const char *port)
 {
 	const char *colon = strchr(port, ':');
 
@@ -451,7 +451,7 @@ static const char *wampes_iface(const char *port)
  * compiled-in place is what a machine with one node and no file gets.
  */
 
-static const char *wampes_address(const char *port)
+const char *wampes_address(const char *port)
 {
 	const char *s;
 
@@ -466,7 +466,11 @@ static const char *wampes_address(const char *port)
  * sockets to the kernel, which is the point.
  */
 
-static int wampes_dial(const char *addr)
+/* Connect to a WAMPES node service socket.
+ * If port is NULL, connects to the default node.
+ * Returns socket fd on success, -1 on error with errno set.
+ */
+int wampes_dial(const char *addr)
 {
 	char host[256];
 	char *colon;

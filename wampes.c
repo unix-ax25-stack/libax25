@@ -97,9 +97,10 @@
  * no configuration file worth the name.  WAMPES_SOCKET_DIR is what
  * --with-wampes-tcpdir was given, so this follows the platform the build was
  * configured for rather than a path guessed at compile time - which is how
- * a Linux build ended up looking under /usr/local/wampes.  wampes.conf says
+ * a macos build ended up looking under /usr/local/wampes.  wampes.conf says
  * the same and wins over it whenever it names the local node. */
 #define WAMPES_DEFAULT_SOCKET WAMPES_SOCKET_DIR "/sockets/ax25"
+#define WAMPES_DEFAULT_CMD_SOCKET WAMPES_SOCKET_DIR "/.sockets/netcmd"
 #define WAMPES_CALLLEN  10              /* "DL9SAU-15" and the NUL */
 #define AX25_REPEATED	0x80		/* in the SSID byte, as on the air */
 
@@ -460,6 +461,27 @@ const char *wampes_address(const char *port)
 	if (port != NULL && (s = wampes_node_addr(port)) != NULL)
 		return s;
 	return WAMPES_DEFAULT_SOCKET;
+}
+
+/* Forward declaration */
+static int wampes_netcmd_path(const char *addr, char *out, size_t outlen);
+
+/* The command channel (netcmd) address for a WAMPES node.
+ * This is the command channel (netcmd) socket, not the service socket (axsock).
+ * Used for commands like "param" that are only available on the command channel.
+ */
+const char *wampes_cmd_address(const char *port)
+{
+	const char *s;
+	static char netcmd_path[512];
+
+	if ((s = getenv("WAMPES_CMD_SOCKET")) != NULL && *s != '\0')
+		return s;
+	if (port != NULL && (s = wampes_node_addr(port)) != NULL) {
+		if (wampes_netcmd_path(s, netcmd_path, sizeof(netcmd_path)))
+			return netcmd_path;
+	}
+	return WAMPES_DEFAULT_CMD_SOCKET;
 }
 
 /* A path is a unix socket, anything else is host:port.  Both are ordinary
@@ -2561,6 +2583,25 @@ static int wampes_sibling_path(const char *addr, const char *leaf,
 		return 0;
 	memcpy(out, addr, dir + 1);
 	memcpy(out + dir + 1, leaf, leaflen);
+	return 1;
+}
+
+static int wampes_netcmd_path(const char *addr, char *out, size_t outlen)
+{
+	const char *p;
+	size_t base;
+
+	if (addr == NULL || addr[0] != '/')
+		return 0;
+	p = strstr(addr, "/sockets/ax25");
+	if (p == NULL || p == addr)
+		return 0;
+	base = (size_t)(p - addr);
+	if (base + 1 + strlen(".sockets/netcmd") + 1 > outlen)
+		return 0;
+	memcpy(out, addr, base);
+	out[base] = '/';
+	strcpy(out + base + 1, ".sockets/netcmd");
 	return 1;
 }
 

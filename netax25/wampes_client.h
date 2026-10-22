@@ -89,6 +89,13 @@ int wampes_dial(const char *addr);
  */
 const char *wampes_address(const char *port);
 
+/* Resolve the command channel (netcmd) address for a WAMPES port.
+ * Returns the socket path (static buffer), or NULL on error.
+ * This is the command channel (netcmd) socket, not the service socket (axsock).
+ * Used for commands like "param" that are only available on the command channel.
+ */
+const char *wampes_cmd_address(const char *port);
+
 /* Get the interface name for a WAMPES port.
  * Returns the interface name (e.g. "hf1") or NULL if not found.
  */

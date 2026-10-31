@@ -40,10 +40,29 @@
 #include "netax25/ax25.h"
 #include "netax25/axconfig.h"
 #include "axconfig_int.h"
+#ifdef HAVE_USERSPACE_AX25
 #include "netax25/agwpe_config.h"
 #include "agwpe_sock.h"
 #include "wampes.h"
 #include "axsock_real.h"
+#else
+/*
+ * A build with --disable-userspace-ax25 has no shim and no userspace
+ * backends.  The monitor still has to compile and still has to serve the
+ * kernel packet socket, so the names it uses from the shim are mapped to
+ * the plain calls here.  Without this, axmon.c kept references to
+ * real_socket, agwpe_close, wampes_mon_open and friends while Makefile.am
+ * left axsock.c, agwpe_sock.c and wampes.c out of the library: libax25.so
+ * linked (a shared library may have undefined symbols) and every program
+ * that linked against it failed at link time.
+ */
+#define AXSOCK_NEED_REAL()	do { } while (0)
+#define AXSOCK_ENTRY(name)	name
+#define real_socket		socket
+#define real_bind		bind
+#define real_close		close
+#define axsock_debug		0
+#endif
 
 /*
  * The three numbers a packet socket is asked for by name, where the platform
@@ -125,8 +144,10 @@ ssize_t axmon_read(int fd, int framed, void *buf, size_t buflen,
 	 * see, so they are taken apart here, before the payload reaches it.
 	 * Same result either way: one whole KISS framed frame per call.
 	 */
+#ifdef HAVE_USERSPACE_AX25
 	if (framed == AXMON_FRAMED_WAMPES)
 		return wampes_mon_read(fd, buf, buflen, sa, asize);
+#endif
 
 	/* The other two kinds of descriptor hand over one frame per call: the
 	 * kernel one because a packet socket is message oriented, the shim one
@@ -211,7 +232,12 @@ int axmon_open(int protocol, const char *port, struct axmon *mon)
 int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 		    struct axmon *mon)
 {
-	int named, kernel_owner, wampes_owner, shim_owner;
+#if defined(__linux__) || defined(HAVE_USERSPACE_AX25)
+	int named, kernel_owner;
+#endif
+#ifdef HAVE_USERSPACE_AX25
+	int wampes_owner, shim_owner;
+#endif
 
 	mon->nfd = 0;
 	mon->mask = 0;
@@ -262,11 +288,15 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	 * for every port, and "listen -p loop" failed before either source
 	 * that serves it was asked.
 	 */
+#if defined(__linux__) || defined(HAVE_USERSPACE_AX25)
 	named = (port != NULL && port[0] != '\0');
 	kernel_owner = named && ax25_config_port_is_kernel(port);
+#endif
+#ifdef HAVE_USERSPACE_AX25
 	wampes_owner = named && ax25_config_port_wampes_hook != NULL &&
 		       ax25_config_port_wampes_hook(port, NULL, 0);
 	shim_owner = named && !kernel_owner && !wampes_owner;
+#endif
 
 #ifdef __linux__
 	/*
@@ -375,7 +405,11 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	 * backend, because a raw monitor is not answered by that question: a
 	 * host with a kernel stack has an ax25netd too often enough that the
 	 * question would hide half of what is on the air.
+	 *
+	 * Only in a build that has that side at all.  See the fallback names
+	 * at the top of this file.
 	 */
+#ifdef HAVE_USERSPACE_AX25
 	if (!named || shim_owner) {
 		int fd;
 
@@ -423,6 +457,7 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 			return -1;
 		}
 	}
+#endif /* HAVE_USERSPACE_AX25 */
 
 	/*
 	 * A WAMPES node's own monitor.  Beside the other two rather than
@@ -431,6 +466,7 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 	 * wampes_mon_open() answers 0 for a port that belongs to nobody here,
 	 * so a kernel or ax25netd entry leaves this source closed.
 	 */
+#ifdef HAVE_USERSPACE_AX25
 	if (!named || wampes_owner) {
 		int fd;
 		int r = wampes_mon_open(protocol, port, &fd);
@@ -461,12 +497,15 @@ int axmon_open_mask(int protocol, const char *port, unsigned char mask,
 			return -1;
 		}
 	}
+#endif /* HAVE_USERSPACE_AX25 */
 
 	if (mon->nfd == 0) {
 		/*
 		 * Neither.  Say which, because the two reasons need different
 		 * answers: no kernel AX.25 ports means load a module or leave
 		 * the ports to ax25netd, and no ax25netd means start it.
+		 * Without userspace support the second half does not exist,
+		 * and the answer can only be that there is no source at all.
 		 */
 		errno = ENXIO;
 		return -1;
@@ -601,11 +640,14 @@ const char *axmon_source_name(const struct axmon *mon, int idx)
  */
 int axmon_retire(struct axmon *mon, int idx)
 {
+#ifdef HAVE_USERSPACE_AX25
 	int ret;
+#endif
 
 	if (idx < 0 || idx >= mon->nfd || mon->fd[idx] < 0)
 		return axmon_alive(mon);
 	AXSOCK_NEED_REAL();
+#ifdef HAVE_USERSPACE_AX25
 	if (mon->kind[idx] == AXMON_MONITOR)
 		(void) agwpe_close(mon->fd[idx], &ret);
 	else {
@@ -613,6 +655,9 @@ int axmon_retire(struct axmon *mon, int idx)
 			(void) wampes_mon_close(mon->fd[idx]);
 		real_close(mon->fd[idx]);
 	}
+#else
+	real_close(mon->fd[idx]);
+#endif
 	mon->fd[idx] = -1;
 
 	return axmon_alive(mon);
@@ -625,8 +670,10 @@ void axmon_close(struct axmon *mon)
 	AXSOCK_NEED_REAL();
 	for (i = 0; i < mon->nfd; i++)
 		if (mon->fd[i] >= 0) {
+#ifdef HAVE_USERSPACE_AX25
 			if (mon->kind[i] == AXMON_WAMPES)
 				(void) wampes_mon_close(mon->fd[i]);
+#endif
 			real_close(mon->fd[i]);
 		}
 

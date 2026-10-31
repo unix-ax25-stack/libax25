@@ -83,6 +83,9 @@ case $ac_enable_userspace_ax25 in
 esac
 AC_MSG_RESULT($ac_build_userspace_ax25)
 AM_CONDITIONAL([USERSPACE_AX25], [test "$ac_build_userspace_ax25" = "yes"])
+if test "$ac_build_userspace_ax25" = "yes" ; then
+  AC_DEFINE([HAVE_USERSPACE_AX25], 1, [Define if axsock.c and the userspace backends are built])
+fi
 
 AC_MSG_CHECKING(for working netrom/netrom.h header file)
 AC_EGREP_HEADER(unsigned int ndigis, netrom/netrom.h, has_netrom=yes, has_netrom=no)

@@ -5,6 +5,36 @@ Kept here because the three source trees are separate today and this is where
 the rest of the documentation lives; when they become one repository it moves
 up a level and changes nothing else.
 
+## loop port sends DM to unlisted SABM (bug)
+
+When using the `loop` port (ax25netd), a `SABM` to a callsign not present/listening on loop generates a `DM` response actively. On a real AGWPE/radio interface this does not happen. `mheardd` records the addressed callsign anyway because it counts frames by source, but the response behavior is wrong and should be fixed in libax25/ax25netd loop handling.
+
+## Check on socket operation if socket is up
+agwpe:
+beacon -s radio0 te1st test
+or call -r  radio0 te1st
+looks like it works even if radio0 is down.
+
+At wampes connector:
+Same for datagram:
+beacon -s  wampes:foo te1st
+For conected sessions, the lookup works:
+$ call -r  wampes:foo te1st
+GW4PTS AX.25 Connect v1.11
+Trying...
+
+connect: No such device
+$ 
+
+## axsock/axmon: support longer interface/port names
+
+`axsock` currently truncates logical port/interface names (notably for WAMPES/AGWPE monitor sources) when passing them through sockaddr/monitor structures with small `sa_data` fields. As a result tools like `listen`, `mheardd`, `rxecho` and `ax25netd` need workarounds to display correct names.
+
+**Implementation plan:** See [TODO_Portname_length_migration.md](TODO_Portname_length_migration.md) for the design to move full logical port names into `struct axmon` and add `axmon_port_name()`.
+
+**Siehe auch:** `KISSPARMS-RXECHO-ARBEITSLISTE.de.md` — Befunde, Designfragen
+und offene Punkte zu den Userspace-Connectoren (`kissparms`, `rxecho`).
+
 ---
 
 ## One decision point instead of three
@@ -243,6 +273,26 @@ nothing needs any more: the files decide.  Useful for trying something out and
 harmless while this is young, but an override that outlives its reason turns
 into a way of configuring things twice, and then into a bug report about the
 file being ignored.
+
+**WAMPES `param` on the command channel: output and wording.**  `param` moved
+to the command channel in `c028c51`, but `doparam()` still writes with
+`printf()` and ignores the `void *p` that `param_command()` passes; `say()` is
+static in `remote_net.c`.  The answer goes to the node's stdout, not the
+socket, so `kissparms` can never read a value back.  The same function says
+`Parameter txdelay not supported` when the truth is "this KISS TNC cannot read
+it back" (setting works: `param <if> txdelay 2`), and `Unknown parameter`
+where a KISS user expects "unknown KISS command".  `param <if>` and
+`param <if> ?` are both silent on such a port, although the built-in help says
+they list "what that port supports": the `?` branch only lists what can be
+*read*, and a KISS TNC can read nothing.  The ioctl returns `-1` for all
+three - unknown, unreadable and write-failed.  Belongs in the WAMPES tree;
+the checklist is in `KISSPARMS-RXECHO-ARBEITSLISTE.de.md`, A.2.5.
+
+**`ax25netd` invents the `'g'` answer.**  A port-capabilities request is
+answered locally with 25/4/200/4/7 instead of being passed upstream, so a
+reader over netd sees a configuration the TNC does not have.  `'G'` (port
+information) is the counter-example: it waits for the upstream layouts.  See
+`KISSPARMS-RXECHO-ARBEITSLISTE.de.md`, A.3.1.
 
 **A radio link on the desk, for the tests that need two stations.**  Two
 direwolf instances on the same virtual audio device - BlackHole on this

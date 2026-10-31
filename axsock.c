@@ -194,18 +194,34 @@ int axsock_backend_now(void)
 		 * EPFNOSUPPORT are the other ways a system says the same
 		 * thing.  Any other failure (e.g. EPERM) keeps the kernel
 		 * selected and the caller's real socket() surfaces the
-		 * error unchanged. */
-		int fd = real_socket(AF_AX25, SOCK_SEQPACKET, 0);
+		 * error unchanged.
+		 *
+		 * Ask /proc first, and do not use socket() as the question.
+		 * An unregistered address family is exactly what makes Linux
+		 * call modprobe("net-pf-3"), so the probe loaded the ax25
+		 * module on hosts that had deliberately left the kernel stack
+		 * unused - a "kernel AX.25 is gone" gateway saw PF_AX25
+		 * registered within seconds of starting a userspace client.
+		 * /proc/net/ax25 exists once the stack is registered, built
+		 * in or already loaded, and opening it loads nothing.  A
+		 * sysop who wants the module asks for it with modprobe or
+		 * AXSOCK_BACKEND=kernel; this library should not do it in
+		 * passing. */
+		if (access("/proc/net/ax25", F_OK) == 0) {
+			int fd = real_socket(AF_AX25, SOCK_SEQPACKET, 0);
 
-		if (fd >= 0) {
-			real_close(fd);
-			axsock_backend = 1;
-		} else if (errno == EAFNOSUPPORT ||
-			   errno == EPROTONOSUPPORT ||
-			   errno == EPFNOSUPPORT) {
-			axsock_backend = 0;
+			if (fd >= 0) {
+				real_close(fd);
+				axsock_backend = 1;
+			} else if (errno == EAFNOSUPPORT ||
+				   errno == EPROTONOSUPPORT ||
+				   errno == EPFNOSUPPORT) {
+				axsock_backend = 0;
+			} else {
+				axsock_backend = 1;
+			}
 		} else {
-			axsock_backend = 1;
+			axsock_backend = 0;
 		}
 #else
 		axsock_backend = 0;

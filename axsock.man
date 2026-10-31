@@ -387,9 +387,19 @@ forcing one backend for the whole process.  It is an override and not the
 normal way: without it the choice falls per port at
 .BR bind (2),
 out of the configuration as described above, and what is left over \-\- a port
-no backend claims, and every monitor socket \-\- is decided once per process,
-a single probe asking whether the kernel answers AF_AX25 and taking it if it
-does, AGWPE if it does not.  See
+no backend claims, and every monitor socket \-\- is decided once per process.
+When
+.I /proc/net/ax25
+says that a kernel AX.25 stack is registered, a single probe asks whether it
+answers
+.B AF_AX25
+and takes it if it does, AGWPE if it does not.  When it is not registered,
+the probe is not made at all: on Linux that socket call is what autoloads the
+.B ax25
+module, and a program that wants the userspace backends must not drag the
+kernel stack in.  Load the module first, or set
+.B AXSOCK_BACKEND=kernel
+explicitly, if the kernel stack is the one that is wanted.  See
 .BR axports (5).
 .TP
 .B AXSOCK_DEBUG

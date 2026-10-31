@@ -67,19 +67,24 @@ that machine may use the transmitter.  Reaching a node over TCP from
 elsewhere means saying the same about the network in between.
 .LP
 The unix socket is the other way round: who may reach it is decided with the
-tools the file system already has.  By default that decision sits on the
-.I directory
-\-\- 
+tools the file system already has.  The directory
 .I sockets/
-is 0750, so one
-.B chgrp
-moves the whole service from one group to another \-\- and the socket itself is
-created 0666, because for a socket that is what "open" means:
+is 0755 and only decides who may walk the path to the socket; the terms are
+stated on the socket itself.  By default
+.I sockets/ax25
+is created 0666, because for a socket that is what "open" means:
 .BR connect (2)
-asks for write and never for execute.
+asks for write and never for execute.  A
+.B chgrp
+on the directory therefore does not, by itself, move the service from one
+group to another; it is the mode and group on the socket that do.
 .LP
-The node can be told to state the terms on the socket instead, and the same
-command prints what they are:
+.B axsock mode
+and
+.B axsock group
+put those terms on the service socket, and the node applies them again at
+every start.  A mode set by hand does not survive a restart, because the old
+socket file is removed and the new one is created fresh:
 .PP
 .RS
 .nf
@@ -89,6 +94,13 @@ axsock mode 0660
 axsock tcp\-listen on|off|port <n>
 .fi
 .RE
+.LP
+The monitor and packet sockets have their own
+.B "axsock monitor mode|group"
+and
+.B "axsock packet mode|group";
+.I doc/PERMISSIONS.md
+in the WAMPES distribution has the defaults and the reasoning.
 .LP
 It lives there, beside the unix socket it configures, rather than under
 .B start

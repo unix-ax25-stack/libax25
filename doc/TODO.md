@@ -5,9 +5,13 @@ Kept here because the three source trees are separate today and this is where
 the rest of the documentation lives; when they become one repository it moves
 up a level and changes nothing else.
 
-## loop port sends DM to unlisted SABM (bug)
+## loop port sends DM to unlisted SABM (bug) - FIXED
 
-When using the `loop` port (ax25netd), a `SABM` to a callsign not present/listening on loop generates a `DM` response actively. On a real AGWPE/radio interface this does not happen. `mheardd` records the addressed callsign anyway because it counts frames by source, but the response behavior is wrong and should be fixed in libax25/ax25netd loop handling.
+Fixed in ax25netd: loop no longer generates DM for SABM to unlisted calls; SABM is mirrored only.
+
+## loop disconnect UA/DM not visible
+
+When a remote end closes a loop session with DISC, the UA/DM reply is not always shown by monitors (listen). Need to ensure link control replies on the loop are routed and mirrored correctly.
 
 ## Check on socket operation if socket is up
 agwpe:

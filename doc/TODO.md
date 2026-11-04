@@ -13,6 +13,11 @@ Fixed in ax25netd: loop no longer generates DM for SABM to unlisted calls; SABM 
 
 When a remote end closes a loop session with DISC, the UA/DM reply is not always shown by monitors (listen). Need to ensure link control replies on the loop are routed and mirrored correctly.
 
+## connecting sessions not shown in ax25netctl -s
+
+When a connect is initiated (SABM sent) to a callsign not yet answered / not listening, ax25netctl -s does not show "CONNECTING" sessions. Showing pending/outgoing connect attempts would be useful for debugging (same for AGWPE path).
+Also: sessions in disconnecting state (DISC sent, waiting for UA or DM for real close) is not shown, "Disc pending" would be nice
+
 ## Check on socket operation if socket is up
 agwpe:
 beacon -s radio0 te1st test
